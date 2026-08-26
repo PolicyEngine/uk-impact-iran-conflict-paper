@@ -113,6 +113,9 @@ __all__ = [
     "CAP_QUARTER_LABELS",
     "REALISED_SUSTAINED_FRACTION",
     "REALISED_PUMP_SUSTAINED_FRACTION",
+    "SYMMETRIC_SUSTAINED_FRACTION",
+    "QUARTERLY_CONSUMPTION_WEIGHTS_GAS",
+    "QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY",
     "OilPath",
     "GasPath",
     "PumpPricePath",
@@ -285,6 +288,72 @@ alongside as the explicit upper bound on the fuel channel.
 """
 
 
+SYMMETRIC_SUSTAINED_FRACTION: float = 0.60
+"""Common peak-to-annual-average damping applied to **both** legs.
+
+Why this exists
+---------------
+Referee analysis established that motor fuel's share of the modelled loss depends
+only on the *ratio* of the two damping fractions: it is 57% at the paper's
+0.36/0.60 split and 44.5% at **any** common fraction. The published 55.8-67.8%
+range was one-sided — both of its endpoints raise the fuel share — so a
+symmetric-damping specification is required as a first-class run rather than as a
+footnote (``docs/FIXES.md`` A3).
+
+How the number is arrived at
+----------------------------
+By exactly the monthly-profile arithmetic that produces
+:data:`REALISED_PUMP_SUSTAINED_FRACTION`, and **not** by the cap-window anchor
+that produces :data:`REALISED_SUSTAINED_FRACTION`. Writing the modelled year as
+twelve equal months and each peak as 1.0:
+
+* Jan-Feb (2 months) at 0.0 of peak (pre-shock);
+* Mar-May (3 months) ramping 0 -> 1, averaging 0.5;
+* Jun-Aug (3 months) at 1.0 (the observed peak plateau);
+* Sep-Dec (4 months) decaying 1.0 -> 0.35, averaging 0.65.
+
+Annual average = (2x0.0 + 3x0.5 + 3x1.0 + 4x0.65) / 12 = 0.59, rounded to 0.60.
+The same physical profile is asserted of the wholesale gas peak, which is what
+"symmetric" means here.
+
+**What it costs.** Applying 0.60 to the gas leg abandons the Cornwall Insight
+£1,729 (+4%) October-2026 cap anchor that 0.36 was calibrated to: the implied
+2026Q4 cap step is correspondingly larger. That is the explicit trade-off — this
+specification buys internal symmetry between the two legs at the price of the
+external cap anchor, and neither specification can have both. Both are reported.
+"""
+
+
+QUARTERLY_CONSUMPTION_WEIGHTS_GAS: tuple[float, ...] = (0.32, 0.35, 0.22, 0.11)
+"""Share of annual **domestic gas** consumption falling in each modelled quarter.
+
+Aligned to :data:`CAP_QUARTER_LABELS`, so the entries are Oct-Dec, Jan-Mar,
+Apr-Jun and Jul-Sep respectively. Domestic gas is overwhelmingly space and water
+heating, so it is strongly seasonal; these weights are the standard shape of the
+DESNZ/Xoserve domestic gas demand year (roughly two thirds of consumption in the
+two heating quarters) rounded to two decimals, and they sum to one.
+
+They exist because the paper's Step 1 says the annual price a household faces is
+the **consumption-weighted** average of the quarterly cap levels prevailing over
+the modelled year, not the peak. A cap step that lands in a quarter in which
+little gas is burned matters less than one that lands in January, and an
+unweighted average of the phase-in profile would ignore that.
+"""
+
+QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY: tuple[float, ...] = (
+    0.28,
+    0.30,
+    0.23,
+    0.19,
+)
+"""Share of annual **domestic electricity** consumption by modelled quarter.
+
+Same alignment as :data:`QUARTERLY_CONSUMPTION_WEIGHTS_GAS` but materially
+flatter: only part of domestic electricity is heating-related, so the winter
+premium is a few points rather than a factor of three. Sums to one.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Component paths
 # ---------------------------------------------------------------------------
@@ -407,6 +476,11 @@ class PassThroughAssumptions:
         Fraction of the quoted **pump-price** peak that is sustained across the
         modelled year. Defaults to 1.0, which reproduces the undamped-peak
         specification; see :data:`REALISED_PUMP_SUSTAINED_FRACTION`.
+    consumption_weights_gas, consumption_weights_electricity:
+        Share of annual consumption of each fuel falling in each modelled
+        quarter, used to turn the quarterly phase-in profile into the single
+        annual factor a household actually pays. See
+        :data:`QUARTERLY_CONSUMPTION_WEIGHTS_GAS`.
     """
 
     wholesale_share_gas_bill: float = WHOLESALE_SHARE_GAS_BILL
@@ -417,10 +491,28 @@ class PassThroughAssumptions:
     phase_in_profile: tuple[float, ...] = CAP_PHASE_IN_PROFILE
     sustained_fraction: float = 1.0
     pump_sustained_fraction: float = 1.0
+    consumption_weights_gas: tuple[float, ...] = QUARTERLY_CONSUMPTION_WEIGHTS_GAS
+    consumption_weights_electricity: tuple[float, ...] = (
+        QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY
+    )
 
     def __post_init__(self) -> None:
         if not self.phase_in_profile:
             raise ValueError("phase_in_profile must be non-empty")
+        for weights_name in (
+            "consumption_weights_gas",
+            "consumption_weights_electricity",
+        ):
+            weights = getattr(self, weights_name)
+            if len(weights) != len(self.phase_in_profile):
+                raise ValueError(
+                    f"{weights_name} ({len(weights)}) and phase_in_profile "
+                    f"({len(self.phase_in_profile)}) must be the same length"
+                )
+            if any(w < 0 for w in weights):
+                raise ValueError(f"{weights_name} must be non-negative")
+            if sum(weights) <= 0:
+                raise ValueError(f"{weights_name} must not sum to zero")
         for name in (
             "wholesale_share_gas_bill",
             "wholesale_share_electricity_bill",
@@ -457,6 +549,46 @@ class PassThroughAssumptions:
             * self.marginal_pricing_share
             * self.wholesale_share_electricity_bill
             * gas.pct_change
+        )
+
+    # -- annual (phase-in-averaged) retail shocks ------------------------
+
+    def _annual_phase_in(self, weights: tuple[float, ...]) -> float:
+        """Consumption-weighted average of the quarterly phase-in profile.
+
+        This is the paper's Step 1 as written: "the annual price faced by a
+        household is the consumption-weighted average of the quarterly cap
+        levels prevailing over the modelled year, not the peak". Because each
+        quarter's cap level is the steady-state shock scaled by that quarter's
+        phase-in weight, and because the cap enters the bill linearly, the
+        consumption-weighted average of the levels is the steady-state shock
+        scaled by the consumption-weighted average of the profile — which is
+        what this returns.
+        """
+        total = float(sum(weights))
+        return float(
+            sum(w * p for w, p in zip(weights, self.phase_in_profile, strict=True))
+            / total
+        )
+
+    @property
+    def annual_phase_in_gas(self) -> float:
+        """Annual gas phase-in factor: 0.7285 on the default profile/weights."""
+        return self._annual_phase_in(self.consumption_weights_gas)
+
+    @property
+    def annual_phase_in_electricity(self) -> float:
+        """Annual electricity phase-in factor: 0.754 on the defaults."""
+        return self._annual_phase_in(self.consumption_weights_electricity)
+
+    def annual_gas_shock(self, gas: GasPath) -> float:
+        """Steady-state gas shock damped to its annual, phase-in-averaged level."""
+        return self.annual_phase_in_gas * self.steady_state_gas_shock(gas)
+
+    def annual_electricity_shock(self, gas: GasPath) -> float:
+        """Steady-state electricity shock damped to its annual average level."""
+        return self.annual_phase_in_electricity * self.steady_state_electricity_shock(
+            gas
         )
 
     # -- pump prices ----------------------------------------------------
@@ -595,6 +727,29 @@ class Scenario:
             gas_pct_change=self.pass_through.steady_state_gas_shock(self.gas),
             electricity_pct_change=(
                 self.pass_through.steady_state_electricity_shock(self.gas)
+            ),
+        )
+
+    @property
+    def annual_retail_shock(self) -> RetailEnergyShock:
+        """**The domestic shock a household actually pays over the modelled year.**
+
+        The steady-state shock scaled by the consumption-weighted average of the
+        quarterly phase-in profile, separately for each fuel — the paper's Step 1
+        (``docs/FIXES.md`` decision D2). :attr:`retail_shock` charges the
+        steady-state (full-pass-through) level for twelve months, which is the
+        peak the paper explicitly says it does not use; it is retained as the
+        labelled steady-state alternative.
+
+        Motor fuel is deliberately *not* touched by this: pump prices track spot
+        crude within weeks rather than through a lagged cap window, so the fuel
+        leg carries its own annual damping
+        (:attr:`PassThroughAssumptions.pump_sustained_fraction`) instead.
+        """
+        return RetailEnergyShock(
+            gas_pct_change=self.pass_through.annual_gas_shock(self.gas),
+            electricity_pct_change=(
+                self.pass_through.annual_electricity_shock(self.gas)
             ),
         )
 
@@ -808,6 +963,48 @@ SCENARIOS: Mapping[str, Scenario] = {
             "kept only as a bound. Any number taken from this scenario must be "
             "reported with the undamped-peak assumption stated in the same "
             "sentence."
+        ),
+    ),
+    "realised_2026_symmetric": Scenario(
+        key="realised_2026_symmetric",
+        label="Realised 2026 shock, symmetric peak damping",
+        description=(
+            "Identical to realised_2026 except that a single common "
+            "peak-to-annual-average damping fraction "
+            "(SYMMETRIC_SUSTAINED_FRACTION = 0.60) is applied to both the "
+            "wholesale gas leg and the pump leg, instead of 0.36 for gas and "
+            "0.60 for fuel. This is a first-class specification, not a "
+            "footnote: motor fuel's share of the modelled loss depends only on "
+            "the ratio of the two fractions, so the asymmetric split is exactly "
+            "what generates the paper's motor-fuel majority. At any common "
+            "fraction the steady-state fuel share falls to about 44.5%, and the "
+            "published 55.8-67.8% range was one-sided in that both of its "
+            "endpoints raised the share."
+        ),
+        oil=OilPath(level_usd_per_bbl=PREWAR_BRENT_USD_PER_BBL + 42.0),
+        gas=GasPath(change_pence_per_therm=78.0),
+        pump=PumpPricePath(petrol_pct_change=0.20, diesel_pct_change=0.36),
+        pass_through=PassThroughAssumptions(
+            sustained_fraction=SYMMETRIC_SUSTAINED_FRACTION,
+            pump_sustained_fraction=SYMMETRIC_SUSTAINED_FRACTION,
+        ),
+        source=_REALISED_SOURCE,
+        notes=(
+            "The two fractions in realised_2026 are calibrated to different "
+            "instruments — 0.36 to Cornwall Insight's October-2026 cap forecast "
+            "via the cap's forward-observation window, 0.60 to a monthly "
+            "profile of the realised pump path — and the paper's central claim "
+            "turns on their ratio rather than on either level. This scenario "
+            "removes the ratio by deriving the gas fraction the same way as the "
+            "pump one (the twelve-month profile arithmetic in "
+            "SYMMETRIC_SUSTAINED_FRACTION), and it therefore **breaks the "
+            "Cornwall £1,729 cap anchor**: the implied 2026Q4 cap step is "
+            "larger than +4%. That is the honest trade-off and it is why both "
+            "specifications are reported rather than one being chosen. Note the "
+            "fuel share here is not literally 44.5%, because the main "
+            "specification also applies the Step 1 consumption-weighted "
+            "phase-in to the domestic leg, which damps the domestic channel "
+            "further; 44.5% is the steady-state symmetric figure."
         ),
     ),
 }

@@ -34,7 +34,7 @@ in five steps:
 | Step | What happens | Where |
 |---|---|---|
 | 1. Price path | NIESR baseline ($103/bbl), adverse ($140/bbl) and realised-2026 oil/gas paths → quarterly Ofgem cap steps and pump prices | `uk_iran_conflict/scenarios.py`, `shocks.py` |
-| 2. Incidence | Δcost = quantity × Δprice on NEED-calibrated household kWh; Deaton first-order, explicit upper bound | `uk_iran_conflict/runner.py` |
+| 2. Incidence | Δcost = quantity × Δprice on NEED-calibrated household kWh; Deaton first-order, explicit upper bound | `uk_iran_conflict/incidence.py` |
 | 3. Crossing | £ loss and %-of-income loss aggregated to 650 seats via the constituency weight sets | `analysis/constituency.py` |
 | 4. Scorecard | Five reforms scored on cost per £ of D1 gain, share of spend to D1–D3, and share of losers uncompensated within each decile | `analysis/policies.py` |
 | 5. Caveats | GE, elasticity, VAT-level and data-vintage gaps stated; three named extensions | `paper/sections/discussion.tex` |
@@ -75,7 +75,7 @@ diesel +36%) discipline the calibration. Litres are recovered in PolicyEngine
 as spending ÷ modelled pump price, so a price path implies both a duty base
 and an expenditure change.
 
-### 2. First-order incidence (`uk_iran_conflict/runner.py`)
+### 2. First-order incidence (`uk_iran_conflict/incidence.py`)
 
 `Δcost_h = Σ_f q_hf · Δp_f` — pre-shock quantities, no substitution. This is
 the Deaton & Muellbauer (1980) first-order approximation to the compensating
@@ -112,7 +112,9 @@ March 2026**; baseline prices are the Ofgem Q2 2026 cap.
 
 Metrics: **cost per £ of bottom-decile gain**, **share of spend reaching
 deciles 1–3**, and — the one everyone misses — **share of losers left
-uncompensated within each decile**, from PolicyEngine's `IntraDecileImpact`.
+uncompensated within each decile**, computed directly in
+`uk_iran_conflict/policies.py` alongside continuous measures (share of aggregate
+loss offset, mean and median residual loss).
 The anchor fact for the third: **~40% of households struggling to heat their
 home are not on means-tested benefits.**
 
@@ -120,8 +122,11 @@ home are not on means-tested benefits.**
 
 ```
 uk_iran_conflict/   importable package: scenarios, shocks, runner
-analysis/           scripts producing results/, orchestrated by run_all.py
-  run_all.py        scenarios + reforms -> results/*.json
+analysis/           scripts producing results/
+  run_incidence.py  baseline, shock and policy scoring -> results/*.json
+  run_variants.py   the specification variants -> results/robustness/
+  run_sensitivity.py the three sweeps -> results/sensitivity/
+  run_grid.py       the gas-oil scenario grid -> results/grid/
   emit_tex_values.py  results/ -> paper/values_generated.tex
 results/            canonical JSON/CSV artifacts, committed (aggregates only)
 paper/              main.tex + sections/*.tex + references.bib
@@ -140,7 +145,8 @@ PDF** rather than silently keeping superseded numbers.
 ```bash
 uv sync
 export HUGGING_FACE_TOKEN=hf_...     # needs policyengine/policyengine-uk-data access
-python analysis/run_all.py           # scenarios + reforms -> results/*.json
+python analysis/run_incidence.py     # baseline, shock, policies -> results/
+python analysis/run_variants.py      # specification variants
 python analysis/emit_tex_values.py   # results/ -> paper/values_generated.tex
 python -m pytest tests/              # no microdata needed
 cd paper && latexmk -pdf main.tex

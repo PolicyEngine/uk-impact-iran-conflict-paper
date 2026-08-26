@@ -13,9 +13,13 @@ import pytest
 
 from uk_iran_conflict import reforms
 from uk_iran_conflict.scenarios import (
+    CAP_PHASE_IN_PROFILE,
+    QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY,
+    QUARTERLY_CONSUMPTION_WEIGHTS_GAS,
     REALISED_PUMP_SUSTAINED_FRACTION,
     REALISED_SUSTAINED_FRACTION,
     SCENARIOS,
+    SYMMETRIC_SUSTAINED_FRACTION,
     PassThroughAssumptions,
     PumpPricePath,
     Scenario,
@@ -342,3 +346,103 @@ def test_incidence_applies_the_pump_damping():
     assert diesel == pytest.approx(1.0 + REALISED_PUMP_SUSTAINED_FRACTION * 0.36)
     # Undamped raw factors still available for the parameter reform.
     assert reforms.pump_price_factors(main) == pytest.approx((1.20, 1.36))
+
+
+# --- D2: the consumption-weighted annual domestic factor ------------------
+
+
+def test_consumption_weights_are_shares_and_winter_heavy():
+    for weights in (
+        QUARTERLY_CONSUMPTION_WEIGHTS_GAS,
+        QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY,
+    ):
+        assert len(weights) == len(CAP_PHASE_IN_PROFILE)
+        assert sum(weights) == pytest.approx(1.0)
+        assert all(w > 0 for w in weights)
+    # Oct-Dec and Jan-Mar are the heating quarters, and gas is the more
+    # seasonal of the two fuels.
+    gas, elec = (
+        QUARTERLY_CONSUMPTION_WEIGHTS_GAS,
+        QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY,
+    )
+    assert gas[0] + gas[1] > 0.6
+    assert max(gas) - min(gas) > max(elec) - min(elec)
+
+
+def test_annual_phase_in_is_the_consumption_weighted_average_of_the_profile():
+    pt = PassThroughAssumptions()
+    expected = sum(
+        w * p
+        for w, p in zip(
+            QUARTERLY_CONSUMPTION_WEIGHTS_GAS, CAP_PHASE_IN_PROFILE, strict=True
+        )
+    )
+    assert pt.annual_phase_in_gas == pytest.approx(expected)
+    assert pt.annual_phase_in_gas == pytest.approx(0.7285)
+    assert pt.annual_phase_in_electricity == pytest.approx(0.754)
+    # It is an average of the profile, so it lies inside the profile's range and
+    # strictly below the peak: the paper's "not the peak".
+    assert (
+        min(CAP_PHASE_IN_PROFILE) < pt.annual_phase_in_gas < max(CAP_PHASE_IN_PROFILE)
+    )
+
+
+def test_annual_phase_in_is_flat_when_the_profile_is_flat():
+    pt = PassThroughAssumptions(phase_in_profile=(0.5, 0.5, 0.5, 0.5))
+    assert pt.annual_phase_in_gas == pytest.approx(0.5)
+    assert pt.annual_phase_in_electricity == pytest.approx(0.5)
+
+
+def test_consumption_weights_are_validated():
+    with pytest.raises(ValueError, match="same length"):
+        PassThroughAssumptions(consumption_weights_gas=(1.0, 1.0))
+    with pytest.raises(ValueError, match="non-negative"):
+        PassThroughAssumptions(consumption_weights_gas=(-1.0, 1.0, 1.0, 1.0))
+    with pytest.raises(ValueError, match="sum to zero"):
+        PassThroughAssumptions(consumption_weights_electricity=(0.0, 0.0, 0.0, 0.0))
+
+
+@pytest.mark.parametrize("key,scenario", ALL)
+def test_annual_retail_shock_is_the_damped_steady_state(key, scenario):
+    annual, steady = scenario.annual_retail_shock, scenario.retail_shock
+    pt = scenario.pass_through
+    assert annual.gas_pct_change == pytest.approx(
+        pt.annual_phase_in_gas * steady.gas_pct_change
+    )
+    assert annual.electricity_pct_change == pytest.approx(
+        pt.annual_phase_in_electricity * steady.electricity_pct_change
+    )
+    assert abs(annual.gas_pct_change) <= abs(steady.gas_pct_change)
+    # Electricity stays strictly below gas: the asymmetry survives the damping.
+    assert annual.electricity_pct_change < annual.gas_pct_change
+
+
+# --- A3: the symmetric-damping specification ------------------------------
+
+
+def test_symmetric_scenario_damps_both_legs_by_one_fraction():
+    sym = get_scenario("realised_2026_symmetric")
+    asym = get_scenario("realised_2026")
+    assert sym.pass_through.sustained_fraction == SYMMETRIC_SUSTAINED_FRACTION
+    assert sym.pass_through.pump_sustained_fraction == SYMMETRIC_SUSTAINED_FRACTION
+    # Identical underlying paths — only the damping differs.
+    assert sym.gas == asym.gas
+    assert sym.pump == asym.pump
+    assert sym.oil == asym.oil
+    # The pump leg is the same as the main specification's; the gas leg is not.
+    assert sym.sustained_pump_changes == pytest.approx(asym.sustained_pump_changes)
+    assert sym.retail_shock.gas_pct_change > asym.retail_shock.gas_pct_change
+
+
+def test_symmetric_scenario_breaks_the_cornwall_cap_anchor_as_documented():
+    """It buys symmetry at the price of the external anchor. Both are reported."""
+    asym = get_scenario("realised_2026").cap_step("2026Q4")
+    sym = get_scenario("realised_2026_symmetric").cap_step("2026Q4")
+    assert asym.cap_pct_change == pytest.approx(0.04, abs=0.005)
+    assert sym.cap_pct_change > asym.cap_pct_change
+    assert "Cornwall" in get_scenario("realised_2026_symmetric").notes
+
+
+def test_symmetric_fraction_is_the_pump_profile_arithmetic_not_the_cap_anchor():
+    assert SYMMETRIC_SUSTAINED_FRACTION == REALISED_PUMP_SUSTAINED_FRACTION
+    assert SYMMETRIC_SUSTAINED_FRACTION != REALISED_SUSTAINED_FRACTION

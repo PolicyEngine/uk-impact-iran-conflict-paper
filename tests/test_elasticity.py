@@ -21,12 +21,17 @@ from uk_iran_conflict.elasticity import (
     ZERO_ELASTICITY,
     ElasticitySpec,
     consumption_reduction,
+    cv_bounds,
     deadweight_share,
     elasticity_for,
+    laspeyres_cv,
+    paasche_cv,
     quantity_factor,
+    resolve_elasticity_spec,
     spend_change,
     spend_factor,
     static_spend_change,
+    welfare_shaved_share,
 )
 
 SPECS = {
@@ -274,30 +279,88 @@ def test_elasticity_past_minus_one_is_rejected():
         spend_factor(1.6, -1.5)
 
 
-# --- the contract with the runner ----------------------------------------
+# --- spec resolution ------------------------------------------------------
+#
+# ``resolve_elasticity_spec`` used to live in ``uk_iran_conflict.runner``,
+# deleted with the second pipeline (docs/FIXES.md C14). It is now part of the
+# elasticity module and needs neither PolicyEngine nor microdata.
 
 
 @pytest.mark.parametrize(
     "name",
     ["main", "zero", "labandeira_short_run", "priesmann_short_run", "prior_repo"],
 )
-def test_runner_resolves_every_named_spec(name):
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_resolves_every_named_spec(name):
     spec = resolve_elasticity_spec(name)
     assert isinstance(spec, ElasticitySpec)
     assert spec.is_main_specification == (name in ("main", "zero"))
 
 
-def test_runner_rejects_an_unknown_spec_name():
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_rejects_an_unknown_spec_name():
     with pytest.raises(KeyError, match="unknown elasticity spec"):
         resolve_elasticity_spec("not_a_spec")
 
 
-def test_runner_passes_through_a_spec_object():
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_passes_through_a_spec_object():
     spec = ElasticitySpec.main()
     assert resolve_elasticity_spec(spec) is spec
+
+
+# --- A5: money-metric welfare bounds --------------------------------------
+#
+# The bug this guards: ``spend_change`` is a change in EXPENDITURE. Reporting
+# it as the cost of the shock counts foregone heating as costless. The CV is
+# bracketed by the Paasche and Laspeyres terms, and that bracket is an order of
+# magnitude narrower than the spend change implies.
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+@pytest.mark.parametrize("eps", [0.0, -0.1, -0.3, -0.5, -0.8])
+def test_cv_bounds_bracket_and_order(ratio, eps):
+    lo, hi = cv_bounds(1000.0, ratio, eps)
+    assert lo <= hi + 1e-12
+    assert hi == pytest.approx(laspeyres_cv(1000.0, ratio))
+    assert lo == pytest.approx(paasche_cv(1000.0, ratio, eps))
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+def test_zero_elasticity_collapses_the_bracket_to_the_headline(ratio):
+    lo, hi = cv_bounds(1000.0, ratio, 0.0)
+    assert lo == pytest.approx(hi)
+    assert hi == pytest.approx(static_spend_change(1000.0, ratio))
+
+
+@pytest.mark.parametrize("eps", [-0.1, -0.3, -0.5, -0.8])
+def test_upper_bound_is_elasticity_invariant(eps):
+    """The Laspeyres bound is the static headline whatever epsilon is."""
+    assert laspeyres_cv(1000.0, 1.14) == pytest.approx(140.0)
+    assert cv_bounds(1000.0, 1.14, eps)[1] == pytest.approx(140.0)
+
+
+@pytest.mark.parametrize("eps", [-0.1, -0.3, -0.5, -0.8])
+def test_spend_change_understates_the_welfare_loss(eps):
+    """The whole of fix A5, as an assertion."""
+    lo, _ = cv_bounds(1000.0, 1.14, eps)
+    assert spend_change(1000.0, 1.14, eps) < lo
+
+
+def test_the_uncertainty_ranking_inverts_at_the_realised_gas_move():
+    """At +14% and eps = -0.8 demand response can shave at most ~10%."""
+    assert welfare_shaved_share(1.14, -0.8) == pytest.approx(0.0995, abs=5e-4)
+    assert deadweight_share(1.14, -0.8) == pytest.approx(0.8103, abs=5e-4)
+    # An order of magnitude apart: the spending measure overstates the
+    # uncertainty demand response contributes by a factor of eight.
+    assert deadweight_share(1.14, -0.8) > 8 * welfare_shaved_share(1.14, -0.8)
+
+
+def test_welfare_shaving_is_identically_the_consumption_cut():
+    for ratio in RATIOS:
+        for eps in (0.0, -0.2, -0.64):
+            assert welfare_shaved_share(ratio, eps) == pytest.approx(
+                consumption_reduction(ratio, eps)
+            )
+
+
+def test_cv_bounds_reject_negative_spend():
+    with pytest.raises(ValueError, match="non-negative"):
+        cv_bounds(-1.0, 1.1, -0.2)

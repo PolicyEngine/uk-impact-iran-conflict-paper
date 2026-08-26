@@ -168,6 +168,11 @@ __all__ = [
     "static_spend_change",
     "consumption_reduction",
     "deadweight_share",
+    "laspeyres_cv",
+    "paasche_cv",
+    "cv_bounds",
+    "welfare_shaved_share",
+    "resolve_elasticity_spec",
 ]
 
 # --------------------------------------------------------------------------
@@ -623,6 +628,149 @@ def deadweight_share(price_ratio: float, epsilon: float) -> float:
     if static == 0.0:
         return 0.0
     return 1.0 - (spend_factor(price_ratio, epsilon) - 1.0) / static
+
+
+# --------------------------------------------------------------------------
+# Money-metric welfare: bounds on the compensating variation
+# --------------------------------------------------------------------------
+#
+# ``spend_change`` measures the change in EXPENDITURE, not in welfare. At
+# eps = -0.8 it reports a household that stops heating its home as barely worse
+# off, because it stopped spending the money -- the "heat or eat" fallacy this
+# module's own preamble criticises. Expenditure change is the wrong object for
+# a distributional welfare statement and must never be reported as the cost of
+# the shock under a non-zero elasticity.
+#
+# The right object is the compensating variation (CV): the transfer that would
+# restore pre-shock utility at post-shock prices. It is not identified without
+# the full demand system, but it is tightly bracketed by two index numbers that
+# need nothing beyond q0, q1 and dp:
+#
+#     q1 . dp  <=  CV  <=  q0 . dp
+#     (Paasche)          (Laspeyres)
+#
+# The upper bound is exactly the paper's zero-elasticity headline. The lower
+# bound values the POST-adjustment bundle at the price change, i.e. it credits
+# the household only with the money it saves on units it no longer buys, while
+# still charging it for everything it does buy. Both are money-metric; the
+# spend change is not. See Deaton & Muellbauer (1980), ch. 7, on the
+# Laspeyres/Paasche bracket for the cost-of-living index.
+#
+# The width of the bracket is ``1 - (p1/p0)**eps``, which is exactly
+# :func:`consumption_reduction`: the maximum share of the static loss that
+# demand response can remove is the share of consumption it removes. At a
+# +14% price move and eps = -0.8 that is 9.9%, not the 81% that the spend
+# change implies. Demand response is therefore a SMALL source of uncertainty
+# once measured in welfare rather than in spending.
+
+
+def laspeyres_cv(baseline_spend: float, price_ratio: float) -> float:
+    """Upper bound on the compensating variation: ``q0 . dp``.
+
+    Independent of the elasticity by construction -- this is the paper's
+    zero-elasticity headline, restated as a welfare bound.
+
+    >>> round(laspeyres_cv(1000.0, 1.14), 4)
+    140.0
+    """
+    if baseline_spend < 0.0:
+        raise ValueError("baseline_spend must be non-negative")
+    _check_price_ratio(price_ratio)
+    return baseline_spend * (price_ratio - 1.0)
+
+
+def paasche_cv(
+    baseline_spend: float, price_ratio: float, epsilon: float = 0.0
+) -> float:
+    """Lower bound on the compensating variation: ``q1 . dp``.
+
+    ``q1 = q0 * (p1/p0)**eps`` is the post-adjustment quantity, so this is
+    ``baseline_spend * (p1/p0)**eps * (p1/p0 - 1)``.
+
+    At ``epsilon = 0`` it coincides with :func:`laspeyres_cv`.
+
+    >>> round(paasche_cv(1000.0, 1.14), 4)
+    140.0
+    >>> round(paasche_cv(1000.0, 1.14, -0.8), 2)   # ~10% below the upper bound
+    126.07
+    """
+    if baseline_spend < 0.0:
+        raise ValueError("baseline_spend must be non-negative")
+    return baseline_spend * quantity_factor(price_ratio, epsilon) * (price_ratio - 1.0)
+
+
+def cv_bounds(
+    baseline_spend: float, price_ratio: float, epsilon: float = 0.0
+) -> tuple[float, float]:
+    """``(lower, upper)`` money-metric bounds on the compensating variation.
+
+    Use this, never :func:`spend_change`, whenever a number is going to be
+    described as a cost, a loss or a burden under a non-zero elasticity.
+
+    >>> lo, hi = cv_bounds(1000.0, 1.14, -0.8)
+    >>> round(lo, 2), round(hi, 2)
+    (126.07, 140.0)
+    >>> lo <= hi
+    True
+    """
+    return (
+        paasche_cv(baseline_spend, price_ratio, epsilon),
+        laspeyres_cv(baseline_spend, price_ratio),
+    )
+
+
+def welfare_shaved_share(price_ratio: float, epsilon: float) -> float:
+    """Maximum share of the static loss that demand response can remove.
+
+    ``1 - (p1/p0)**eps`` -- identically :func:`consumption_reduction`, and the
+    welfare analogue of :func:`deadweight_share`. The two differ by an order of
+    magnitude at plausible elasticities, and the difference is the whole of
+    fix A5: ``deadweight_share`` is a statement about spending, this is a
+    statement about welfare.
+
+    >>> round(welfare_shaved_share(1.14, -0.8), 4)
+    0.0995
+    >>> round(deadweight_share(1.14, -0.8), 4)     # the spending measure
+    0.8103
+    """
+    return consumption_reduction(price_ratio, epsilon)
+
+
+def resolve_elasticity_spec(spec: object = "main") -> ElasticitySpec:
+    """Resolve an :class:`ElasticitySpec` from a name, or pass one through.
+
+    Names: ``"main"`` / ``"zero"`` (the paper's main specification: no
+    substitution, the Deaton first-order approximation and an explicit upper
+    bound on the loss), ``"labandeira_short_run"``, ``"labandeira_long_run"``,
+    ``"priesmann_short_run"``, ``"priesmann_long_run"``, ``"prior_repo"``.
+
+    Lives here rather than in a runner module so that resolving a spec never
+    requires PolicyEngine or microdata. (Moved from the deleted
+    ``uk_iran_conflict.runner``; see docs/FIXES.md C14.)
+
+    >>> resolve_elasticity_spec("zero").is_main_specification
+    True
+    """
+    if isinstance(spec, ElasticitySpec):
+        return spec
+    if not isinstance(spec, str):
+        raise TypeError(f"expected a name or an ElasticitySpec, got {type(spec)!r}")
+    builders = {
+        "main": ElasticitySpec.main,
+        "zero": ElasticitySpec.main,
+        "labandeira_short_run": lambda: ElasticitySpec.labandeira_flat("short_run"),
+        "labandeira_long_run": lambda: ElasticitySpec.labandeira_flat("long_run"),
+        "priesmann_short_run": lambda: ElasticitySpec.priesmann_income_varying(
+            "short_run"
+        ),
+        "priesmann_long_run": lambda: ElasticitySpec.priesmann_income_varying(
+            "long_run"
+        ),
+        "prior_repo": ElasticitySpec.prior_repo_replication,
+    }
+    if spec not in builders:
+        raise KeyError(f"unknown elasticity spec {spec!r}; known: {sorted(builders)}")
+    return builders[spec]()
 
 
 def basket_spend_change(

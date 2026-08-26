@@ -1,0 +1,49 @@
+{
+  "note": "Values the LaTeX emitter previously hardcoded. Persisted here so the appendix's guarantee that every number is emitted mechanically holds (docs/FIXES.md C12).",
+  "motor_fuel_decile_mean_gbp": {
+    "raw": [
+      1073.2037353515625,
+      735.5894775390625,
+      844.3298950195312,
+      1063.71875,
+      1208.17822265625,
+      1017.8277587890625,
+      1234.6024169921875,
+      2013.566162109375,
+      1617.9217529296875,
+      1333.061279296875
+    ],
+    "ons_shape": [
+      520.6433993178499,
+      611.97660278915,
+      719.3317690297769,
+      845.5196944928972,
+      993.8438810368199,
+      1168.1875940362559,
+      1373.1154341930105,
+      1613.9923159783357,
+      1897.124628234783,
+      2229.92549090946
+    ],
+    "ons_both_levels": [
+      412.48993816126534,
+      484.8504588195653,
+      569.9046935259081,
+      669.8795508643066,
+      787.3922949334409,
+      925.5195188417171,
+      1087.8776169651815,
+      1278.7170479505514,
+      1503.0341719689022,
+      1766.7021786017622
+    ]
+  },
+  "decile1_median_income_gbp_equivalised_ahc": 7589.599609375,
+  "decile1_mean_income_gbp_equivalised_ahc": 5865.28125,
+  "decile1_zero_or_negative_income_share_equivalised_ahc": 0.20054621994495392,
+  "decile1_median_income_gbp_unequivalised": 16000.384765625,
+  "decile1_mean_income_gbp_unequivalised": 19044.216796875,
+  "decile1_zero_or_negative_income_share_unequivalised": 0.005695397965610027,
+  "mean_domestic_energy_spend_gbp": 1331.2689208984375,
+  "mean_motor_fuel_spend_gbp": 1211.708740234375
+}

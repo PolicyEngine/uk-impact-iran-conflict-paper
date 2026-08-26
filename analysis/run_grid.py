@@ -32,6 +32,14 @@ Needs the private PolicyEngine UK microdata exactly as ``run_incidence.py``
 does: ``HUGGING_FACE_TOKEN`` in the gitignored ``.env``.
 
 Writes ``results/grid/grid.csv``, one row per cell.
+
+Degenerate cells (docs/FIXES.md E35). The ``(0%, 0%)`` corner has no shock at
+all: every fuel share is 0/0 and the decile ratio is an empty division. It is
+kept in the CSV for completeness but flagged ``is_degenerate`` and written as
+NaN, and consumers must filter on that column. The two *axes* are not
+degenerate — a cell with a gas move and no oil move really is 0% motor fuel,
+and one with an oil move and no gas move really is 100% — so those cells are
+documented here rather than filtered.
 """
 
 from __future__ import annotations
@@ -65,10 +73,19 @@ PETROL_PASS_THROUGH: float = 0.353
 DIESEL_PASS_THROUGH: float = 0.580
 
 #: The grid is specified as a **sustained** wholesale move, so pass-through is
-#: full (``sustained_fraction = 1.0``), matching both NIESR scenarios. The
-#: realised 2026 scenario damps its *peak* to 0.36; it therefore plots on the
-#: grid at its headline gas/oil percentages but its own cell is more severe than
-#: the scenario itself. That is stated in the figure note rather than fudged.
+#: full (``sustained_fraction = 1.0``), matching both NIESR scenarios.
+#:
+#: This is why :func:`named_points` reports **damped-equivalent** coordinates
+#: as well as headline ones (docs/FIXES.md D25). The realised 2026 scenario
+#: damps its peak gas move to 0.36 and its peak pump moves to their own
+#: sustained fraction; plotting it at its *headline* +217% gas / +57% oil put
+#: it in a cell far more severe than the scenario it is labelled with — and by
+#: the grid's own numbers that cell sits ABOVE the motor-fuel frontier, while
+#: the paper claims all three named scenarios sit below it. The figure and the
+#: CSV contradicted each other. The damped-equivalent coordinates are the
+#: (gas %, oil %) a *sustained* cell would need in order to deliver the
+#: scenario's own retail and pump moves, so a named point now lands on the cell
+#: that actually reproduces it.
 SUSTAINED_FRACTION: float = 1.0
 
 
@@ -110,8 +127,55 @@ def build_scenario(gas_pct: float, oil_pct: float) -> scen.Scenario:
     )
 
 
+def _damped_equivalent(s: scen.Scenario) -> dict[str, float]:
+    """The sustained (gas %, oil %) cell that reproduces ``s``'s own shock.
+
+    A grid cell runs undamped, so a scenario that damps its wholesale move
+    belongs at the *smaller* move that, run undamped, delivers the same retail
+    and pump prices:
+
+    * **gas** — the cap channel is linear in
+      ``sustained_fraction x gas.pct_change``, so the equivalent sustained gas
+      move is exactly that product.
+    * **oil** — invert the grid's own fitted pump pass-through on the scenario's
+      *damped* pump factors (from
+      :func:`uk_iran_conflict.incidence.sustained_pump_factors`, which applies
+      ``pump_sustained_fraction``). Petrol and diesel give two implied oil
+      moves; their mean is reported, along with both legs, since the fitted
+      coefficients reproduce each named scenario only to within a point or two.
+
+    Coded defensively against the sibling change to ``shock_cost``: this reads
+    only the scenario's own pass-through fields and the public
+    ``sustained_pump_factors`` helper, never the annualised cost.
+    """
+    from uk_iran_conflict.incidence import sustained_pump_factors  # noqa: PLC0415
+
+    pt = getattr(s, "pass_through", None)
+    gas_fraction = float(getattr(pt, "sustained_fraction", 1.0))
+    petrol_factor, diesel_factor = sustained_pump_factors(s)
+    oil_from_petrol = (petrol_factor - 1.0) / PETROL_PASS_THROUGH
+    oil_from_diesel = (diesel_factor - 1.0) / DIESEL_PASS_THROUGH
+    return {
+        "gas_pct_damped": 100 * gas_fraction * s.gas.pct_change,
+        "oil_pct_damped": 100 * 0.5 * (oil_from_petrol + oil_from_diesel),
+        "oil_pct_damped_from_petrol": 100 * oil_from_petrol,
+        "oil_pct_damped_from_diesel": 100 * oil_from_diesel,
+        "gas_sustained_fraction": gas_fraction,
+        "pump_sustained_fraction": float(getattr(pt, "pump_sustained_fraction", 1.0)),
+        "damped_petrol_pct_change": 100 * (petrol_factor - 1.0),
+        "damped_diesel_pct_change": 100 * (diesel_factor - 1.0),
+    }
+
+
 def named_points() -> pd.DataFrame:
-    """Where the three named scenarios sit in (gas %, oil %) space."""
+    """Where the three named scenarios sit in (gas %, oil %) space.
+
+    Two coordinate pairs per scenario. ``gas_pct``/``oil_pct`` are the headline
+    wholesale moves; ``gas_pct_damped``/``oil_pct_damped`` are the
+    damped-equivalent coordinates described in :func:`_damped_equivalent`.
+    **Plot the damped pair** — every grid cell is undamped, so only the damped
+    pair puts a scenario on the cell that reproduces it (docs/FIXES.md D25).
+    """
     rows = []
     for key, s in scen.SCENARIOS.items():
         rows.append(
@@ -120,6 +184,7 @@ def named_points() -> pd.DataFrame:
                 "label": s.label,
                 "gas_pct": 100 * s.gas.pct_change,
                 "oil_pct": 100 * s.oil.pct_change,
+                **_damped_equivalent(s),
             }
         )
     return pd.DataFrame(rows)
@@ -135,7 +200,17 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
     peak_cap = scenario.peak_cap_gbp
     total = cost.total
     losers = total > 0
+    # E35: the (0%, 0%) corner has no shock at all, so every share is 0/0 and
+    # the burden ratio is an empty division. Left in the CSV for completeness
+    # but flagged and NaN-ed, rather than plotted as a spurious 0%/100% fuel
+    # split. Any consumer of this file must filter on ``is_degenerate``.
+    degenerate = not bool(np.any(losers)) or wsum(total, w) <= 0
+
+    def _nan_if_degenerate(value: float) -> float:
+        return float("nan") if degenerate else value
+
     return {
+        "is_degenerate": degenerate,
         "gas_pct": round(100 * gas_pct, 4),
         "oil_pct": round(100 * oil_pct, 4),
         "gas_change_pence_per_therm": scenario.gas.change_pence_per_therm,
@@ -151,14 +226,19 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
         "aggregate_cost_bn": result.aggregate_cost_bn,
         "mean_loss_gbp": result.mean_loss_gbp,
         "mean_loss_pct": result.mean_loss_pct,
-        "motor_fuel_share_pct": 100 * result.motor_fuel_share_of_loss,
-        "gas_share_pct": 100 * result.gas_share_of_loss,
-        "electricity_share_pct": 100 * result.electricity_share_of_loss,
-        "domestic_share_pct": 100
-        * (result.gas_share_of_loss + result.electricity_share_of_loss),
+        "motor_fuel_share_pct": _nan_if_degenerate(
+            100 * result.motor_fuel_share_of_loss
+        ),
+        "gas_share_pct": _nan_if_degenerate(100 * result.gas_share_of_loss),
+        "electricity_share_pct": _nan_if_degenerate(
+            100 * result.electricity_share_of_loss
+        ),
+        "domestic_share_pct": _nan_if_degenerate(
+            100 * (result.gas_share_of_loss + result.electricity_share_of_loss)
+        ),
         "decile1_loss_pct": d1.mean_loss_pct,
         "decile10_loss_pct": d10.mean_loss_pct,
-        "d1_d10_ratio": (
+        "d1_d10_ratio": _nan_if_degenerate(
             d1.mean_loss_pct / d10.mean_loss_pct if d10.mean_loss_pct else float("nan")
         ),
         "decile1_loss_gbp": d1.mean_loss_gbp,
@@ -206,7 +286,7 @@ def main() -> None:
     named_points().to_csv(OUT / "named_points.csv", index=False)
     print(f"\nwrote {OUT / 'grid.csv'} ({len(df)} cells)")
 
-    live = df[(df["gas_pct"] > 0) | (df["oil_pct"] > 0)]
+    live = df[~df["is_degenerate"]]
     for col, fmt in [
         ("mean_loss_gbp", "£{:.0f}"),
         ("aggregate_cost_bn", "£{:.1f}bn"),

@@ -63,6 +63,11 @@ NAMED_TAGS = {
     "niesr_baseline": ("1", "NIESR baseline"),
     "niesr_adverse": ("2", "NIESR adverse"),
     "realised_2026": ("3", "Realised 2026"),
+    # The variant calibrations are marked too, since the fuel-share frontier in
+    # panel D is exactly what separates them; without these two the figure
+    # rendered them as unlabelled "?" markers.
+    "realised_2026_symmetric": ("4", "Symmetric damping"),
+    "realised_2026_peak_fuel": ("5", "Peak-fuel bound"),
 }
 
 
@@ -115,13 +120,36 @@ def _heatmap(ax, piv, cmap, fmt, *, vmin=None, vmax=None, center=None):
     return im
 
 
+#: Columns holding the **damped-equivalent** coordinates written by
+#: ``analysis/run_grid.py``. Every grid cell is run undamped
+#: (``sustained_fraction = 1.0``), so a scenario that damps its own wholesale
+#: move must be plotted at the sustained move that reproduces it, not at its
+#: headline peak (docs/FIXES.md D25). Plotting the headline coordinates put the
+#: realised 2026 point ABOVE the 50% motor-fuel frontier by the grid's own
+#: numbers, while the paper claimed all three named scenarios sat below it: the
+#: figure and the CSV disagreed. The headline columns are used only as a
+#: fallback for a named_points.csv written before that fix.
+DAMPED_COORDS = ("gas_pct_damped", "oil_pct_damped")
+
+
+def _named_coords(row) -> tuple[float, float]:
+    """(gas %, oil %) to plot for one named scenario: damped where available."""
+    gas_col, oil_col = DAMPED_COORDS
+    gas = row.get(gas_col)
+    oil = row.get(oil_col)
+    if gas is None or oil is None or not np.isfinite([gas, oil]).all():
+        return float(row["gas_pct"]), float(row["oil_pct"])
+    return float(gas), float(oil)
+
+
 def _mark_named(ax, piv, named: pd.DataFrame) -> None:
-    """Plot the three named scenarios at their true (gas %, oil %) coordinates."""
+    """Plot the named scenarios at their damped-equivalent grid coordinates."""
     gas_axis = np.asarray(piv.columns, dtype=float)
     oil_axis = np.asarray(piv.index, dtype=float)  # descending
     for _, row in named.iterrows():
-        x = np.interp(row["gas_pct"], gas_axis, np.arange(len(gas_axis)))
-        y = np.interp(row["oil_pct"], oil_axis[::-1], np.arange(len(oil_axis))[::-1])
+        gas_pct, oil_pct = _named_coords(row)
+        x = np.interp(gas_pct, gas_axis, np.arange(len(gas_axis)))
+        y = np.interp(oil_pct, oil_axis[::-1], np.arange(len(oil_axis))[::-1])
         ax.plot(
             x,
             y,
@@ -157,9 +185,14 @@ def scenario_grid() -> Path:
     df = pd.read_csv(GRID / "grid.csv")
     named = pd.read_csv(GRID / "named_points.csv")
 
-    # The zero/zero cell has no shock, so its shares and ratio are undefined;
-    # blank them rather than plotting a divide-by-zero artefact.
-    dead = (df["gas_pct"] == 0) & (df["oil_pct"] == 0)
+    # The zero/zero cell has no shock, so its shares and ratio are undefined
+    # (docs/FIXES.md E35). run_grid.py now flags it and writes NaN; this repeats
+    # the blanking so an older grid.csv renders identically rather than showing
+    # the degenerate corner's spurious 0%/100% fuel split.
+    dead = df.get("is_degenerate")
+    if dead is None:
+        dead = (df["gas_pct"] == 0) & (df["oil_pct"] == 0)
+    dead = dead.astype(bool)
     for col in ("motor_fuel_share_pct", "d1_d10_ratio"):
         df.loc[dead, col] = np.nan
 
@@ -214,9 +247,12 @@ def scenario_grid() -> Path:
         "scenarios and scored on the same PolicyEngine UK baseline (2026). "
         "Panel D diverges at 50%: teal cells are pump-price shocks, blue cells "
         "domestic-bill shocks. Marked points are the named scenarios "
-        "(1 NIESR baseline, 2 NIESR adverse, 3 realised 2026); the realised "
-        "2026 cell is more severe than the scenario itself, which damps its "
-        "peak wholesale move to a sustained fraction of 0.36.",
+        "(1 NIESR baseline, 2 NIESR adverse, 3 realised 2026), plotted at "
+        "damped-equivalent coordinates: every cell runs undamped, so a "
+        "scenario that damps its peak wholesale move (realised 2026 damps gas "
+        "to 0.36 of its peak) is placed at the sustained move that reproduces "
+        "its own retail and pump prices, not at its headline peak. The "
+        "zero-shock corner is undefined and left blank.",
         y=0.035,
     )
     return fs.save(fig, "fig_scenario_grid.png")

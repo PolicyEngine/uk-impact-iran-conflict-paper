@@ -106,6 +106,39 @@ ONS_FUEL_DIR = "robustness/ons_fuel"
 
 SCENARIOS = ("niesr_baseline", "niesr_adverse", "realised_2026")
 
+#: The seven specifications the referee response requires the paper to report
+#: side by side. ``stem`` is the macro infix (no digits — LaTeX forbids them in
+#: a control sequence), ``rel`` the ``shock.json`` under ``results/``, and
+#: ``variant`` the matching row key in ``results/robustness/comparison.csv``.
+#:
+#: The first entry is the main specification (equivalised AHC denominator, D1,
+#: plus the Step 1 consumption-weighted quarterly cap average, D2). Everything
+#: else is an alternative or a robustness line, never a headline.
+SPECS: tuple[tuple[str, str, str, str], ...] = (
+    ("Main", "realised_2026", "main", "Main (equivalised, phase-in)"),
+    ("SteadyState", "robustness/steady_state", "steady_state", "Steady state"),
+    (
+        "SymDamp",
+        "robustness/symmetric_damping",
+        "symmetric_damping",
+        "Symmetric damping",
+    ),
+    (
+        "PeakFuel",
+        "realised_2026_peak_fuel",
+        "peak_fuel",
+        "Peak fuel (upper bound)",
+    ),
+    ("OnsShape", "robustness/ons_fuel", "ons_shape", "ONS motor-fuel shape"),
+    ("OnsLevels", "robustness/ons_levels", "ons_both_levels", "ONS both levels"),
+    (
+        "Unequiv",
+        "robustness/unequivalised",
+        "unequivalised",
+        "Unequivalised (robustness)",
+    ),
+)
+
 #: Policy key -> the macro stem the prose uses. The prose names are shorter
 #: than the file names (\genJrfCostBn, not \genJrfBlockCostBn).
 POLICY_MACRO = {
@@ -239,6 +272,52 @@ def snum(row: dict, column: str) -> float:
     return float(row[column])
 
 
+def cload(rel: str) -> list[dict]:
+    """Rows of any CSV under ``results/`` as dicts of strings."""
+    with (R / rel).open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def crow(rel: str, key: str, value: str) -> dict:
+    for row in cload(rel):
+        if row[key].strip() == value:
+            return row
+    raise KeyError(f"{rel}: no row with {key}={value}")
+
+
+COMPARISON = "robustness/comparison.csv"
+ENVELOPE = "sensitivity/policy_envelope.csv"
+DOMESTIC_LEG = "sensitivity/domestic_leg.csv"
+FUEL_BY_DECILE = "sensitivity/fuel_by_decile.csv"
+
+
+def comparison_rows() -> dict[str, dict]:
+    return {r["variant"]: r for r in cload(COMPARISON)}
+
+
+def envelope_row(policy: str, envelope: str) -> dict:
+    """One row of the common-envelope scorecard (``stated`` or ``common``)."""
+    for row in cload(ENVELOPE):
+        if row["policy"].strip() == policy and row["envelope"].strip() == envelope:
+            return row
+    raise KeyError(f"{ENVELOPE}: no {policy}/{envelope} row")
+
+
+def leg_rows(parameter: str) -> list[dict]:
+    rows = [r for r in cload(DOMESTIC_LEG) if r["parameter"].strip() == parameter]
+    if not rows:
+        raise KeyError(f"{DOMESTIC_LEG}: no rows for parameter {parameter!r}")
+    return rows
+
+
+def leg_span(parameter: str, column: str, select) -> float:
+    return select(float(r[column]) for r in leg_rows(parameter))
+
+
+def fuel_decile(decile: int) -> dict:
+    return crow(FUEL_BY_DECILE, "decile", str(decile))
+
+
 #: The paper's calibrated lag, mirrored from
 #: ``uk_iran_conflict.scenarios.CAP_LAG_QUARTERS`` but written literally so this
 #: emitter stays importable without the package (CI runs it with no microdata).
@@ -248,28 +327,50 @@ PAPER_CAP_LAG = "3"
 ASYM_LOW, ASYM_CENTRAL, ASYM_HIGH = "0.7", "0.85", "1.0"
 
 # ---------------------------------------------------------------------------
-# values the pipeline computes but does not yet persist
+# persisted prose values (docs/FIXES.md C12)
 # ---------------------------------------------------------------------------
+#
+# These were previously hardcoded literals in this file, which contradicted the
+# appendix's guarantee that every number is emitted mechanically. They now come
+# from ``results/persisted_values.json``, written by the incidence run, so a
+# missing or stale tree produces ``\GENMISSING`` like everything else.
 
-#: TODO(results): ``analysis/run_incidence.py`` should persist a ``medians``
-#: block in ``results/<scenario>/shock.json`` carrying, per decile, the median
-#: equivalised disposable income, the share of households with zero or negative
-#: income, and the share of large losers outside the means-tested system. Until
-#: it does, these three prose numbers are carried here as constants: they come
-#: from the same verified run as the committed JSON (see ``docs/FINDINGS.md``
-#: sections 4 and 8) and cannot be recomputed here, because this emitter must
-#: run in CI without a Hugging Face token for the private microdata.
-_PENDING_PERSIST = {
-    "genDecileOneMedianIncomeGbp": (16000.0, "{:,.0f}"),
-    "genDecileOneZeroIncomeShare": (0.57, "{:.2f}"),
+
+def persisted() -> dict:
+    return jload("persisted_values.json")
+
+
+def audit() -> dict:
+    return jload("means_tested_audit.json")
+
+
+#: The only surviving carried constant: the share of *large losers* outside the
+#: means-tested system is a figure-cache statistic (``analysis/figures.py``
+#: ``heavy_burden_gt5pct``), not a results-tree one. Kept explicit so the gap is
+#: visible rather than disguised.
+_CARRIED = {
     "genLargeLoserOutsideMeansTest": (98.0, "{:.0f}"),
-    # The raw and ONS-calibrated motor-fuel decile means are printed by
-    # ``analysis/run_variants.py`` but not written to any results file. They
-    # quantify the Check 2d imputation defect the robustness run corrects.
-    "genFuelSpendDecileOneRawGbp": (1073.0, "{:,.0f}"),
-    "genFuelSpendDecileOneOnsGbp": (521.0, "{:,.0f}"),
-    "genFuelSpendDecileTenRawGbp": (1333.0, "{:,.0f}"),
-    "genFuelSpendDecileTenOnsGbp": (2230.0, "{:,.0f}"),
+}
+
+# ---------------------------------------------------------------------------
+# ONS benchmarks — the real published values, not our own rescaled output
+# ---------------------------------------------------------------------------
+#
+# docs/FIXES.md C10: the paper attributed £521/£2,230 to ONS Family Spending.
+# Those are *our model's* motor-fuel decile means after the ONS-shape rescaling,
+# which preserves the microdata's national total. The published ONS numbers are
+# £318 (decile 1) and £1,362 (decile 10), with an all-household mean of £960 for
+# motor fuel and £1,780 for domestic energy. Both sets are emitted, under names
+# that say which is which.
+ONS_BENCH_FUEL = 960.0
+ONS_BENCH_DOMESTIC = 1780.0
+
+ONS_BENCH = {
+    "genOnsBenchFuelDecileOneGbp": (318.0, "{:,.0f}"),
+    "genOnsBenchFuelDecileTenGbp": (1362.0, "{:,.0f}"),
+    "genOnsBenchFuelMeanGbp": (ONS_BENCH_FUEL, "{:,.0f}"),
+    "genOnsBenchDomesticMeanGbp": (ONS_BENCH_DOMESTIC, "{:,.0f}"),
+    "genOnsBenchFuelRatio": (1362.0 / 318.0, "{:.1f}"),
 }
 
 
@@ -468,6 +569,17 @@ def main(draft: bool = False) -> None:
             )
         return select(values)
 
+    # the same statistic per instrument, so a sentence can name one directly
+    # rather than only the best and worst (docs/FIXES.md D18)
+    for policy, tag in POLICY_MACRO.items():
+        emit(
+            f"gen{tag}CostPerPound",
+            lambda policy=policy: cost_per_pound_decile_one(
+                jload(f"{CENTRAL_SCENARIO}/{policy}.json"), jload(central)
+            ),
+            "{:.2f}",
+            f"{CENTRAL_SCENARIO}/{policy}.json",
+        )
     emit(
         "genBestCostPerPound",
         lambda: cost_per_pound(min),
@@ -521,8 +633,28 @@ def main(draft: bool = False) -> None:
     # decile profile — and is reported alongside the main gradient, not inside
     # the range.
     # ------------------------------------------------------------------
-    _variant_macros(f"{PEAK_FUEL_SCENARIO}/shock.json", "PeakFuel")
+    for stem, rel, _variant, _label in SPECS:
+        _variant_macros(f"{rel}/shock.json", stem)
+    #: ``OnsFuel`` is the name the prose used before the ONS run split into a
+    #: shape-only and a both-levels specification; kept as an alias for the
+    #: shape-only run so no existing sentence silently loses its number.
     _variant_macros(f"{ONS_FUEL_DIR}/shock.json", "OnsFuel")
+    emit("genSpecCount", len(SPECS), "{:.0f}", "SPECS")
+    # The main aggregate to two decimals, for sentences that compare
+    # specifications whose totals differ in the second place (8.96 vs 8.93).
+    emit(
+        "genCentralAggBn",
+        lambda: jload(central)["aggregate_cost_bn"],
+        "{:.2f}",
+        central,
+    )
+    for stem, rel, _variant, _label in SPECS:
+        emit(
+            f"gen{stem}AggPreciseBn",
+            lambda rel=rel: jload(f"{rel}/shock.json")["aggregate_cost_bn"],
+            "{:.2f}",
+            rel,
+        )
 
     # How much of the observed peak each channel is charged for over the year.
     emit(
@@ -733,6 +865,17 @@ def main(draft: bool = False) -> None:
             "{:.0f}",
             lag,
         )
+    # The spread of the annualised figure across the plausible 1-4 quarter lag
+    # range: the paper's "roughly £40" understates it (docs/FIXES.md D17).
+    emit(
+        "genCapLagRangeGbp",
+        lambda: (
+            max(float(r["annualised_mean_loss_gbp"]) for r in sload("cap_lag.csv"))
+            - min(float(r["annualised_mean_loss_gbp"]) for r in sload("cap_lag.csv"))
+        ),
+        "{:.0f}",
+        lag,
+    )
     # the annualised 2026 total is almost purely the fast pump channel
     emit(
         "genMotorFuelAnnualisedBn",
@@ -795,10 +938,734 @@ def main(draft: bool = False) -> None:
         )
 
     # ------------------------------------------------------------------
-    # carried constants: see _PENDING_PERSIST
+    # sensitivity 1b: the CV welfare bounds (docs/FIXES.md A5)
+    #
+    # ``aggregate_loss_bn`` in elasticity.csv is the change in *expenditure*.
+    # Quoting it as the loss counts foregone heating as costless — the "heat or
+    # eat" fallacy. The money-metric statement is the pair of bounds on the
+    # compensating variation: Laspeyres (q0.dp, the zero-elasticity upper bound)
+    # and Paasche (q1.dp, the lower bound). Demand response shaves the *welfare*
+    # loss by far less than it shaves spending, which inverts the appendix's
+    # ranking of uncertainties.
     # ------------------------------------------------------------------
-    for name, (value, fmt) in _PENDING_PERSIST.items():
-        emit(name, value, fmt, "carried constant — see _PENDING_PERSIST TODO")
+    def erow(spec: str) -> dict:
+        return srow("elasticity.csv", "spec", spec)
+
+    emit(
+        "genCvUpperBn",
+        lambda: snum(erow("flat_0.0"), "cv_upper_bn"),
+        "{:.2f}",
+        ela,
+    )
+    emit(
+        "genCvUpperMeanGbp",
+        lambda: snum(erow("flat_0.0"), "cv_upper_mean_gbp"),
+        "{:.0f}",
+        ela,
+    )
+    emit(
+        "genCvLowerHighEpsBn",
+        lambda: snum(erow("flat_-0.8"), "cv_lower_bn"),
+        "{:.2f}",
+        ela,
+    )
+    emit(
+        "genCvLowerHighEpsMeanGbp",
+        lambda: snum(erow("flat_-0.8"), "cv_lower_mean_gbp"),
+        "{:.0f}",
+        ela,
+    )
+    # the correction itself: welfare shaved versus spending shaved, at eps=-0.8
+    emit(
+        "genWelfareShavedHighEpsPct",
+        lambda: 100 * snum(erow("flat_-0.8"), "welfare_share_shaved"),
+        "{:.1f}",
+        ela,
+    )
+    emit(
+        "genSpendShavedHighEpsPct",
+        lambda: 100 * snum(erow("flat_-0.8"), "share_of_upper_bound_shaved"),
+        "{:.0f}",
+        ela,
+    )
+    # the largest welfare shave anywhere in the sweep — the honest ceiling on
+    # how much demand response can matter for the paper's headline
+    emit(
+        "genWelfareShavedMaxPct",
+        lambda: (
+            100 * max(float(r["welfare_share_shaved"]) for r in sload("elasticity.csv"))
+        ),
+        "{:.1f}",
+        ela,
+    )
+    emit(
+        "genCvLowerMinBn",
+        lambda: min(float(r["cv_lower_bn"]) for r in sload("elasticity.csv")),
+        "{:.2f}",
+        ela,
+    )
+    for tag, spec in (
+        ("Labandeira", "labandeira_short_run"),
+        ("Priesmann", "priesmann_short_run"),
+    ):
+        emit(
+            f"gen{tag}ShortWelfareShaved",
+            lambda spec=spec: 100 * snum(erow(spec), "welfare_share_shaved"),
+            "{:.1f}",
+            ela,
+        )
+        emit(
+            f"gen{tag}ShortSpendShaved",
+            lambda spec=spec: 100 * snum(erow(spec), "share_of_upper_bound_shaved"),
+            "{:.0f}",
+            ela,
+        )
+        emit(
+            f"gen{tag}ShortCvLowerBn",
+            lambda spec=spec: snum(erow(spec), "cv_lower_bn"),
+            "{:.2f}",
+            ela,
+        )
+
+    # ------------------------------------------------------------------
+    # the seven specifications: ranges across them (docs/FIXES.md A3)
+    #
+    # The motor-fuel majority claim is calibration-dependent, so every headline
+    # derived from it is reported as a range over the specifications rather than
+    # as a single share.
+    # ------------------------------------------------------------------
+    def spec_values(column: str) -> list[float]:
+        rows = comparison_rows()
+        out = []
+        for _stem, _rel, variant, _label in SPECS:
+            out.append(float(rows[variant][column]))
+        return out
+
+    for name, column, fmt, scale in (
+        ("genSpecAggMinBn", "aggregate_cost_bn", "{:.2f}", 1),
+        ("genSpecAggMaxBn", "aggregate_cost_bn", "{:.2f}", 1),
+        ("genSpecLossMeanMin", "mean_loss_gbp", "{:.0f}", 1),
+        ("genSpecLossMeanMax", "mean_loss_gbp", "{:.0f}", 1),
+        ("genSpecFuelShareMinPct", "motor_fuel_share_of_loss", "{:.1f}", 100),
+        ("genSpecFuelShareMaxPct", "motor_fuel_share_of_loss", "{:.1f}", 100),
+        ("genSpecDecileRatioMin", "d1_d10_ratio_pct", "{:.2f}", 1),
+        ("genSpecDecileRatioMax", "d1_d10_ratio_pct", "{:.2f}", 1),
+    ):
+        select = (
+            min if name.endswith(("MinBn", "MeanMin", "MinPct", "RatioMin")) else max
+        )
+        emit(
+            name,
+            lambda column=column, select=select, scale=scale: (
+                scale * select(spec_values(column))
+            ),
+            fmt,
+            COMPARISON,
+        )
+    # how far the specification choice moves the aggregate, as a share of the
+    # main specification — the number the uncertainty ranking is built on
+    emit(
+        "genSpecAggSpreadPct",
+        lambda: (
+            100
+            * (
+                max(spec_values("aggregate_cost_bn"))
+                - min(spec_values("aggregate_cost_bn"))
+            )
+            / float(jload(central)["aggregate_cost_bn"])
+        ),
+        "{:.0f}",
+        COMPARISON,
+    )
+    # the fuel share excluding the explicit peak-fuel upper bound: the range a
+    # reader should use when the upper bound is not the quantity of interest
+    emit(
+        "genSpecFuelShareMaxExPeakPct",
+        lambda: (
+            100
+            * max(
+                float(comparison_rows()[variant]["motor_fuel_share_of_loss"])
+                for _s, _r, variant, _l in SPECS
+                if variant != "peak_fuel"
+            )
+        ),
+        "{:.1f}",
+        COMPARISON,
+    )
+    # phase-in weights actually applied to the domestic leg (decision D2)
+    for name, column in (
+        ("genAnnualPhaseInGasPct", "annual_phase_in_gas"),
+        ("genAnnualPhaseInElecPct", "annual_phase_in_electricity"),
+    ):
+        emit(
+            name,
+            lambda column=column: 100 * float(jload(central)[column]),
+            "{:.1f}",
+            central,
+        )
+
+    # ------------------------------------------------------------------
+    # decile coverage and the dropped weight (docs/FIXES.md A6)
+    # ------------------------------------------------------------------
+    def cov() -> dict:
+        return jload(central)["coverage"]
+
+    emit(
+        "genCoverageExcludedHouseholdsM",
+        lambda: cov()["households_m"],
+        "{:.2f}",
+        central,
+    )
+    emit(
+        "genCoverageExcludedSharePct",
+        lambda: 100 * cov()["share_of_households"],
+        "{:.2f}",
+        central,
+    )
+    emit(
+        "genCoverageExcludedLossSharePct",
+        lambda: 100 * cov()["share_of_loss"],
+        "{:.2f}",
+        central,
+    )
+    emit(
+        "genCoverageExcludedZeroIncomeSharePct",
+        lambda: 100 * cov()["zero_or_negative_income_share"],
+        "{:.0f}",
+        central,
+    )
+    emit(
+        "genCoveredHouseholdsM",
+        lambda: cov()["covered_households_m"],
+        "{:.2f}",
+        central,
+    )
+    emit("genCoveredLossBn", lambda: cov()["covered_loss_bn"], "{:.2f}", central)
+    emit(
+        "genZeroOrNegIncomeSharePct",
+        lambda: 100 * jload(central)["zero_or_negative_income_share"],
+        "{:.2f}",
+        central,
+    )
+
+    # ------------------------------------------------------------------
+    # persisted prose values (docs/FIXES.md C12), including the corrected
+    # decile-one zero-income share: 20.05% equivalised, not 0.57%
+    # ------------------------------------------------------------------
+    pv = "persisted_values.json"
+    emit(
+        "genDecileOneZeroIncomeShare",
+        lambda: (
+            100 * persisted()["decile1_zero_or_negative_income_share_equivalised_ahc"]
+        ),
+        "{:.2f}",
+        pv,
+    )
+    emit(
+        "genDecileOneZeroIncomeShareUnequiv",
+        lambda: (
+            100 * persisted()["decile1_zero_or_negative_income_share_unequivalised"]
+        ),
+        "{:.2f}",
+        pv,
+    )
+    emit(
+        "genDecileOneMedianIncomeGbp",
+        lambda: persisted()["decile1_median_income_gbp_equivalised_ahc"],
+        "{:,.0f}",
+        pv,
+    )
+    emit(
+        "genDecileOneMeanIncomeGbp",
+        lambda: persisted()["decile1_mean_income_gbp_equivalised_ahc"],
+        "{:,.0f}",
+        pv,
+    )
+    emit(
+        "genDecileOneMedianIncomeUnequivGbp",
+        lambda: persisted()["decile1_median_income_gbp_unequivalised"],
+        "{:,.0f}",
+        pv,
+    )
+    emit(
+        "genModelDomesticMeanGbp",
+        lambda: persisted()["mean_domestic_energy_spend_gbp"],
+        "{:,.0f}",
+        pv,
+    )
+    emit(
+        "genModelFuelMeanGbp",
+        lambda: persisted()["mean_motor_fuel_spend_gbp"],
+        "{:,.0f}",
+        pv,
+    )
+    # the raw imputation, and the profile after the ONS-shape rescaling. The
+    # rescaled numbers are OURS, not ONS's: see ONS_BENCH for the published ones.
+    for tag, index in (("One", 0), ("Ten", 9)):
+        emit(
+            f"genFuelSpendDecile{tag}RawGbp",
+            lambda index=index: persisted()["motor_fuel_decile_mean_gbp"]["raw"][index],
+            "{:,.0f}",
+            pv,
+        )
+        emit(
+            f"genFuelSpendDecile{tag}OnsGbp",
+            lambda index=index: persisted()["motor_fuel_decile_mean_gbp"]["ons_shape"][
+                index
+            ],
+            "{:,.0f}",
+            pv,
+        )
+        emit(
+            f"genRescaledFuelDecile{tag}Gbp",
+            lambda index=index: persisted()["motor_fuel_decile_mean_gbp"]["ons_shape"][
+                index
+            ],
+            "{:,.0f}",
+            pv,
+        )
+        emit(
+            f"genOnsLevelsFuelDecile{tag}Gbp",
+            lambda index=index: persisted()["motor_fuel_decile_mean_gbp"][
+                "ons_both_levels"
+            ][index],
+            "{:,.0f}",
+            pv,
+        )
+
+    # the two disclosed imputation defects, in both directions (C11)
+    for name, (value, fmt) in ONS_BENCH.items():
+        emit(name, value, fmt, "ONS Family Spending FYE 2025 (published)")
+    emit(
+        "genDomesticUnderImputationPct",
+        lambda: (
+            100
+            * (1 - persisted()["mean_domestic_energy_spend_gbp"] / ONS_BENCH_DOMESTIC)
+        ),
+        "{:.0f}",
+        pv,
+    )
+    emit(
+        "genFuelOverImputationPct",
+        lambda: 100 * (persisted()["mean_motor_fuel_spend_gbp"] / ONS_BENCH_FUEL - 1),
+        "{:.0f}",
+        pv,
+    )
+
+    # ------------------------------------------------------------------
+    # continuous compensation measures at each sponsor's stated design (B9)
+    # ------------------------------------------------------------------
+    for policy, tag in POLICY_MACRO.items():
+        rel = f"{CENTRAL_SCENARIO}/{policy}.json"
+        emit(
+            f"gen{tag}OffsetSharePct",
+            lambda rel=rel: 100 * jload(rel)["share_of_aggregate_loss_offset"],
+            "{:.1f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}ResidualMeanGbp",
+            lambda rel=rel: jload(rel)["mean_residual_loss_gbp"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}ResidualMedianGbp",
+            lambda rel=rel: jload(rel)["median_residual_loss_gbp"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}ResidualDecileOneGbp",
+            lambda rel=rel: jload(rel)["mean_residual_loss_by_decile"]["1"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}ResidualDecileTenGbp",
+            lambda rel=rel: jload(rel)["mean_residual_loss_by_decile"]["10"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}OffsetDecileOnePct",
+            lambda rel=rel: 100 * jload(rel)["share_of_loss_offset_by_decile"]["1"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}MeanGainGbp",
+            lambda rel=rel: jload(rel)["mean_gain_gbp"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{tag}FullyCompensatedShare",
+            lambda rel=rel: 100 * jload(rel)["fully_compensated_share"],
+            "{:.0f}",
+            rel,
+        )
+
+    # The JRF block, re-specified as a level subsidy, now costs more than JRF's
+    # own stated £5bn rather than a third of it (B7).
+    emit(
+        "genJrfStatedCostBn",
+        lambda: jload(f"{CENTRAL_SCENARIO}/jrf_block.json")["stated_cost_bn"],
+        "{:.1f}",
+        f"{CENTRAL_SCENARIO}/jrf_block.json",
+    )
+    emit(
+        "genJrfCostOverStated",
+        lambda: (
+            jload(f"{CENTRAL_SCENARIO}/jrf_block.json")["cost_bn"]
+            / jload(f"{CENTRAL_SCENARIO}/jrf_block.json")["stated_cost_bn"]
+        ),
+        "{:.1f}",
+        f"{CENTRAL_SCENARIO}/jrf_block.json",
+    )
+
+    # ------------------------------------------------------------------
+    # the common-envelope scorecard (B7): all five instruments at £5bn
+    # ------------------------------------------------------------------
+    emit(
+        "genEnvelopeBn",
+        lambda: snum(envelope_row("vat_zero", "common"), "envelope_bn"),
+        "{:.0f}",
+        ENVELOPE,
+    )
+    for policy, tag in POLICY_MACRO.items():
+        emit(
+            f"gen{tag}EnvelopeOffsetPct",
+            lambda policy=policy: (
+                100
+                * snum(envelope_row(policy, "common"), "share_of_aggregate_loss_offset")
+            ),
+            "{:.1f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeResidualMeanGbp",
+            lambda policy=policy: snum(
+                envelope_row(policy, "common"), "mean_residual_loss_gbp"
+            ),
+            "{:.0f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeResidualMedianGbp",
+            lambda policy=policy: snum(
+                envelope_row(policy, "common"), "median_residual_loss_gbp"
+            ),
+            "{:.0f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeResidualDecileOneGbp",
+            lambda policy=policy: snum(
+                envelope_row(policy, "common"), "mean_residual_loss_d1"
+            ),
+            "{:.0f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeMeanGainGbp",
+            lambda policy=policy: snum(envelope_row(policy, "common"), "mean_gain_gbp"),
+            "{:.0f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeUncompensatedPct",
+            lambda policy=policy: (
+                100
+                * snum(envelope_row(policy, "common"), "uncompensated_share_overall")
+            ),
+            "{:.0f}",
+            ENVELOPE,
+        )
+        emit(
+            f"gen{tag}EnvelopeScale",
+            lambda policy=policy: snum(
+                envelope_row(policy, "common"), "envelope_scale"
+            ),
+            "{:.2f}",
+            ENVELOPE,
+        )
+
+    def envelope_best(select, column: str) -> dict:
+        rows = [r for r in cload(ENVELOPE) if r["envelope"].strip() == "common"]
+        return select(rows, key=lambda r: float(r[column]))
+
+    #: Short, LaTeX-safe prose names. The CSV ``label`` carries "%" and "->",
+    #: which would break the build, so it is never emitted verbatim.
+    envelope_names = {
+        "social_tariff": "the means-tested social tariff",
+        "jrf_block": "the JRF discounted block",
+        "whd_expansion": "the Warm Home Discount expansion",
+        "vat_zero": "VAT zero-rating",
+        "ippr_rebate": "the flat rebate",
+    }
+    emit(
+        "genEnvelopeBestLabel",
+        lambda: envelope_names[
+            envelope_best(max, "share_of_aggregate_loss_offset")["policy"].strip()
+        ],
+        source=ENVELOPE,
+    )
+    emit(
+        "genEnvelopeBestResidualLabel",
+        lambda: envelope_names[
+            envelope_best(min, "mean_residual_loss_gbp")["policy"].strip()
+        ],
+        source=ENVELOPE,
+    )
+    emit(
+        "genEnvelopeBestOffsetPct",
+        lambda: (
+            100
+            * float(
+                envelope_best(max, "share_of_aggregate_loss_offset")[
+                    "share_of_aggregate_loss_offset"
+                ]
+            )
+        ),
+        "{:.1f}",
+        ENVELOPE,
+    )
+    emit(
+        "genEnvelopeBestResidualMeanGbp",
+        lambda: float(
+            envelope_best(min, "mean_residual_loss_gbp")["mean_residual_loss_gbp"]
+        ),
+        "{:.0f}",
+        ENVELOPE,
+    )
+    emit(
+        "genEnvelopeWorstOffsetPct",
+        lambda: (
+            100
+            * float(
+                envelope_best(min, "share_of_aggregate_loss_offset")[
+                    "share_of_aggregate_loss_offset"
+                ]
+            )
+        ),
+        "{:.1f}",
+        ENVELOPE,
+    )
+
+    # ------------------------------------------------------------------
+    # domestic-leg parameter sweep (A4): only the product is identified
+    # ------------------------------------------------------------------
+    for tag, parameter in (
+        ("Split", "sustained_fraction_split"),
+        ("Nbp", "prewar_nbp_pence_per_therm"),
+        ("GasShare", "wholesale_share_gas_bill"),
+        ("ElecShare", "wholesale_share_electricity_bill"),
+    ):
+        for suffix, select in (("Min", min), ("Max", max)):
+            emit(
+                f"genDomesticLeg{tag}Agg{suffix}Bn",
+                lambda parameter=parameter, select=select: leg_span(
+                    parameter, "aggregate_cost_bn", select
+                ),
+                "{:.2f}",
+                DOMESTIC_LEG,
+            )
+            emit(
+                f"genDomesticLeg{tag}Mean{suffix}Gbp",
+                lambda parameter=parameter, select=select: leg_span(
+                    parameter, "mean_loss_gbp", select
+                ),
+                "{:.0f}",
+                DOMESTIC_LEG,
+            )
+            emit(
+                f"genDomesticLeg{tag}FuelShare{suffix}Pct",
+                lambda parameter=parameter, select=select: (
+                    100 * leg_span(parameter, "motor_fuel_share_of_loss", select)
+                ),
+                "{:.1f}",
+                DOMESTIC_LEG,
+            )
+    emit(
+        "genDomesticLegAnchorProduct",
+        lambda: float(leg_rows("sustained_fraction_split")[0]["anchor_product"]),
+        "{:.3f}",
+        DOMESTIC_LEG,
+    )
+    for name, select in (
+        ("genDomesticLegAggMinBn", min),
+        ("genDomesticLegAggMaxBn", max),
+    ):
+        emit(
+            name,
+            lambda select=select: select(
+                float(r["aggregate_cost_bn"]) for r in cload(DOMESTIC_LEG)
+            ),
+            "{:.2f}",
+            DOMESTIC_LEG,
+        )
+    for name, select in (
+        ("genDomesticLegFuelShareMinPct", min),
+        ("genDomesticLegFuelShareMaxPct", max),
+    ):
+        emit(
+            name,
+            lambda select=select: (
+                100
+                * select(
+                    float(r["motor_fuel_share_of_loss"]) for r in cload(DOMESTIC_LEG)
+                )
+            ),
+            "{:.1f}",
+            DOMESTIC_LEG,
+        )
+    emit(
+        "genDomesticLegSpreadPct",
+        lambda: (
+            100
+            * (
+                max(float(r["aggregate_cost_bn"]) for r in cload(DOMESTIC_LEG))
+                - min(float(r["aggregate_cost_bn"]) for r in cload(DOMESTIC_LEG))
+            )
+            / float(jload(central)["aggregate_cost_bn"])
+        ),
+        "{:.0f}",
+        DOMESTIC_LEG,
+    )
+
+    # ------------------------------------------------------------------
+    # petrol versus diesel by decile (D26): the decile-eight cash spike
+    # ------------------------------------------------------------------
+    emit(
+        "genPetrolUpliftPct",
+        lambda: 100 * (float(fuel_decile(1)["petrol_price_factor"]) - 1),
+        "{:.1f}",
+        FUEL_BY_DECILE,
+    )
+    emit(
+        "genDieselUpliftPct",
+        lambda: 100 * (float(fuel_decile(1)["diesel_price_factor"]) - 1),
+        "{:.1f}",
+        FUEL_BY_DECILE,
+    )
+    for tag, d in (("One", 1), ("Eight", 8), ("Ten", 10)):
+        emit(
+            f"genDieselShareSpendDecile{tag}Pct",
+            lambda d=d: 100 * float(fuel_decile(d)["diesel_share_of_fuel_spend"]),
+            "{:.1f}",
+            FUEL_BY_DECILE,
+        )
+        emit(
+            f"genDieselShareLossDecile{tag}Pct",
+            lambda d=d: 100 * float(fuel_decile(d)["diesel_share_of_fuel_loss"]),
+            "{:.1f}",
+            FUEL_BY_DECILE,
+        )
+        emit(
+            f"genFuelLossDecile{tag}Gbp",
+            lambda d=d: float(fuel_decile(d)["motor_fuel_loss_gbp"]),
+            "{:.0f}",
+            FUEL_BY_DECILE,
+        )
+        emit(
+            f"genFuelSpendShareDecile{tag}Pct",
+            lambda d=d: 100 * float(fuel_decile(d)["share_with_any_fuel_spend"]),
+            "{:.1f}",
+            FUEL_BY_DECILE,
+        )
+
+    # ------------------------------------------------------------------
+    # means-tested audit (C13): the resolved variable set, logged not swallowed
+    # ------------------------------------------------------------------
+    aud = "means_tested_audit.json"
+    emit(
+        "genMeansTestedVarCount",
+        lambda: len(audit()["resolved_variables"]),
+        "{:.0f}",
+        aud,
+    )
+    emit(
+        "genMeansTestedMissingCount",
+        lambda: len(audit()["missing_required"]),
+        "{:.0f}",
+        aud,
+    )
+    emit(
+        "genUniversalCreditHouseholdsM",
+        lambda: audit()["by_variable"]["universal_credit"]["households_m"],
+        "{:.2f}",
+        aud,
+    )
+    emit(
+        "genPensionCreditHouseholdsM",
+        lambda: audit()["by_variable"]["pension_credit"]["households_m"],
+        "{:.2f}",
+        aud,
+    )
+    emit(
+        "genTotalHouseholdsM",
+        lambda: audit()["total_households_m"],
+        "{:.1f}",
+        aud,
+    )
+
+    # ------------------------------------------------------------------
+    # macros the prose asks for that no results file supports
+    #
+    # These names appear in the manuscript but describe *combinations* of
+    # specifications that were never run: there is no symmetric-damping run on
+    # the ONS both-levels calibration, and no symmetric-damping run on the
+    # steady-state basis. They are emitted as \GENMISSING rather than guessed at,
+    # so the build fails visibly and the sentence gets repointed at a
+    # specification that exists (\genSymDampMotorFuelShareOfLoss,
+    # \genOnsLevelsMotorFuelShareOfLoss, \genSteadyStateMotorFuelShareOfLoss).
+    # ------------------------------------------------------------------
+    def _no_such_run(name: str):
+        def fail():
+            raise KeyError(
+                "no such specification: this macro asks for a combination of two "
+                "specifications that results/ does not contain"
+            )
+
+        emit(name, fail, source="results/robustness/comparison.csv")
+
+    # The two combination specifications: symmetric damping crossed with the
+    # other accounting choices. These are the calibrations under which the
+    # motor-fuel majority fails, so the abstract cites them and they are real
+    # runs (analysis/run_combinations.py), not arithmetic.
+    def _combo(key: str) -> float:
+        cell = json.loads((R / "robustness" / "combinations.json").read_text())
+        return float(cell[key]["motor_fuel_share_pct"])
+
+    emit(
+        "genSymDampSteadyMotorFuelShare",
+        lambda: _combo("symmetric_steady_state"),
+        "{:.1f}",
+        "robustness/combinations.json",
+    )
+    emit(
+        "genSymDampOnsLevelsMotorFuelShare",
+        lambda: _combo("symmetric_ons_levels"),
+        "{:.1f}",
+        "robustness/combinations.json",
+    )
+    for _name in ("genSymDampSteadyAggBn", "genSymDampOnsLevelsAggBn"):
+        _k = "symmetric_steady_state" if "Steady" in _name else "symmetric_ons_levels"
+        emit(
+            _name,
+            lambda k=_k: json.loads(
+                (R / "robustness" / "combinations.json").read_text()
+            )[k]["aggregate_cost_bn"],
+            "{:.2f}",
+            "robustness/combinations.json",
+        )
+
+    # ------------------------------------------------------------------
+    # remaining carried constant
+    # ------------------------------------------------------------------
+    for name, (value, fmt) in _CARRIED.items():
+        emit(name, value, fmt, "carried constant — see _CARRIED")
 
     # ------------------------------------------------------------------
     # --- scenario grid (results/grid/grid.csv) ---------------------------

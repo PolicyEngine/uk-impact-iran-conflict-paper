@@ -1,5 +1,24 @@
 # Research brief — shared context for all contributors
 
+> **SUPERSEDED IN PART — read this first.** This is the *original* scoping brief,
+> kept for provenance. Several of its claims were disproved once the pipeline was
+> built against the real model and data. Where this file and the documents below
+> disagree, **they win**:
+>
+> - `docs/FINDINGS.md` — what the first full run actually showed
+> - `docs/VALIDATION.md` — external validation against ONS, DfT, DWP and the literature
+> - `docs/REFEREE_REPORTS.md` — three referee reports, all major revision
+> - `docs/FIXES.md` — the resulting work list and the decisions taken
+>
+> Specifically, and contrary to this brief: PolicyEngine UK has **no price channel**
+> (energy and fuel spend are inputs with no formulas); the `energy_bills` parameter
+> is **dead** — no variable reads it; there is **no Warm Home Discount**; there are
+> **no constituency weights** in this data release and `local_authority` is
+> degenerate, so the seat-level contribution below was withdrawn; and the
+> distributional headline is now reported across seven specifications rather than
+> one. The one-sentence contribution stated below is **not** the paper's
+> contribution any more.
+
 ## The paper
 
 **Title:** From Hormuz to the Household: Macro-to-Micro Incidence of the 2026 Energy Shock in the UK
@@ -195,7 +214,8 @@ weight sets. Two hex maps side by side is the figure that carries the paper.
 Report: cost per £ of bottom-decile gain, share of spend reaching deciles 1–3, and —
 the point everyone misses — the **share of losers left uncompensated within each
 decile** (Cronin/Fullerton/Sexton; Sallee; Douenne). PolicyEngine's
-`IntraDecileImpact` gives this directly.
+This is computed directly in `uk_iran_conflict/policies.py`; PolicyEngine has no
+suitable built-in for it.
 
 **Step 5 — caveat honestly, and turn caveats into contributions.** No GE, so per Känzig
 at most a third of total incidence (use-side only, per Goulder et al.); no consumption
@@ -224,7 +244,7 @@ with no UK analogue.
 Structured after `PolicyEngine/uk-ai-study`:
 
 - `uk_iran_conflict/` — importable package: scenarios, shocks, runner
-- `analysis/` — scripts that produce `results/`, orchestrated by `analysis/run_all.py`
+- `analysis/` — scripts that produce `results/`, orchestrated by `analysis/run_incidence.py`
 - `results/` — canonical JSON/CSV artifacts, committed
 - `paper/` — LaTeX; `main.tex` + `sections/*.tex`; **every headline number enters prose
   as a macro from `paper/values_generated.tex`**, emitted mechanically by

@@ -49,8 +49,11 @@ def elasticity_figure() -> Path:
     estimate shaves off, not to suggest a preferred value.
     """
     df = pd.read_csv(SENS / "elasticity.csv")
-    flat = df[df["kind"] == "flat"].sort_values("epsilon_mean", ascending=False)
-    named = df[df["kind"] != "flat"]
+    # The sweep CSV labels the uniform grid ``grid`` and the literature
+    # specifications ``named``; an earlier filter looked for ``flat`` and
+    # silently drew an empty line.
+    flat = df[df["kind"] == "grid"].sort_values("epsilon_mean", ascending=False)
+    named = df[df["kind"] == "named"]
 
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.6))
 
@@ -125,6 +128,124 @@ def elasticity_figure() -> Path:
     fig.tight_layout()
     out = FIGS / "figA1_elasticity.png"
     fig.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def welfare_bounds_figure() -> Path:
+    """The correction: welfare bounds against the old spend-change measure.
+
+    The appendix used to report the change in *expenditure* as the loss, so a
+    strong demand response looked as though it removed four fifths of the shock.
+    It does not: it removes four fifths of the spending, and about a tenth of the
+    welfare loss, because the rest is foregone consumption that the household
+    valued. Panel A draws the spending path inside the Paasche--Laspeyres band
+    on the compensating variation; panel B draws the two "shaved" measures
+    against each other, which is where the inversion is visible.
+    """
+    df = pd.read_csv(SENS / "elasticity.csv")
+    flat = df[df["kind"] == "grid"].sort_values("epsilon_mean", ascending=False)
+    named = df[df["kind"] == "named"]
+    x = -flat["epsilon_mean"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8))
+
+    ax = axes[0]
+    ax.fill_between(
+        x,
+        flat["cv_lower_bn"],
+        flat["cv_upper_bn"],
+        color=TEAL,
+        alpha=0.28,
+        linewidth=0,
+        label="Compensating variation (Paasche–Laspeyres bounds)",
+    )
+    ax.plot(x, flat["cv_lower_bn"], color=TEAL, linewidth=1.6, marker="o", markersize=3)
+    ax.plot(
+        x,
+        flat["cv_upper_bn"],
+        color=TEAL,
+        linewidth=1.6,
+        linestyle=(0, (4, 3)),
+    )
+    ax.plot(
+        x,
+        flat["aggregate_loss_bn"],
+        color=BLUE,
+        linewidth=2.0,
+        marker="s",
+        markersize=4,
+        label="Change in expenditure (the superseded measure)",
+    )
+    for _, r in named.iterrows():
+        ax.scatter(
+            -r["epsilon_mean"],
+            r["cv_lower_bn"],
+            color=DARK,
+            zorder=6,
+            s=26,
+            edgecolor="white",
+            linewidth=0.8,
+        )
+    ax.set_ylim(0, float(flat["cv_upper_bn"].max()) * 1.15)
+    ax.set_xlabel("Elasticity of demand (absolute value)", fontsize=9, color=DARK)
+    ax.set_ylabel("Aggregate loss (£bn)", fontsize=9, color=DARK)
+    ax.set_title(
+        "A the welfare loss barely moves; only spending does",
+        fontsize=9.5,
+        color=DARK,
+        loc="left",
+    )
+    ax.legend(frameon=False, fontsize=7.5, loc="lower left")
+    _style(ax)
+
+    ax = axes[1]
+    ax.plot(
+        x,
+        100 * flat["share_of_upper_bound_shaved"],
+        color=BLUE,
+        linewidth=2.0,
+        marker="s",
+        markersize=4,
+        label="Share of spending shaved",
+    )
+    ax.plot(
+        x,
+        100 * flat["welfare_share_shaved"],
+        color=TEAL,
+        linewidth=2.0,
+        marker="o",
+        markersize=4,
+        label="Share of the welfare loss shaved",
+    )
+    worst = flat.iloc[-1]
+    ax.annotate(
+        f"{100 * float(worst['share_of_upper_bound_shaved']):.0f}% of spending\n"
+        f"but only {100 * float(worst['welfare_share_shaved']):.1f}% of welfare",
+        xy=(float(-worst["epsilon_mean"]), 100 * float(worst["welfare_share_shaved"])),
+        xytext=(-118, 34),
+        textcoords="offset points",
+        fontsize=8,
+        color=DARK,
+        arrowprops={"arrowstyle": "->", "color": GREY, "linewidth": 0.9},
+    )
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Elasticity of demand (absolute value)", fontsize=9, color=DARK)
+    ax.set_ylabel(
+        "Share of the zero-elasticity bound removed (%)", fontsize=9, color=DARK
+    )
+    ax.set_title(
+        "B the same sweep, on the two measures",
+        fontsize=9.5,
+        color=DARK,
+        loc="left",
+    )
+    ax.legend(frameon=False, fontsize=7.5, loc="upper left")
+    _style(ax)
+
+    fig.tight_layout()
+    out = FIGS / "figA2_welfare_bounds.png"
+    fig.savefig(out, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return out
 
@@ -210,7 +331,7 @@ def cap_lag_figure() -> Path:
 
 def main() -> None:
     FIGS.mkdir(parents=True, exist_ok=True)
-    for fn in (elasticity_figure, cap_lag_figure):
+    for fn in (elasticity_figure, welfare_bounds_figure, cap_lag_figure):
         path = fn()
         size = path.stat().st_size / 1e3
         print(f"  {path.name:32} {size:7.1f} kB  ok")

@@ -16,10 +16,15 @@ Tables
 ``tab_scenario.tex``      the three scenarios side by side
 ``tab_scorecard.tex``     the five policies on the paper's scoring metrics
 ``tab_region.tex``        the 12 regions: mean loss £, % of income, households
-``tab_variants.tex``      the three realised-2026 specifications side by side
-                          (main damped-pump, peak-fuel upper bound,
-                          ONS-calibrated motor-fuel robustness), from
-                          ``results/robustness/comparison.csv``
+``tab_variants.tex``      three realised-2026 specifications side by side
+                          (main, peak-fuel upper bound, ONS motor-fuel shape),
+                          from ``results/robustness/comparison.csv``
+``tab_specifications.tex`` all seven specifications, one per row: the full
+                          post-referee comparison
+``tab_envelope.tex``     the five instruments at a common exchequer envelope,
+                          with the continuous compensation measures
+``tab_domestic_leg.tex`` the domestic-leg parameter sweep: what the Cornwall
+                          anchor pins and what it does not
 
 Conventions: ``booktabs`` rules only (no vertical rules), numeric columns
 right-aligned (``r``), a machine-generated header comment in every file.
@@ -74,6 +79,15 @@ def small(body: list[str]) -> list[str]:
     outside the group and keeps body size.
     """
     return [r"{\small\setlength{\tabcolsep}{4.5pt}"] + body + [r"}"]
+
+
+def tight(body: list[str]) -> list[str]:
+    r"""As :func:`small`, but tighter still.
+
+    Used for the two widest tables (nine and seven numeric columns), which do
+    not fit the 6.3in text block at the standard 4.5pt column separation.
+    """
+    return [r"{\small\setlength{\tabcolsep}{2.6pt}"] + body + [r"}"]
 
 
 def jload(rel: str) -> dict:
@@ -244,7 +258,7 @@ def tab_scenario() -> None:
 
 def tab_scorecard(shock: dict) -> None:
     body = [
-        r"\begin{tabular}{lrrrrr}",
+        r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
         "Policy & "
         + mc(r"Cost", r"(\pounds bn)")
@@ -253,9 +267,11 @@ def tab_scorecard(shock: dict) -> None:
         + " & "
         + mc(r"Cost per \pounds 1", r"to decile 1 (\pounds)")
         + " & "
-        + mc(r"Losers un-", r"compensated (\%)")
+        + mc(r"Loss", r"offset (\%)")
         + " & "
-        + mc(r"Fully com-", r"pensated (\%)")
+        + mc(r"Mean res-", r"idual (\pounds)")
+        + " & "
+        + mc(r"Losers un-", r"compensated (\%)")
         + r" \\",
         r"\midrule",
     ]
@@ -265,8 +281,9 @@ def tab_scorecard(shock: dict) -> None:
             f"{label} & {p['cost_bn']:.2f} & "
             f"{100 * p['share_to_bottom_three']:.1f} & "
             f"{cost_per_pound_decile_one(p, shock):.2f} & "
-            f"{100 * p['uncompensated_share_overall']:.1f} & "
-            f"{100 * p['fully_compensated_share']:.1f} \\\\"
+            f"{100 * p['share_of_aggregate_loss_offset']:.1f} & "
+            f"{p['mean_residual_loss_gbp']:,.0f} & "
+            f"{100 * p['uncompensated_share_overall']:.1f} \\\\"
         )
     body += [r"\bottomrule", r"\end{tabular}"]
     write("tab_scorecard.tex", small(body))
@@ -297,26 +314,45 @@ def tab_region(shock: dict) -> None:
     write("tab_region.tex", body)
 
 
+#: The seven specifications, in the order the paper argues them. Keyed by the
+#: ``variant`` column of ``results/robustness/comparison.csv``. Kept in one place
+#: so ``tab_variants`` and ``tab_specifications`` cannot drift apart.
+SPEC_ORDER = (
+    ("main", ("Main", "specification")),
+    ("steady_state", ("Steady", "state")),
+    ("symmetric_damping", ("Symmetric", "damping")),
+    ("peak_fuel", ("Peak fuel", "(upper bound)")),
+    ("ons_shape", ("ONS", "shape")),
+    ("ons_both_levels", ("ONS both", "levels")),
+    ("unequivalised", ("Unequiv-", "alised")),
+)
+
+
+def comparison() -> dict[str, dict]:
+    path = R / "robustness" / "comparison.csv"
+    with path.open(newline="") as fh:
+        return {r["variant"]: r for r in csv.DictReader(fh)}
+
+
 def tab_variants() -> None:
-    r"""The three realised-2026 specifications side by side.
+    r"""The three headline realised-2026 specifications side by side.
 
     Read straight from ``results/robustness/comparison.csv`` (one row per
     variant) rather than re-deriving from the per-variant JSON, so the table and
     the audit trail cannot drift apart. Three numeric columns plus a label
     column fit the 6.3in text block comfortably at ``\small`` with stacked
-    two-line headers.
+    two-line headers. The full seven-specification comparison is
+    ``tab_specifications``.
     """
-    path = R / "robustness" / "comparison.csv"
-    with path.open(newline="") as fh:
-        rows = {r["variant"]: r for r in csv.DictReader(fh)}
+    rows = comparison()
     order = (
-        ("main_damped_pump", ("Main", "specification")),
-        ("upper_bound_peak_fuel", ("Peak-fuel", "upper bound")),
-        ("robustness_ons_fuel", ("ONS-calibrated", "motor fuel")),
+        ("main", ("Main", "specification")),
+        ("peak_fuel", ("Peak-fuel", "upper bound")),
+        ("ons_shape", ("ONS-calibrated", "motor fuel")),
     )
     cols = [rows[key] for key, _ in order if key in rows]
     if not cols:
-        raise KeyError(f"{path} has none of the expected variants")
+        raise KeyError("comparison.csv has none of the expected variants")
 
     def line(name: str, fn, fmt: str = "{:.2f}") -> str:
         return name + " & " + " & ".join(fmt.format(fn(r)) for r in cols) + r" \\"
@@ -359,6 +395,211 @@ def tab_variants() -> None:
         r"\end{tabular}",
     ]
     write("tab_variants.tex", small(body))
+
+
+def tab_specifications() -> None:
+    r"""All seven specifications, one per row.
+
+    Specifications are the *rows* rather than the columns: nine short numeric
+    columns fit the 6.3in text block at ``\small``, whereas seven wide numeric
+    columns plus a row-label column would not. The motor-fuel share is the last
+    column because it is the one the paper's central claim turns on and the one
+    that moves most across the seven.
+    """
+    rows = comparison()
+    body = [
+        r"\begin{tabular}{lrrrrrrrrr}",
+        r"\toprule",
+        "Specification & "
+        + mc(r"Agg.", r"(\pounds bn)")
+        + " & "
+        + mc(r"Mean", r"(\pounds)")
+        + " & "
+        + mc(r"Mean", r"(\%)")
+        + " & "
+        + mc(r"D1", r"(\pounds)")
+        + " & "
+        + mc(r"D1", r"(\%)")
+        + " & "
+        + mc(r"D10", r"(\pounds)")
+        + " & "
+        + mc(r"D10", r"(\%)")
+        + " & "
+        + mc(r"D1/D10", r"(\%)")
+        + " & "
+        + mc(r"Motor fuel", r"(\% of loss)")
+        + r" \\",
+        r"\midrule",
+    ]
+    for key, _head in SPEC_ORDER:
+        r = rows.get(key)
+        if r is None:
+            continue
+        label = {
+            "main": "Main specification",
+            "steady_state": "Steady state",
+            "symmetric_damping": "Symmetric damping",
+            "peak_fuel": "Peak fuel (upper bound)",
+            "ons_shape": "ONS shape",
+            "ons_both_levels": "ONS both levels",
+            "unequivalised": "Unequivalised",
+        }[key]
+        body.append(
+            f"{label} & {float(r['aggregate_cost_bn']):.2f} & "
+            f"{float(r['mean_loss_gbp']):,.0f} & "
+            f"{float(r['mean_loss_pct']):.2f} & "
+            f"{float(r['decile1_loss_gbp']):,.0f} & "
+            f"{float(r['decile1_loss_pct']):.2f} & "
+            f"{float(r['decile10_loss_gbp']):,.0f} & "
+            f"{float(r['decile10_loss_pct']):.2f} & "
+            f"{float(r['d1_d10_ratio_pct']):.2f} & "
+            f"{100 * float(r['motor_fuel_share_of_loss']):.1f} \\\\"
+        )
+    body += [r"\bottomrule", r"\end{tabular}"]
+    write("tab_specifications.tex", tight(body))
+
+
+#: Common-envelope scorecard: the five instruments scored at one exchequer cost
+#: so their targeting is comparable, rather than at each sponsor's own price.
+def tab_envelope() -> None:
+    r"""The five instruments at a common exchequer envelope.
+
+    ``results/sensitivity/policy_envelope.csv`` carries two rows per policy: the
+    sponsor's own stated design (``stated``) and the same instrument scaled to
+    the common envelope (``common``). Only the common rows appear here — that is
+    the point of the table — with the scaling factor shown so a reader can see
+    how far each instrument had to be stretched or shrunk.
+    """
+    with (SENS / "policy_envelope.csv").open(newline="") as fh:
+        rows = [r for r in csv.DictReader(fh) if r["envelope"].strip() == "common"]
+    by_policy = {r["policy"].strip(): r for r in rows}
+    envelope = next((float(r["envelope_bn"]) for r in rows), float("nan"))
+    body = [
+        r"\begin{tabular}{lrrrrrrr}",
+        r"\toprule",
+        "Instrument & "
+        + mc(r"Scaling", r"factor")
+        + " & "
+        + mc(r"Share to", r"D1--3 (\%)")
+        + " & "
+        + mc(r"Loss", r"offset (\%)")
+        + " & "
+        + mc(r"Mean res-", r"idual (\pounds)")
+        + " & "
+        + mc(r"Median res-", r"idual (\pounds)")
+        + " & "
+        + mc(r"D1 mean", r"residual (\pounds)")
+        + " & "
+        + mc(r"Un-comp-", r"ensated (\%)")
+        + r" \\",
+        r"\midrule",
+    ]
+    for key, label in POLICY_LABELS:
+        r = by_policy.get(key)
+        if r is None:
+            continue
+        body.append(
+            f"{label} & {float(r['envelope_scale']):.2f} & "
+            f"{100 * float(r['share_to_bottom_three']):.1f} & "
+            f"{100 * float(r['share_of_aggregate_loss_offset']):.1f} & "
+            f"{float(r['mean_residual_loss_gbp']):,.0f} & "
+            f"{float(r['median_residual_loss_gbp']):,.0f} & "
+            f"{float(r['mean_residual_loss_d1']):,.0f} & "
+            f"{100 * float(r['uncompensated_share_overall']):.0f} \\\\"
+        )
+    body += [r"\bottomrule", r"\end{tabular}"]
+    write(
+        "tab_envelope.tex",
+        float_wrap(
+            tight(body),
+            "The five instruments scored at a common exchequer envelope of "
+            f"\\pounds {envelope:.0f}bn, realised 2026 scenario. Each is scaled "
+            "by the factor in column one from its sponsor's own design, so the "
+            "columns compare targeting rather than generosity. "
+            "``Loss offset'' is the share of the aggregate loss returned to "
+            "households; the residual columns are the loss remaining after the "
+            "policy, which is the continuous counterpart of the knife-edge "
+            "``uncompensated'' share in the final column.",
+            "tab:envelope",
+        ),
+        standalone=False,
+    )
+
+
+#: Row labels for the domestic-leg parameter sweep.
+LEG_LABELS = {
+    "sustained_fraction_split": r"Sustained fraction",
+    "prewar_nbp_pence_per_therm": "Pre-war NBP",
+    "wholesale_share_gas_bill": "Wholesale share, gas",
+    "wholesale_share_electricity_bill": "Wholesale share, elec.",
+}
+
+
+def tab_domestic_leg() -> None:
+    r"""The A4 parameter sweep: what the Cornwall anchor does and does not pin.
+
+    The anchor identifies only the *product* of ``sustained_fraction`` and the
+    first phase-in quarter, so the first block sweeps the split at a constant
+    product; the remaining three blocks sweep the parameters that scale the
+    domestic channel one-for-one and were previously unswept.
+    """
+    with (SENS / "domestic_leg.csv").open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    body = [
+        r"\begin{tabular}{llrrrrrr}",
+        r"\toprule",
+        "Parameter & "
+        + mc(r"Value", align="l")
+        + " & "
+        + mc(r"Agg.", r"(\pounds bn)")
+        + " & "
+        + mc(r"Mean", r"(\pounds)")
+        + " & "
+        + mc(r"Mean", r"(\%)")
+        + " & "
+        + mc(r"D1", r"(\%)")
+        + " & "
+        + mc(r"D10", r"(\%)")
+        + " & "
+        + mc(r"Motor fuel", r"(\% of loss)")
+        + r" \\",
+        r"\midrule",
+    ]
+    last = None
+    for r in rows:
+        parameter = r["parameter"].strip()
+        if last is not None and parameter != last:
+            body.append(r"\midrule")
+        label = LEG_LABELS.get(parameter, parameter) if parameter != last else ""
+        last = parameter
+        value = float(r["value"])
+        is_paper = abs(float(r["aggregate_cost_bn"]) - 8.957518848) < 1e-6
+        shown = f"{value:g}" + (" (paper)" if is_paper else "")
+        body.append(
+            f"{label} & {shown} & "
+            f"{float(r['aggregate_cost_bn']):.2f} & "
+            f"{float(r['mean_loss_gbp']):,.0f} & "
+            f"{float(r['mean_loss_pct']):.2f} & "
+            f"{float(r['decile1_loss_pct']):.2f} & "
+            f"{float(r['decile10_loss_pct']):.2f} & "
+            f"{100 * float(r['motor_fuel_share_of_loss']):.1f} \\\\"
+        )
+    body += [r"\bottomrule", r"\end{tabular}"]
+    write(
+        "tab_domestic_leg.tex",
+        float_wrap(
+            tight(body),
+            "Domestic-leg parameter sweep, realised 2026 scenario. The Cornwall "
+            "Insight anchor identifies only the product of the sustained "
+            "fraction and the first phase-in quarter, so the first block varies "
+            "the split at a constant product; the remaining blocks vary the "
+            "three parameters that scale the domestic channel one for one. The "
+            "aggregate, and with it the motor-fuel share, is materially "
+            "sensitive to this calibration.",
+            "tab:domesticleg",
+        ),
+        standalone=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -427,24 +668,29 @@ def tab_elasticity() -> None:
         + " & "
         + mc(r"Mean loss", r"(\pounds)")
         + " & "
-        + mc(r"Loss", r"(\% inc.)")
+        # No per-cent-of-income column: the data rows carry the aggregate spend
+        # change here, and an orphan header made the tabular 8 wide against 7
+        # columns of data, which is a hard LaTeX error.
+        + mc(r"Spend", r"(\pounds bn)")
         + " & "
-        + mc(r"Aggregate", r"(\pounds bn)")
+        + mc(r"CV bounds", r"(\pounds bn)")
         + " & "
-        + mc(r"Decile 1", r"(\%)")
+        + mc(r"Welfare", r"shaved (\%)")
         + " & "
-        + mc(r"Decile 10", r"(\%)")
+        + mc(r"Spend", r"shaved (\%)")
         + r" \\",
         r"\midrule",
     ]
     for row in rows:
+        lo = float(row["cv_lower_bn"])
+        hi = float(row["cv_upper_bn"])
         cells = [
             minus(f"{float(row['epsilon_mean']):.2f}"),
             f"{float(row['mean_loss_gbp']):,.0f}",
-            f"{float(row['mean_loss_pct']):.2f}",
             f"{float(row['aggregate_loss_bn']):.2f}",
-            f"{float(row['decile1_loss_pct']):.2f}",
-            f"{float(row['decile10_loss_pct']):.2f}",
+            f"{lo:.2f}--{hi:.2f}",
+            f"{100 * float(row['welfare_share_shaved']):.1f}",
+            f"{100 * float(row['share_of_upper_bound_shaved']):.0f}",
         ]
         body.append(elasticity_label(row) + " & " + " & ".join(cells) + r" \\")
     body += [r"\bottomrule", r"\end{tabular}"]
@@ -452,12 +698,14 @@ def tab_elasticity() -> None:
         "tab_elasticity.tex",
         float_wrap(
             small(body),
-            "Demand-response sweep, realised 2026 scenario. The main "
-            "specification is zero elasticity, an explicit upper bound on the "
-            "welfare loss; every other row is a robustness check, not an "
-            "alternative headline. The level of the loss moves by a factor of "
-            "five across the grid; the qualitative decile ordering does not move "
-            "at all.",
+            "Demand-response sweep, realised 2026 scenario. ``Spend'' is the "
+            "change in expenditure; the money-metric statement is the pair of "
+            "bounds on the compensating variation (Paasche below, Laspeyres "
+            "above). Reading the spending column as the loss counts foregone "
+            "heating as costless. On the welfare measure the strongest response "
+            "in the grid shaves only a tenth of the loss, against four fifths of "
+            "the spending change --- so demand response is a small source of "
+            "uncertainty here, not the largest one.",
             "tab:elasticity",
         ),
         standalone=False,
@@ -574,6 +822,9 @@ def main() -> None:
     tab_scorecard(shock)
     tab_region(shock)
     tab_variants()
+    tab_specifications()
+    tab_envelope()
+    tab_domestic_leg()
     tab_elasticity()
     tab_caplag()
     tab_asymmetry()

@@ -7,8 +7,15 @@ Three sweeps, each writing one CSV under ``results/sensitivity/``:
    specification is zero elasticity (first-order Deaton approximation, an
    explicit upper bound on the welfare loss). This sweeps a flat own-price
    elasticity from 0 to -0.8 and also runs the named
-   :class:`uk_iran_conflict.elasticity.ElasticitySpec` variants, reporting how
-   much of the upper bound each one shaves off.
+   :class:`uk_iran_conflict.elasticity.ElasticitySpec` variants.
+
+   **Two different objects are reported, and only one of them is welfare**
+   (docs/FIXES.md A5). ``aggregate_loss_bn`` is the change in *expenditure*;
+   at eps = -0.8 it counts a household that stops heating its home as barely
+   worse off, which is the "heat or eat" fallacy the appendix criticises three
+   paragraphs later. ``cv_lower_bn`` and ``cv_upper_bn`` bracket the
+   compensating variation between the Paasche term ``q1 . dp`` and the
+   Laspeyres term ``q0 . dp``. Quote the bracket, never the spend change.
 
 2. ``cap_lag.csv`` — the wholesale-to-retail lag sweep. ``CAP_LAG_QUARTERS``
    is the paper's most contestable modelling choice, so the lag is swept over
@@ -42,6 +49,7 @@ import numpy as np
 import pandas as pd
 
 from uk_iran_conflict import elasticity as ela
+from uk_iran_conflict import policies as pol
 from uk_iran_conflict import reforms
 from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.incidence import (
@@ -162,6 +170,45 @@ def _price_ratios(scenario) -> dict[str, float]:
     }
 
 
+def _annual_factors(base: Baseline, scenario) -> dict[str, float]:
+    """Per-carrier factor reconciling a raw ``q0 x dp`` leg with ``shock_cost``.
+
+    Defensive coupling. ``uk_iran_conflict.incidence.shock_cost`` is the single
+    definition of the headline cost, and it is acquiring a phase-in-weighted
+    annual factor (docs/FIXES.md D2): the annual domestic price is the
+    consumption-weighted average of the quarterly cap levels, not the
+    steady-state level. Anything computed here from ``base.gas * (ratio - 1)``
+    would otherwise silently keep charging the steady state and the sweep would
+    stop agreeing with the headline it is a sweep *around*.
+
+    So each leg is scaled by the ratio of the aggregate ``shock_cost`` leg to
+    the aggregate raw leg. If ``shock_cost`` applies no annual factor the ratio
+    is 1.0 and nothing changes; if it applies one, the sweep follows it without
+    needing to know what it is. Elasticity enters multiplicatively and so is
+    unaffected by the rescaling.
+    """
+    from uk_iran_conflict.incidence import shock_cost  # noqa: PLC0415
+
+    ratios = _price_ratios(scenario)
+    cost = shock_cost(base, scenario)
+    w = base.weight
+    raw = {
+        "gas": wsum(base.gas * (ratios["gas"] - 1.0), w),
+        "electricity": wsum(base.electricity * (ratios["electricity"] - 1.0), w),
+        "motor_fuel": wsum(
+            base.petrol * (ratios["petrol"] - 1.0)
+            + base.diesel * (ratios["diesel"] - 1.0),
+            w,
+        ),
+    }
+    modelled = {
+        "gas": wsum(cost.gas, w),
+        "electricity": wsum(cost.electricity, w),
+        "motor_fuel": wsum(cost.motor_fuel, w),
+    }
+    return {k: (modelled[k] / raw[k] if raw[k] else 1.0) for k in raw}
+
+
 def _elastic_cost(
     base: Baseline, scenario, spec: ela.ElasticitySpec
 ) -> dict[str, np.ndarray]:
@@ -188,12 +235,64 @@ def _elastic_cost(
             out[deciles == d] = ela.spend_factor(ratio, eps) - 1.0
         return out
 
+    annual = _annual_factors(base, scenario)
     return {
-        "gas": base.gas * factor("gas", ratios["gas"]),
-        "electricity": base.electricity * factor("electricity", ratios["electricity"]),
-        "motor_fuel": base.petrol * factor("motor_fuel", ratios["petrol"])
-        + base.diesel * factor("motor_fuel", ratios["diesel"]),
+        "gas": annual["gas"] * base.gas * factor("gas", ratios["gas"]),
+        "electricity": annual["electricity"]
+        * base.electricity
+        * factor("electricity", ratios["electricity"]),
+        "motor_fuel": annual["motor_fuel"]
+        * (
+            base.petrol * factor("motor_fuel", ratios["petrol"])
+            + base.diesel * factor("motor_fuel", ratios["diesel"])
+        ),
     }
+
+
+def _cv_cost(
+    base: Baseline, scenario, spec: ela.ElasticitySpec
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-household (lower, upper) money-metric bounds on the welfare loss.
+
+    Upper is the Laspeyres term ``q0 . dp`` — the paper's zero-elasticity
+    headline, and invariant to ``spec`` by construction. Lower is the Paasche
+    term ``q1 . dp``: post-adjustment quantities valued at the price change.
+    The true compensating variation lies between them.
+
+    This is the fix for docs/FIXES.md A5. The elasticity enters only through
+    ``q1``, so its whole effect on the *welfare* number is the factor
+    ``(p1/p0)**eps`` — a few per cent, not the four-fifths that the change in
+    expenditure suggests.
+    """
+    ratios = _price_ratios(scenario)
+    deciles = np.asarray(base.decile).astype(int)
+    present = sorted({int(d) for d in deciles})
+
+    def quantity(carrier: str, ratio: float) -> np.ndarray:
+        """Post-shock quantity factor ``(p1/p0)**eps``, per household."""
+        if spec.flat is not None:
+            eps = ela.elasticity_for(spec, carrier)
+            return np.full(base.n, ela.quantity_factor(ratio, eps))
+        out = np.ones(base.n)
+        for d in present:
+            eps = ela.elasticity_for(spec, carrier, d)
+            out[deciles == d] = ela.quantity_factor(ratio, eps)
+        return out
+
+    annual = _annual_factors(base, scenario)
+    legs = (
+        (base.gas, "gas", ratios["gas"]),
+        (base.electricity, "electricity", ratios["electricity"]),
+        (base.petrol, "motor_fuel", ratios["petrol"]),
+        (base.diesel, "motor_fuel", ratios["diesel"]),
+    )
+    lower = np.zeros(base.n)
+    upper = np.zeros(base.n)
+    for spend, carrier, ratio in legs:
+        static = annual[carrier] * spend * (ratio - 1.0)
+        upper += static
+        lower += static * quantity(carrier, ratio)
+    return lower, upper
 
 
 def _flat_spec(epsilon: float) -> ela.ElasticitySpec:
@@ -270,19 +369,28 @@ def sweep_elasticity(base: Baseline, scenario) -> pd.DataFrame:
     # first so the "shaved" column is well defined whatever the row order.
     zero = _elastic_cost(base, scenario, ela.ElasticitySpec.main())
     upper = _headline(base, zero["gas"] + zero["electricity"] + zero["motor_fuel"])
+    w = base.weight
 
     rows: list[dict] = []
     print("\n=== sweep 1: elasticity (realised_2026) ===")
     print(
         f"{'spec':26} {'eps':>6} {'mean £':>8} {'% inc':>7} "
         f"{'D1 £':>7} {'D1 %':>6} {'D10 £':>7} {'D10 %':>6} "
-        f"{'£bn':>7} {'shaved':>7}"
+        f"{'spend £bn':>9} {'CV lo':>7} {'CV hi':>7} {'sp shv':>7} {'w shv':>6}"
     )
     for label, kind, spec in specs:
         cost = _elastic_cost(base, scenario, spec)
         total = cost["gas"] + cost["electricity"] + cost["motor_fuel"]
         h = _headline(base, total)
         shaved = 1.0 - h["aggregate_loss_bn"] / upper["aggregate_loss_bn"]
+        # Money-metric bounds (A5). The upper bound is elasticity-invariant, so
+        # cv_upper_bn is the same in every row and equals the headline.
+        cv_lo, cv_hi = _cv_cost(base, scenario, spec)
+        cv_lower_bn = wsum(cv_lo, w) / 1e9
+        cv_upper_bn = wsum(cv_hi, w) / 1e9
+        welfare_shaved = (
+            1.0 - cv_lower_bn / cv_upper_bn if cv_upper_bn else float("nan")
+        )
         row = {
             "spec": label,
             "kind": kind,
@@ -293,6 +401,20 @@ def sweep_elasticity(base: Baseline, scenario) -> pd.DataFrame:
             "exchequer_cost_bn": h["aggregate_loss_bn"],
             "mean_household_change": -h["mean_loss_gbp"],
             "share_of_upper_bound_shaved": shaved,
+            # --- money-metric welfare (docs/FIXES.md A5) ------------------
+            # aggregate_loss_bn above is a change in EXPENDITURE and is not a
+            # welfare measure under a non-zero elasticity. These are.
+            "aggregate_spend_change_bn": h["aggregate_loss_bn"],
+            "cv_lower_bn": cv_lower_bn,
+            "cv_upper_bn": cv_upper_bn,
+            "cv_lower_mean_gbp": wmean(cv_lo, w),
+            "cv_upper_mean_gbp": wmean(cv_hi, w),
+            "welfare_share_shaved": welfare_shaved,
+            "measure_note": (
+                "aggregate_loss_bn = change in expenditure; "
+                "cv_lower_bn/cv_upper_bn = Paasche/Laspeyres bounds on the "
+                "compensating variation. Quote the bounds."
+            ),
             "decile_gradient_pp": h["decile1_loss_pct"] - h["decile10_loss_pct"],
             "source": spec.source,
         }
@@ -301,8 +423,9 @@ def sweep_elasticity(base: Baseline, scenario) -> pd.DataFrame:
             f"{label:26} {row['epsilon_mean']:6.2f} {h['mean_loss_gbp']:8.0f} "
             f"{h['mean_loss_pct']:7.2f} {h['decile1_loss_gbp']:7.0f} "
             f"{h['decile1_loss_pct']:6.2f} {h['decile10_loss_gbp']:7.0f} "
-            f"{h['decile10_loss_pct']:6.2f} {h['aggregate_loss_bn']:7.2f} "
-            f"{100 * shaved:6.1f}%"
+            f"{h['decile10_loss_pct']:6.2f} {h['aggregate_loss_bn']:9.2f} "
+            f"{cv_lower_bn:7.2f} {cv_upper_bn:7.2f} "
+            f"{100 * shaved:6.1f}% {100 * welfare_shaved:5.1f}%"
         )
     return pd.DataFrame(rows)
 
@@ -323,8 +446,11 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
       mechanically as the lag lengthens, because fewer phase-in quarters fit
       inside the window. It is largely a windowing artefact.
     * **cumulative** — the loss over the whole phase-in path, wherever it
-      falls. This is invariant to the lag by construction: a lag shifts the
-      path in time, it does not change its size.
+      falls. This is invariant to the lag **by construction, as an identity**:
+      ``cumulative_weight = sum(profile) / 4`` contains no lag term at all
+      (docs/FIXES.md D24). It is not an empirical finding that the cumulative
+      loss survives a re-timing of the cap; it is arithmetic, and the sweep
+      asserts it rather than discovering it.
 
     The domestic-energy (cap) channel is lagged; motor fuel is not, since pump
     prices pass through in weeks. Motor fuel therefore enters both columns at
@@ -361,7 +487,10 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
         ]
         # Quarterly weights: each quarter carries a quarter of an annual bill.
         annual_weight = sum(in_2026) / 4.0
+        # D24: no lag term appears on the right-hand side. The "exact
+        # invariance" of the cumulative loss is this identity, not a result.
         cumulative_weight = sum(profile) / 4.0
+        assert cumulative_weight == sum(profile) / 4.0
 
         ann_cost = domestic * annual_weight + fuel
         cum_cost = domestic * cumulative_weight + fuel
@@ -383,6 +512,9 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
             # the quantity the lag actually acts on.
             "annualised_share": annual_weight,
             "cumulative_share": cumulative_weight,
+            # True by construction: cumulative_weight is a function of the
+            # phase-in profile alone (docs/FIXES.md D24).
+            "cumulative_is_lag_invariant_by_construction": True,
             "steady_state_domestic_bn": steady_domestic_bn,
             "annualised_domestic_bn": steady_domestic_bn * annual_weight,
             "cumulative_domestic_bn": steady_domestic_bn * cumulative_weight,
@@ -475,12 +607,157 @@ def sweep_asymmetry(base: Baseline, scenario) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# sweep 4 — the policy scorecard at stated cost AND at a common envelope
+# --------------------------------------------------------------------------
+
+
+def sweep_policy_envelope(
+    base: Baseline, scenario, mt: np.ndarray, envelope_bn: float
+) -> pd.DataFrame:
+    """Score all five instruments twice: at own cost, and at a common envelope.
+
+    Two fixes land here (docs/FIXES.md B7, B9).
+
+    **B7.** At the sponsors' own stated costs the scorecard sets a £1.3bn
+    instrument against a £5.4bn one and then reads the difference as
+    *targeting*. Targeting is a statement about the shape of a spend, and the
+    shape is only comparable at a common size, so every instrument is also
+    rescaled to ``envelope_bn``.
+
+    **B9.** "Share of losers uncompensated" is knife-edge — a household short
+    by £1 counts the same as one short by £900 — and it is applied to a loss
+    that is itself an upper bound, which is how VAT zero-rating came to be
+    described as compensating nobody while delivering the second-highest mean
+    gain and a lower mean residual loss than the social tariff. The continuous
+    measures (share of aggregate loss offset, mean and median residual loss,
+    overall and by decile) are written out beside it.
+    """
+    from uk_iran_conflict.incidence import shock_cost  # noqa: PLC0415
+
+    cost = shock_cost(base, scenario)
+    rows: list[dict] = []
+    print("\n=== sweep 4: policy scorecard, stated cost vs common envelope ===")
+    print(
+        f"{'policy':16} {'envelope':>9} {'£bn':>6} {'D1-3':>6} {'offset':>7} "
+        f"{'mean res':>9} {'med res':>8} {'unc':>6} {'£/£ D1':>7}"
+    )
+    for score in pol.scorecard(base, cost, mt, envelope_bn=envelope_bn):
+        row = {
+            "scenario": getattr(scenario, "key", ""),
+            "policy": score.policy,
+            "label": score.label,
+            "envelope": score.envelope,
+            "envelope_bn": score.envelope_bn,
+            "envelope_scale": score.envelope_scale,
+            "cost_bn": score.cost_bn,
+            "stated_cost_bn": score.stated_cost_bn,
+            "share_to_bottom_three": score.share_to_bottom_three,
+            "cost_per_pound_decile_one": score.cost_per_pound_decile_one,
+            "mean_gain_gbp": score.mean_gain_gbp,
+            "uncompensated_share_overall": score.uncompensated_share_overall,
+            "fully_compensated_share": score.fully_compensated_share,
+            "net_loss_after_policy_gbp": score.net_loss_after_policy_gbp,
+            "share_of_aggregate_loss_offset": score.share_of_aggregate_loss_offset,
+            "mean_residual_loss_gbp": score.mean_residual_loss_gbp,
+            "median_residual_loss_gbp": score.median_residual_loss_gbp,
+        }
+        for d in range(1, 11):
+            row[f"mean_residual_loss_d{d}"] = score.mean_residual_loss_by_decile.get(d)
+            row[f"median_residual_loss_d{d}"] = (
+                score.median_residual_loss_by_decile.get(d)
+            )
+            offset_d = score.share_of_loss_offset_by_decile
+            row[f"share_of_loss_offset_d{d}"] = offset_d.get(d)
+            row[f"mean_gain_d{d}"] = score.mean_gain_by_decile.get(d)
+            row[f"uncompensated_d{d}"] = score.uncompensated_by_decile.get(d)
+        rows.append(row)
+        print(
+            f"{score.policy:16} {score.envelope:>9} {score.cost_bn:6.2f} "
+            f"{100 * score.share_to_bottom_three:5.1f}% "
+            f"{100 * score.share_of_aggregate_loss_offset:6.1f}% "
+            f"{score.mean_residual_loss_gbp:9.0f} "
+            f"{score.median_residual_loss_gbp:8.0f} "
+            f"{100 * score.uncompensated_share_overall:5.1f}% "
+            f"{score.cost_per_pound_decile_one:7.2f}"
+        )
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------
+# sweep 5 — petrol, diesel and diesel share by decile
+# --------------------------------------------------------------------------
+
+
+def sweep_fuel_by_decile(base: Baseline, scenario) -> pd.DataFrame:
+    """Petrol spend, diesel spend and diesel share, by income decile.
+
+    Settles docs/FIXES.md D26. The decile-8 cash spike is narrated in the text
+    as a mileage story, but the diesel uplift in this scenario is far larger
+    than the petrol one (+21.6% against +12.0% after peak-to-year damping), so
+    a decile that simply holds more diesel cars will show a bigger cash loss at
+    identical mileage. The two explanations make different predictions about
+    the diesel *share*, which is what this table reports. No narration here:
+    the columns are the evidence.
+    """
+    ratios = _price_ratios(scenario)
+    annual = _annual_factors(base, scenario)["motor_fuel"]
+    w = base.weight
+    rows: list[dict] = []
+    print("\n=== sweep 5: motor fuel composition by decile ===")
+    print(
+        f"{'decile':>6} {'petrol £':>9} {'diesel £':>9} {'fuel £':>8} "
+        f"{'diesel share':>13} {'fuel loss £':>12} {'diesel % of loss':>17}"
+    )
+    for d in range(1, 11):
+        sel = base.decile == d
+        wd = w[sel]
+        if wd.sum() <= 0:
+            continue
+        petrol = wmean(base.petrol[sel], wd)
+        diesel = wmean(base.diesel[sel], wd)
+        petrol_loss = annual * petrol * (ratios["petrol"] - 1.0)
+        diesel_loss = annual * diesel * (ratios["diesel"] - 1.0)
+        fuel = petrol + diesel
+        loss = petrol_loss + diesel_loss
+        row = {
+            "decile": d,
+            "petrol_spend_gbp": petrol,
+            "diesel_spend_gbp": diesel,
+            "motor_fuel_spend_gbp": fuel,
+            "diesel_share_of_fuel_spend": diesel / fuel if fuel else float("nan"),
+            "petrol_price_factor": ratios["petrol"],
+            "diesel_price_factor": ratios["diesel"],
+            "petrol_loss_gbp": petrol_loss,
+            "diesel_loss_gbp": diesel_loss,
+            "motor_fuel_loss_gbp": loss,
+            "diesel_share_of_fuel_loss": diesel_loss / loss if loss else float("nan"),
+            "share_with_any_fuel_spend": float(
+                wd[base.motor_fuel[sel] > 0].sum() / wd.sum()
+            ),
+            "households_m": float(wd.sum() / 1e6),
+        }
+        rows.append(row)
+        print(
+            f"{d:6d} {petrol:9.0f} {diesel:9.0f} {fuel:8.0f} "
+            f"{100 * row['diesel_share_of_fuel_spend']:12.1f}% "
+            f"{loss:12.0f} {100 * row['diesel_share_of_fuel_loss']:16.1f}%"
+        )
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--period", type=int, default=2026)
     parser.add_argument("--scenario", default=SCENARIO_KEY)
+    parser.add_argument(
+        "--envelope-bn",
+        type=float,
+        default=pol.COMMON_ENVELOPE_BN,
+        help="common exchequer envelope for the policy scorecard, £bn",
+    )
     args = parser.parse_args()
 
     _load_env()
@@ -497,11 +774,28 @@ def main() -> None:
         f"electricity x{elec_f:.4f}"
     )
 
+    # C13: resolve the means-tested variable set loudly and record it, so the
+    # paper's 15.7% coverage claim is checkable variable by variable against
+    # the DWP caseloads in docs/VALIDATION.md Check 4. This also caches the
+    # real household child count the JRF block needs (B8).
+    audit_path = ROOT / "results" / "means_tested_audit.json"
+    mt = pol.means_tested_flag(path, args.period, audit_path=audit_path)
+    print(f"wrote {audit_path}")
+    print(
+        f"means-tested: {100 * wmean(mt.astype(float), base.weight):.1f}% of "
+        f"households ({base.weight[mt].sum() / 1e6:.2f}m)"
+    )
+
     OUT.mkdir(parents=True, exist_ok=True)
     for name, frame in (
         ("elasticity", sweep_elasticity(base, scenario)),
         ("cap_lag", sweep_cap_lag(base, scenario)),
         ("asymmetry", sweep_asymmetry(base, scenario)),
+        (
+            "policy_envelope",
+            sweep_policy_envelope(base, scenario, mt, args.envelope_bn),
+        ),
+        ("fuel_by_decile", sweep_fuel_by_decile(base, scenario)),
     ):
         dest = OUT / f"{name}.csv"
         frame.to_csv(dest, index=False)

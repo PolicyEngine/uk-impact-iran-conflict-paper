@@ -100,6 +100,7 @@ def _micro_compute() -> dict:
 
     from uk_iran_conflict import policies as pol  # noqa: PLC0415
     from uk_iran_conflict.incidence import (  # noqa: PLC0415
+        income_for_ratio,
         load_baseline,
         shock_cost,
         wmean,
@@ -113,9 +114,14 @@ def _micro_compute() -> dict:
 
     w = base.weight
     loss = cost.total
-    pos = base.net_income > 0
+    # Every percentage-of-income cut in the paper is on the equivalised AHC
+    # denominator (docs/FIXES.md D1); the figures must use the same concept, or
+    # the ">5% of income" cut in fig8 would answer a different question from the
+    # decile tables. Non-positive incomes are dropped from the ratio.
+    income = income_for_ratio(base)
+    pos = income > 0
     burden = np.zeros_like(loss)
-    burden[pos] = 100 * loss[pos] / base.net_income[pos]
+    burden[pos] = 100 * loss[pos] / income[pos]
 
     out: dict = {"fuel_by_decile": [], "gain_by_decile": {}, "benefit": {}}
 
@@ -149,7 +155,7 @@ def _micro_compute() -> dict:
             "mean_loss_pct": float(
                 100
                 * (loss[sel & pos] * w[sel & pos]).sum()
-                / (base.net_income[sel & pos] * w[sel & pos]).sum()
+                / (income[sel & pos] * w[sel & pos]).sum()
             ),
             "mean_gain_gbp": {key: wmean(gains[key][sel], wl) for key in POLICY_ORDER},
             "uncompensated_share": {},
@@ -353,18 +359,20 @@ def fig2_decile_dual() -> Path:
     bars = axr.bar(d, pct, color=fs.TEAL, width=0.72)
     bars[0].set_color(fs.TEAL_DARK)
     axr.axhline(s["mean_loss_pct"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)), zorder=4)
+    # On the left: the right-hand end of the mean line runs into the decile-9
+    # and decile-10 value labels, which sit close to it.
     axr.text(
-        10.45,
+        0.55,
         s["mean_loss_pct"] + pct.max() * 0.015,
         f"mean {s['mean_loss_pct']:.2f}%",
         fontsize=8,
         va="bottom",
-        ha="right",
+        ha="left",
         color=fs.DARK,
     )
     axr.set_ylim(0, pct.max() * 1.16)
     fs.label_bars(axr, bars, pct, fmt="{:.2f}%")
-    axr.set_ylabel("Mean annual loss, % of net income")
+    axr.set_ylabel("Mean annual loss, % of equivalised income")
     axr.yaxis.set_major_formatter(fs.PCT_FMT)
     axr.set_title("B burden: the poor lose more")
     fs.only_y_grid(axr)
@@ -400,12 +408,18 @@ def fig2_decile_dual() -> Path:
     )
     fs.note(
         fig,
-        f"Realised 2026 scenario; £{s['aggregate_cost_bn']:.1f}bn total, mean "
-        f"£{s['mean_loss_gbp']:,.0f} per household ({s['mean_loss_pct']:.2f}% of net "
-        "income). First-order (Deaton) incidence: quantities fixed, so an upper bound. "
-        "Percent is the aggregate ratio of weighted loss to weighted net income within "
-        "the decile.\nSource: authors' calculations on PolicyEngine UK (enhanced FRS "
-        "2023-24, uprated to 2026).",
+        f"Realised 2026, main specification; £{s['aggregate_cost_bn']:.2f}bn total, "
+        f"mean £{s['mean_loss_gbp']:,.0f} per household "
+        f"({s['mean_loss_pct']:.2f}% of income). First-order (Deaton) incidence: "
+        "quantities fixed, so an upper bound. Income is equivalised AHC net income "
+        "(HBAI scale); percent is the aggregate ratio of weighted loss to weighted "
+        "income within the decile. "
+        f"{s['coverage']['households_m']:.2f}m households "
+        f"({100 * s['coverage']['share_of_households']:.1f}%, "
+        f"{100 * s['coverage']['share_of_loss']:.1f}% of the loss) fall outside "
+        "deciles 1-10 and are excluded from the decile columns; all of them have "
+        "non-positive equivalised income.\nSource: authors' calculations on "
+        "PolicyEngine UK (enhanced FRS 2023-24, uprated to 2026).",
         y=-0.03,
     )
     return fs.save(fig, "fig2_decile_dual.png")
@@ -445,7 +459,7 @@ def fig3_within_decile() -> Path:
     axl.set_yscale("log")
     axl.set_yticks([0.03, 0.1, 0.3, 1, 3, 10])
     axl.set_yticklabels(["0.03%", "0.1%", "0.3%", "1%", "3%", "10%"])
-    axl.set_ylabel("Loss as % of net income (log scale)")
+    axl.set_ylabel("Loss as % of equivalised income (log scale)")
     axl.set_title("A within-decile spread dwarfs the between-decile gradient")
     axl.legend(loc="upper right", ncols=3, fontsize=8.5)
     fs.only_y_grid(axl)
@@ -465,7 +479,7 @@ def fig3_within_decile() -> Path:
     bars[0].set_color(fs.TEAL_DARK)
     axr.set_ylim(0, above5.max() * 1.2)
     fs.label_bars(axr, bars, above5, fmt="{:.1f}%")
-    axr.set_ylabel("Share of households losing >5% of net income")
+    axr.set_ylabel("Share of households losing >5% of equivalised income")
     axr.yaxis.set_major_formatter(fs.PCT_FMT)
     axr.set_title("B heavy losers exist in every decile")
     fs.only_y_grid(axr)
@@ -482,9 +496,10 @@ def fig3_within_decile() -> Path:
     )
     fs.note(
         fig,
-        "Realised 2026 scenario. Bands span the weighted 10th–90th percentile of the "
-        "household loss as a share of net income; households with non-positive net "
-        "income are excluded from the ratio. The pattern is Cronin, Fullerton & Sexton "
+        "Realised 2026, main specification. Bands span the weighted 10th–90th "
+        "percentile of the household loss as a share of equivalised AHC net income; "
+        "households with non-positive equivalised income are excluded from the "
+        "ratio. The pattern is Cronin, Fullerton & Sexton "
         "(2019): horizontal redistribution exceeds vertical.\nSource: authors' "
         "calculations on PolicyEngine UK.",
         y=-0.03,
@@ -535,7 +550,7 @@ def fig4_region() -> Path:
     axr.set_yticklabels([names[i] for i in order_p])
     axr.set_xlim(0, pct.max() * 1.2)
     axr.xaxis.set_major_formatter(fs.PCT_FMT)
-    axr.set_xlabel("Mean annual loss, % of net income")
+    axr.set_xlabel("Mean annual loss, % of equivalised income")
     axr.axvline(s["mean_loss_pct"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)))
     axr.text(
         s["mean_loss_pct"],
@@ -570,16 +585,79 @@ def fig4_region() -> Path:
 # ==========================================================================
 
 
+def _spec_fuel_shares() -> list[tuple[str, float, float]]:
+    """(label, motor-fuel share %, domestic share %) for each specification.
+
+    Read from ``results/robustness/comparison.csv`` so the figure and
+    ``tab_specifications`` cannot disagree.
+    """
+    import csv  # noqa: PLC0415
+
+    path = RESULTS / "robustness" / "comparison.csv"
+    with path.open(newline="") as fh:
+        rows = {r["variant"]: r for r in csv.DictReader(fh)}
+    order = (
+        ("main", "Main"),
+        ("steady_state", "Steady\nstate"),
+        ("symmetric_damping", "Symmetric\ndamping"),
+        ("peak_fuel", "Peak fuel\n(upper bound)"),
+        ("ons_shape", "ONS\nshape"),
+        ("ons_both_levels", "ONS both\nlevels"),
+        ("unequivalised", "Unequiv-\nalised"),
+    )
+    out = []
+    for key, label in order:
+        r = rows.get(key)
+        if r is None:
+            continue
+        motor = 100 * float(r["motor_fuel_share_of_loss"])
+        domestic = 100 * (
+            float(r["gas_share_of_loss"]) + float(r["electricity_share_of_loss"])
+        )
+        out.append((label, motor, domestic))
+    return out
+
+
+def _fuel_by_decile_rows() -> list[dict]:
+    """Petrol/diesel split by decile, from ``results/sensitivity``."""
+    import csv  # noqa: PLC0415
+
+    path = RESULTS / "sensitivity" / "fuel_by_decile.csv"
+    with path.open(newline="") as fh:
+        return sorted(csv.DictReader(fh), key=lambda r: int(r["decile"]))
+
+
 def fig5_fuel_decomposition(cache: dict) -> Path:
+    """What the loss is made of — and how far that depends on the calibration.
+
+    Panel C is the change the referee response requires: the motor-fuel share is
+    no longer stated as a single number, because it is calibration-dependent.
+    The range across the seven specifications, with the 50% line drawn, is the
+    honest statement of the paper's channel-composition result.
+    """
     rows = cache["fuel_by_decile"]
     d = np.array([r["decile"] for r in rows])
     gas = np.array([r["gas"] for r in rows])
     elec = np.array([r["electricity"] for r in rows])
     motor = np.array([r["motor_fuel"] for r in rows])
+    # Split motor fuel into its two legs; diesel took a 21.6% uplift against
+    # petrol's 12.0%, which is the likelier explanation of the decile-eight cash
+    # spike than mileage (docs/FIXES.md D26).
+    fuel_rows = _fuel_by_decile_rows()
+    petrol = np.array([float(r["petrol_loss_gbp"]) for r in fuel_rows])
+    diesel = np.array([float(r["diesel_loss_gbp"]) for r in fuel_rows])
+    # Keep the panel's motor-fuel total exactly the cache's, splitting it in the
+    # CSV's proportions, so rounding differences never open a visible gap.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        diesel_share = np.where(petrol + diesel > 0, diesel / (petrol + diesel), 0.0)
+    diesel = motor * diesel_share
+    petrol = motor - diesel
     total = gas + elec + motor
     s = shock()
 
-    fig, (axl, axr) = plt.subplots(1, 2, figsize=(11.4, 5.0), sharex=True)
+    fig, (axl, axr, axc) = plt.subplots(
+        1, 3, figsize=(15.2, 5.2), width_ratios=[1.3, 1.3, 1.05]
+    )
 
     axl.bar(d, gas, width=0.72, color=fs.FUEL_COLORS["gas"], label="Gas")
     axl.bar(
@@ -592,11 +670,19 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
     )
     axl.bar(
         d,
-        motor,
+        petrol,
         bottom=gas + elec,
         width=0.72,
+        color=fs.GREY_LIGHT,
+        label="Petrol",
+    )
+    axl.bar(
+        d,
+        diesel,
+        bottom=gas + elec + petrol,
+        width=0.72,
         color=fs.FUEL_COLORS["motor_fuel"],
-        label="Motor fuel (petrol + diesel)",
+        label="Diesel",
     )
     for xi, t in zip(d, total, strict=False):
         axl.text(xi, t * 1.02, f"£{t:,.0f}", ha="center", va="bottom", fontsize=8)
@@ -652,34 +738,7 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
     axr.set_ylim(0, 100)
     axr.yaxis.set_major_formatter(fs.PCT_FMT)
     axr.set_ylabel("Share of the household's loss, %")
-    # The peak-fuel run charges the observed pump peak for a full year; the main
-    # specification damps it on the same logic as the gas peak. Marking where
-    # the motor-fuel segment would start under that upper bound turns the panel
-    # into the range the paper reports, at the cost of one dashed line.
-    main_domestic = 100 * (s["gas_share_of_loss"] + s["electricity_share_of_loss"])
-    peak = shock(PEAK_FUEL)
-    peak_domestic = 100 * (
-        peak["gas_share_of_loss"] + peak["electricity_share_of_loss"]
-    )
-    axr.axhline(peak_domestic, ls="--", lw=1.3, color=fs.DARK, zorder=5)
-    # The bars fill the panel, so the label sits on the line itself in a
-    # white box rather than in non-existent white space.
-    axr.text(
-        3.0,
-        peak_domestic,
-        "peak-fuel upper bound: motor fuel "
-        f"{100 * peak['motor_fuel_share_of_loss']:.0f}% of the loss",
-        ha="center",
-        va="center",
-        fontsize=7.5,
-        color=fs.DARK,
-        zorder=6,
-        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.0, "alpha": 0.92},
-    )
-    axr.set_title(
-        f"B motor fuel is about {100 * s['motor_fuel_share_of_loss']:.0f}% "
-        "of the loss in every decile"
-    )
+    axr.set_title("B the composition is flat across deciles\n(main specification)")
     fs.only_y_grid(axr)
 
     for ax in (axl, axr):
@@ -687,22 +746,59 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
         ax.set_xlabel("Equivalised net income decile (1 = poorest)")
         ax.set_xlim(0.4, 10.6)
 
+    # C — the range the majority claim actually rests on
+    specs = _spec_fuel_shares()
+    labels = [label for label, _m, _d in specs]
+    motor_shares = np.array([m for _l, m, _d in specs])
+    y = np.arange(len(specs))[::-1]
+    colors = [
+        fs.TEAL_DARK if label.startswith("Main") else fs.GREY_LIGHT for label in labels
+    ]
+    bars = axc.barh(y, motor_shares, color=colors, height=0.62)
+    axc.axvline(50, color=fs.DARK, lw=1.2, ls=(0, (4, 3)), zorder=4)
+    # Sits under the bottom bar, where there is white space, rather than on top
+    # of the leading bar's value label.
+    axc.text(
+        50.0,
+        y.min() - 0.62,
+        "50%: motor fuel stops\nbeing the majority",
+        fontsize=7.5,
+        color=fs.DARK,
+        ha="center",
+        va="top",
+    )
+    axc.set_ylim(y.min() - 1.5, y.max() + 0.6)
+    fs.label_hbars(axc, bars, motor_shares, fmt="{:.1f}%")
+    axc.set_yticks(y)
+    axc.set_yticklabels(labels, fontsize=7.5)
+    axc.set_xlim(0, 100)
+    axc.xaxis.set_major_formatter(fs.PCT_FMT)
+    axc.set_xlabel("Motor fuel, % of the aggregate loss")
+    axc.set_title(
+        "C the majority is calibration-dependent:\n"
+        f"{motor_shares.min():.0f}–{motor_shares.max():.0f}% across specifications"
+    )
+    fs.only_x_grid(axc)
+
     fig.suptitle(
-        "Figure 5. What the loss is made of: gas, electricity and motor fuel by decile",
+        "Figure 5. What the loss is made of: gas, electricity and motor fuel, "
+        "and how far that depends on the calibration",
         y=1.02,
     )
     fs.note(
         fig,
-        f"Realised 2026, main specification (the pump peak damped on the same "
-        f"logic as the wholesale gas peak). Across all households motor fuel is "
-        f"{100 * s['motor_fuel_share_of_loss']:.0f}% of the aggregate loss, gas "
+        f"Panels A and B: realised 2026, main specification (equivalised AHC "
+        f"denominator, Step 1 phase-in). Motor fuel is "
+        f"{100 * s['motor_fuel_share_of_loss']:.0f}% of the aggregate loss here, gas "
         f"{100 * s['gas_share_of_loss']:.0f}% and electricity "
         f"{100 * s['electricity_share_of_loss']:.0f}%, so a domestic-bill instrument "
-        f"can reach at most {main_domestic:.0f}% "
-        f"of the shock; on the peak-fuel upper bound (dashed) motor fuel is "
-        f"{100 * peak['motor_fuel_share_of_loss']:.0f}% and that reach falls to "
-        f"{peak_domestic:.0f}%.\nSource: authors' calculations on "
-        "PolicyEngine UK (LCFS-imputed spend, NEED-calibrated quantities).",
+        f"can reach at most "
+        f"{100 * (s['gas_share_of_loss'] + s['electricity_share_of_loss']):.0f}% of "
+        f"the shock. Panel C: the same statistic under all "
+        f"{len(specs)} specifications. The share depends only on the ratio of the gas "
+        "and pump damping fractions, so it is a calibration result, not a robust "
+        "fact.\nSource: authors' calculations on PolicyEngine UK (LCFS-imputed "
+        "spend, NEED-calibrated quantities); results/robustness/comparison.csv.",
         y=-0.03,
     )
     return fs.save(fig, "fig5_fuel_decomposition.png")
@@ -714,13 +810,22 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
 
 
 def fig6_uncompensated() -> Path:
-    fig, ax = plt.subplots(figsize=(10.8, 4.9))
+    """Two views of the same compensation question.
+
+    Panel A is the knife-edge measure the paper used to report on its own: any
+    shortfall, however small, counts as uncompensated. Panel B is the continuous
+    counterpart the referees asked for — the loss actually left on the table —
+    and it ranks the instruments differently, which is the point of showing
+    both. VAT zero-rating leaves 100% of losers formally uncompensated while
+    leaving the *smallest* residual loss of the five.
+    """
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.4, 5.0), sharex=True)
     d = np.arange(1, 11)
 
     for key in POLICY_ORDER:
         score = load(CENTRAL, key)
         y = np.array([100 * score["uncompensated_by_decile"][str(i)] for i in d])
-        ax.plot(
+        axl.plot(
             d,
             y,
             marker="o",
@@ -732,32 +837,72 @@ def fig6_uncompensated() -> Path:
             ),
         )
 
-    ax.set_ylim(0, 105)
-    ax.set_xticks(d)
-    ax.set_xlim(0.7, 10.3)
-    ax.yaxis.set_major_formatter(fs.PCT_FMT)
-    ax.set_xlabel("Equivalised net income decile (1 = poorest)")
-    ax.set_ylabel("Losing households still worse off after the policy, %")
-    ax.axhline(100, color=fs.GREY_LIGHT, lw=0.9)
-    ax.text(
+    axl.set_ylim(0, 105)
+    axl.yaxis.set_major_formatter(fs.PCT_FMT)
+    axl.set_ylabel("Losing households still worse off after the policy, %")
+    axl.axhline(100, color=fs.GREY_LIGHT, lw=0.9)
+    axl.text(
         10.2, 101, "nobody fully compensated", ha="right", fontsize=8, color=fs.GREY
     )
-    ax.legend(loc="lower right", ncols=2, fontsize=8.5)
-    fs.only_y_grid(ax)
+    axl.set_title("A the knife-edge measure: any shortfall counts")
+    axl.legend(loc="lower right", ncols=2, fontsize=8)
+    fs.only_y_grid(axl)
 
-    ax.set_title(
-        "Figure 6. Most losers stay uncompensated: the flat rebate covers the most, "
-        "the social tariff only at the bottom",
-        pad=12,
+    loss = np.array([r["mean_loss_gbp"] for r in deciles()])
+    axr.plot(
+        d,
+        loss,
+        color=fs.DARK,
+        lw=2.0,
+        ls=(0, (4, 3)),
+        zorder=5,
+        label="Loss before any policy",
+    )
+    for key in POLICY_ORDER:
+        score = load(CENTRAL, key)
+        y = np.array([score["mean_residual_loss_by_decile"][str(i)] for i in d])
+        axr.plot(
+            d,
+            y,
+            marker="o",
+            ms=5,
+            lw=2.2 if key in ("vat_zero", "jrf_block") else 1.6,
+            color=POLICY_COLORS[key],
+            label=(
+                f"{POLICY_SHORT[key].replace(chr(10), ' ')} — "
+                f"{100 * score['share_of_aggregate_loss_offset']:.0f}% of the loss "
+                "offset"
+            ),
+        )
+    axr.set_ylim(0, loss.max() * 1.24)
+    axr.yaxis.set_major_formatter(fs.GBP_FMT)
+    axr.set_ylabel("Mean residual loss after the policy, £ per household")
+    axr.set_title("B the continuous measure: what is actually left over")
+    axr.legend(loc="upper left", ncols=1, fontsize=8)
+    fs.only_y_grid(axr)
+
+    for ax in (axl, axr):
+        ax.set_xticks(d)
+        ax.set_xlim(0.7, 10.3)
+        ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+
+    fig.suptitle(
+        "Figure 6. Compensation, measured two ways: the knife-edge share and "
+        "the residual loss",
+        y=1.02,
     )
     fs.note(
         fig,
-        "Realised 2026 scenario. A household counts as uncompensated if its loss "
-        "exceeds its gain from the policy; the denominator is losing households in the "
-        "decile. VAT zero-rating leaves 100% uncompensated everywhere because it "
-        "returns only the 5% VAT on the domestic bill, a fraction of a loss that is "
-        "mostly motor fuel.\nSource: authors' calculations on PolicyEngine UK.",
-        y=-0.02,
+        "Realised 2026, main specification, each instrument at its sponsor's own "
+        "stated design. A household counts as uncompensated in panel A if its loss "
+        "exceeds its gain, however narrowly; panel B shows the mean loss remaining "
+        "after the gain. VAT zero-rating leaves every loser formally uncompensated — "
+        "it returns only the 5% VAT on a domestic bill — yet leaves a smaller residual "
+        "loss than the means-tested social tariff, because it reaches everyone. The "
+        "two panels are the same policies in a different order, which is why the "
+        "knife-edge share should not be reported alone.\nSource: authors' "
+        "calculations on PolicyEngine UK.",
+        y=-0.03,
     )
     return fs.save(fig, "fig6_uncompensated.png")
 

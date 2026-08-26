@@ -12,6 +12,17 @@ cached by ``huggingface_hub``.
 
 Writes, per scenario, ``results/<scenario>/shock.json`` plus one JSON per policy,
 and the flat ``results/summary.csv`` the paper's scorecard table is built from.
+
+Every scenario is scored on the two decisions in ``docs/FIXES.md``: the
+equivalised AHC denominator (D1) and the Step 1 consumption-weighted quarterly
+cap average on the domestic leg (D2), which are the defaults in
+:func:`uk_iran_conflict.incidence.run_scenario`. The realised-2026 family — the
+main specification and the alternatives that bound it — is *also* produced by
+``analysis/run_variants.py``, off a single load of the microdata and with the
+specification labels attached. Run this script first and ``run_variants.py``
+second: the numbers agree, and the variants script then rewrites
+``results/realised_2026/shock.json`` with the labelled payload. ``summary.csv``
+stays the flat, all-scenarios policy table it has always been.
 """
 
 from __future__ import annotations
@@ -75,7 +86,12 @@ def _asdict(obj):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--period", type=int, default=2026)
-    parser.add_argument("--scenarios", nargs="*", default=list(scen.SCENARIOS))
+    parser.add_argument(
+        "--scenarios",
+        nargs="*",
+        default=list(scen.SCENARIOS),
+        help="Scenarios to score. Defaults to every registered scenario.",
+    )
     args = parser.parse_args()
 
     _load_env()
@@ -98,10 +114,19 @@ def main() -> None:
 
         payload = _asdict(result)
         payload["means_tested_share"] = float(wmean(mt.astype(float), base.weight))
+        payload["sustained_fraction"] = scenario.pass_through.sustained_fraction
+        payload["pump_sustained_fraction"] = (
+            scenario.pass_through.pump_sustained_fraction
+        )
         (out / "shock.json").write_text(json.dumps(payload, indent=2))
         print(
             f"\n{key}: £{result.aggregate_cost_bn:.1f}bn, "
             f"mean £{result.mean_loss_gbp:.0f} ({result.mean_loss_pct:.2f}% of income)"
+        )
+        print(
+            f"   income basis {result.income_basis}, domestic basis "
+            f"{result.domestic_basis}, mean income "
+            f"£{result.mean_income_gbp:,.0f}"
         )
         print(
             f"   decile 1 {result.decile[0].mean_loss_pct:.2f}% "
