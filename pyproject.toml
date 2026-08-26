@@ -1,0 +1,36 @@
+[project]
+name = "uk-iran-conflict"
+version = "0.1.0"
+description = "Macro-to-micro incidence of the 2026 Iran conflict energy shock in the UK: Ofgem cap path -> PolicyEngine UK microsimulation"
+requires-python = ">=3.13"
+dependencies = [
+    "policyengine-uk==2.89.2",
+    "huggingface_hub",
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "geopandas>=1.1.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["uk_iran_conflict"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

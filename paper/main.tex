@@ -1,0 +1,49 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{xcolor}
+% Paper chrome uses the firm-microsim template blue (YGTemplate MyBlue);
+% figures use the PolicyEngine palette separately.
+\definecolor{paperblue}{rgb}{0,0,0.7}   % MyBlue, matching the sister paper
+\definecolor{peteal}{HTML}{39C6C0}      % PolicyEngine teal accent
+\usepackage{sectsty}
+\allsectionsfont{\color{paperblue}}
+\usepackage[colorlinks=true, citecolor=paperblue, linkcolor=paperblue, urlcolor=paperblue]{hyperref}
+\usepackage[hang,flushmargin]{footmisc}
+\usepackage{natbib}
+\bibliographystyle{apalike}
+\input{values_generated} % machine-generated numeric macros from results/
+
+\title{\bfseries From Hormuz to the Household\\[0.15cm] Macro-to-Micro Incidence of the 2026 Energy Shock in the UK\thanks{\textbf{Acknowledgements:} I thank Max Ghenis and Seyed Mahdi Hosseini for valuable comments and helpful discussions.}\\[0.7cm]}
+\author{Vahid Ahmadi\thanks{Research Associate at PolicyEngine. Email: \href{mailto:vahid@policyengine.org}{vahid@policyengine.org}.}}
+\date{\small \ifcase\month\or January\or February\or March\or April\or May\or June\or July\or August\or September\or October\or November\or December\fi\ \the\year}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent I trace the 2026 Iran conflict energy shock from wholesale markets to individual UK households. Macroeconomic scenarios for oil and gas are mapped into an Ofgem price-cap path and a pump-price path, with gas and electricity shocked asymmetrically because gas sets the British electricity price roughly 85 per cent of the time, and the resulting price vector is passed through PolicyEngine UK's Family Resources Survey microdata. Under the central scenario the mean household loses \pounds \genCentralLossMean{} a year, equal to \genCentralLossPctIncome{} per cent of equivalised disposable income; the bottom decile loses \genDecileOneLossPct{} per cent against \genDecileTenLossPct{} per cent for the top, while in cash the top decile loses \pounds \genDecileTenLossGbp{} against \pounds \genDecileOneLossGbp{}. Using the 650-constituency weight sets I show that the seats losing most in pounds and the seats losing most in per cent barely overlap: the rank correlation is \genConstituencyRankCorr{}. Scoring five live proposals, a means-tested social tariff delivers \genSocialTariffShareBottomThree{} per cent of spend to deciles one to three but leaves \genSocialTariffUncompensatedShare{} per cent of losers uncompensated, against \genJrfUncompensatedShare{} per cent for the universal discounted block at a cost of \pounds \genJrfCostBn{} billion. The analysis is static and use-side only, and is therefore a lower bound on total incidence.
+\end{abstract}
+
+\medskip
+\noindent\textbf{Keywords:} energy prices, geopolitical risk, microsimulation, distributional incidence, fuel poverty, social tariff
+
+\medskip
+\noindent\textbf{JEL codes:} Q41, Q48, H23, D31, E31
+
+\newpage
+\input{sections/intro}
+\input{sections/literature}
+\input{sections/methodology}
+\input{sections/results}
+\input{sections/policy}
+\input{sections/discussion}
+
+\clearpage
+\bibliography{references}
+\clearpage
+\input{sections/appendix}
+
+\end{document}

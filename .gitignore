@@ -1,0 +1,25 @@
+/data/
+__pycache__/
+*.egg-info/
+.cache/
+.DS_Store
+.venv/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.bbl
+*.blg
+*.toc
+*.synctex.gz
+paper/main.pdf
+.env
+.env.*
+!.env.example
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
