@@ -78,8 +78,22 @@ lines: list[str] = []
 missing: list[str] = []
 
 
+#: Macro names already written, so a name emitted twice cannot reach the .tex.
+#: LaTeX rejects a duplicate \newcommand outright, which would break the build
+#: for a reason unrelated to the results — the paper-facing aliases below
+#: deliberately overlap the results-shaped names for a few policy costs.
+_emitted: set[str] = set()
+
+
 def emit(name: str, value, fmt: str = "{:.1f}", source: str = "") -> None:
-    """Emit one macro; on any failure emit a loud placeholder."""
+    """Emit one macro; on any failure emit a loud placeholder.
+
+    First definition wins: a repeated ``name`` is skipped rather than emitted
+    twice, since ``\\newcommand`` errors on redefinition.
+    """
+    if name in _emitted:
+        return
+    _emitted.add(name)
     try:
         if callable(value):
             value = value()
@@ -109,7 +123,7 @@ def _losers(cell: dict, decile: int) -> float:
     return float(band["lose_less_5"] + band["lose_more_5"])
 
 
-def main() -> None:
+def main(draft: bool = False) -> None:
     # --- the bare shock, per scenario --------------------------------------
     for scenario, macro in SCENARIO_MACRO.items():
         rel = f"{scenario}/shock.json"
@@ -598,8 +612,18 @@ def main() -> None:
         "from canonical files under results/. DO NOT EDIT BY HAND.",
         "% \\GENMISSING marks values whose canonical source was absent at emit "
         "time; it errors at LaTeX build time by design.",
-        "\\newcommand{\\GENMISSING}{\\errmessage{emit_tex_values: missing "
-        "canonical result}}",
+        (
+            "% DRAFT MODE: \\GENMISSING renders as a visible marker instead of "
+            "erroring. Never commit a submitted draft built this way."
+            if draft
+            else "% \\GENMISSING errors at build time; run without --draft."
+        ),
+        (
+            "\\newcommand{\\GENMISSING}{\\textcolor{red}{\\textbf{[?]}}}"
+            if draft
+            else "\\newcommand{\\GENMISSING}{\\errmessage{emit_tex_values: "
+            "missing canonical result}}"
+        ),
         "",
     ]
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -612,4 +636,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description=__doc__)
+    _parser.add_argument(
+        "--draft",
+        action="store_true",
+        help=(
+            "Render missing values as a visible [?] marker instead of erroring, "
+            "so an incomplete tree still compiles for reading. Never use for a "
+            "submitted draft."
+        ),
+    )
+    main(**vars(_parser.parse_args()))

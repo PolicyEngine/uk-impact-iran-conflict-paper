@@ -23,3 +23,10 @@ paper/main.pdf
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+
+# placeholder/build figures — real ones come from analysis/figures.py
+results/figures/
+paper/main.pdf
+paper/*.log
+paper/*.blg
+paper/*.xdv
