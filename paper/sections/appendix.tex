@@ -4,20 +4,20 @@
 
 Three sweeps are reported, each re-running the full pipeline on the realised 2026 central scenario against the same baseline. They are presented in order of how much they move the answer, and that ordering is itself the appendix's main message: \textbf{demand response dominates, the calendar-year lag comes second, and the marginal-pricing share is a distant third}. A reader deciding where to direct scepticism should direct it at the elasticity assumption and nowhere else.
 
-No constituency-level robustness statistic appears in this appendix. The data release carries no constituency weight matrix, so the seat-level rank correlations an earlier design called for are not computable and none has been substituted (Section~\ref{sec:step3}).
+No constituency-level robustness statistic appears in this appendix. The data release carries no constituency weight matrix, so seat-level rank correlations are not computable and none has been substituted (Section~\ref{sec:step3}).
 
 \subsection{Demand response: the sweep that matters}
 \label{app:elasticity}
 
 The main specification is zero-elasticity by construction: equation~\eqref{eq:firstorder} evaluates the price change at pre-shock quantities, which is the \citet{deaton1980} first-order approximation and an explicit upper bound on the welfare loss. Elasticity is therefore a robustness check on the main result, not an alternative main result --- an important framing point, because an elasticity-adjusted central estimate would be a number driven by a parameter this paper does not estimate.
 
-The sweep applies the constant-elasticity spend factor $(p_1/p_0)^{1+\varepsilon}$ --- never a linear approximation, which would misbehave at the top of the grid --- over a flat grid from $\varepsilon = 0$ to $\varepsilon = -0.8$, and additionally under five named published specifications: Labandeira, Labeaga and L\'opez-Otero's short- and long-run per-carrier means, Priesmann and Praktiknjo's income-varying short and long run, and a replication of a prior repository's decile-varying configuration.
+The sweep applies the constant-elasticity spend factor $(p_1/p_0)^{1+\varepsilon}$ --- never a linear approximation, which would misbehave at the top of the grid --- over a flat grid from $\varepsilon = 0$ to $\varepsilon = -0.8$, and additionally under five named published specifications: Labandeira, Labeaga and L\'opez-Otero's short- and long-run per-carrier means, Priesmann and Praktiknjo's income-varying short and long run, and a decile-varying configuration replicating an earlier published application of the same elasticities.
 
 \paragraph{Magnitude.} This is by a wide margin the largest source of uncertainty in the paper. The aggregate loss runs from \pounds\genElasticityAggZeroBn{} billion at $\varepsilon = 0$ to \pounds\genElasticityAggHighBn{} billion at $\varepsilon = -0.8$, and the relationship is close to linear: each additional $0.1$ of elasticity removes roughly a tenth of the upper bound. Quoted as a range that alone spans a factor of five, which would make the paper uninformative --- so the relevant question is which part of the grid is credible for a within-year price spike.
 
-\paragraph{The credible short-run band is much narrower.} The published short-run estimates cluster tightly. Labandeira's short-run per-carrier means shave \genLabandeiraShortShaved{} per cent off the upper bound; Priesmann's income-varying short run shaves \genPriesmannShortShaved{} per cent. A reader who rejects the zero-elasticity headline outright therefore lands near \pounds 10 billion and a mean household loss in the low \pounds 300s, not somewhere qualitatively different from the \pounds\genAggSpendRealisedBn{} billion and \pounds\genCentralLossMean{} reported in the main specification. Labandeira's \emph{long}-run figures shave 72 per cent, but they embed appliance and vehicle stock turnover and are the wrong horizon for a 2026 spike; they bound the exercise and are not a candidate headline.
+\paragraph{The credible short-run band is much narrower.} The published short-run estimates cluster tightly. Labandeira's short-run per-carrier means shave \genLabandeiraShortShaved{} per cent off the zero-elasticity figure; Priesmann's income-varying short run shaves \genPriesmannShortShaved{} per cent. Both sweeps are run on the main specification, so the grid is anchored at its \pounds\genElasticityAggZeroBn{} billion zero-elasticity figure. A reader who rejects the zero-elasticity headline outright therefore lands roughly a quarter to a third below whichever specification they start from --- not somewhere qualitatively different from it. Labandeira's \emph{long}-run figures shave 72 per cent, but they embed appliance and vehicle stock turnover and are the wrong horizon for a 2026 spike; they bound the exercise and are not a candidate headline.
 
-\paragraph{What does not change.} Nothing about the distributional story. A flat elasticity rescales every decile by the same factor, so the decile-one to decile-ten percentage ratio stays at \genDecileRatioPct{} to one across the entire flat grid. The income-varying specifications \emph{do} flatten the gradient --- Priesmann's takes the ratio from \genDecileRatioPct{} to \genPriesmannDecileRatio{} to one --- because poor households are modelled as the ones with room to cut back. That flattening is precisely the ``heat or eat'' objection in numerical form: it treats involuntary rationing as welfare-neutral substitution, and treating a household that cannot afford to heat its home as having merely revealed a preference is the substantive reason this paper keeps the upper bound as its headline. Either way the qualitative ordering survives every row of the sweep: the poor lose more in percentage terms and less in cash in all fourteen specifications.
+\paragraph{What does not change.} Nothing about the distributional story. A flat elasticity rescales every decile by the same factor, so the decile-one to decile-ten percentage ratio is unchanged across the entire flat grid. The income-varying specifications \emph{do} flatten the gradient --- Priesmann's takes the ratio from \genDecileRatioPct{} to \genPriesmannDecileRatio{} to one --- because poor households are modelled as the ones with room to cut back. That flattening is precisely the ``heat or eat'' objection in numerical form: it treats involuntary rationing as welfare-neutral substitution, and treating a household that cannot afford to heat its home as having merely revealed a preference is the substantive reason this paper keeps the upper bound as its headline. Either way the qualitative ordering survives every row of the sweep: the poor lose more in percentage terms and less in cash in all fourteen specifications.
 
 \input{tables/tab_elasticity}
 
@@ -29,6 +29,25 @@ The sweep applies the constant-elasticity spend factor $(p_1/p_0)^{1+\varepsilon
 \end{figure}
 
 A caveat on the exercise itself: applying a constant elasticity to a capped price is not innocuous, because households facing a standing charge plus a unit rate face a marginal price that differs from their average price, and the block designs scored in Section~\ref{sec:policy} change the marginal price for some households and not others. The sweep uses the unit rate as the relevant margin and does not model standing-charge effects.
+
+\subsection{Specification variants of the central scenario}
+\label{app:specvariants}
+
+Three calibrations of the realised 2026 scenario are carried through the paper rather than one, and this subsection states what separates them so that any figure quoted in the text can be located.
+
+The \emph{main} specification damps both the wholesale gas peak and the observed pump-price peak to annual averages, at sustained fractions of \genGasSustainedFraction{} and \genPumpSustainedFraction{} per cent respectively; it gives an aggregate loss of \pounds \genAggSpendRealisedBn{} billion, a mean household loss of \pounds \genCentralLossMean{} (\genCentralLossPctIncome{} per cent of income), a motor-fuel share of \genMotorFuelShareOfLoss{} per cent, and a decile-one to decile-ten burden ratio of \genDecileRatioPct{} to one. The two fractions differ because the cap is a mechanical function of a lagged forward curve averaged over a fixed window, which smooths a spike heavily, while pump prices track spot crude within weeks and retain much more of a peak inside the year (Section~\ref{sec:step1}).
+
+The \emph{peak-fuel} specification is the upper bound: it applies the observed peak pump prices undamped for a full year, giving \pounds \genPeakFuelAggBn{} billion, \pounds \genPeakFuelLossMean{} (\genPeakFuelLossPctIncome{} per cent), a motor-fuel share of \genPeakFuelMotorFuelShareOfLoss{} per cent, and a ratio of \genPeakFuelDecileRatioPct{} to one. It is reported alongside the main specification wherever the fuel share or the aggregate is stated, and it is not a candidate headline: charging households an annual average pump price equal to a peak that lasted part of the year is a larger shock than the one that occurred, not a bound on it.
+
+\begin{table}[htbp]
+\centering
+\caption{The three calibrations of the realised 2026 scenario compared. The main specification damps the gas and pump peaks to annual averages; the peak-fuel run applies observed pump peaks undamped; the ONS-calibrated run rescales motor-fuel spend to the published decile profile.}
+\label{tab:variants}
+\input{tables/tab_variants}
+\end{table}
+
+
+The \emph{ONS-calibrated} specification rescales decile-level motor-fuel spending to the ONS Family Spending FYE 2025 profile, addressing the over-imputation at the bottom of the distribution documented in Section~\ref{sec:limitations}. It barely moves the aggregate, at \pounds \genOnsFuelAggBn{} billion and \pounds \genOnsFuelLossMean{} (\genOnsFuelLossPctIncome{} per cent) with a motor-fuel share of \genOnsFuelMotorFuelShareOfLoss{} per cent, and it moves the distribution a great deal: decile one falls from \genDecileOneLossPct{} to \genOnsFuelDecileOneLossPct{} per cent of income, decile ten is unchanged at \genOnsFuelDecileTenLossPct{} per cent, and the ratio falls from \genDecileRatioPct{} to \genOnsFuelDecileRatioPct{} to one. It is the relevant robustness test for every distributional magnitude in the paper, and the reason those magnitudes are reported as uncertain by roughly a factor of two.
 
 \subsection{Cap lag: a windowing artefact, not an effect}
 \label{app:caplag}
@@ -61,15 +80,43 @@ The honest summary is therefore narrow. The asymmetry is defensible on its merit
 
 \input{tables/tab_asymmetry}
 
+\subsection{The scenario grid: when does the shock stop being a pump-price event?}
+\label{app:grid}
+
+The three named scenarios are points, and a reader is entitled to ask how much of the paper's argument is an artefact of where those points happen to sit. Figure~\ref{fig:grid} answers that by sweeping the two drivers against each other: a wholesale gas move, which reaches households through the regulated cap, against a crude oil move, which reaches them at the pump. Every cell is built through the same pass-through machinery as the named scenarios and scored on the same baseline, so the grid is a genuine extension of the main specification rather than a separate exercise.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{../results/figures/fig_scenario_grid.png}
+\caption{Household incidence across the gas--oil scenario grid. Panel D diverges at fifty per cent: shaded one way the shock is a pump-price event, the other a domestic-bill event. Marked points are the three named scenarios.}
+\label{fig:grid}
+\end{figure}
+
+Two things follow. The first is that the distributional gradient is invariant to the mix. The decile-one to decile-ten burden ratio moves only between \genGridRatioMin{} and \genGridRatioMax{} across the entire grid, so the paper's central finding --- that the burden falls steeply in income even where the cash loss does not --- does not depend on which driver dominates. It is a property of how energy and fuel budget shares vary with income, not of the particular shock studied here.
+
+The second is a boundary. Motor fuel ceases to dominate the loss along a frontier at roughly \genGridFrontierSlope{} times as large a proportional gas move as oil move; below that line the shock is a pump-price event and above it a domestic-bill one. All three named scenarios sit below the frontier. The claim in Section~\ref{sec:policy} that bill-based instruments reach only a minority of the loss therefore holds across the whole plausible neighbourhood of the 2026 shock, and would reverse only under a gas-led shock with almost no oil component --- which is to say, a shock quite unlike the one that occurred.
+
 \subsection{Upstream contributions arising}
 \label{app:upstream}
 
-Three of this paper's limitations are model gaps rather than data gaps, and each is precise enough to fix. They are contributed upstream to PolicyEngine UK rather than only reported here: a live price channel for the imputed energy variables, so that a cap or pump-price reform moves household spend rather than silently cutting quantities; a Warm Home Discount parameter and variable, which the model currently lacks entirely; and a primary-heating-fuel or gas-grid indicator in the microdata, without which the off-gas-grid question in Section~\ref{sec:discussion} cannot be asked of any UK microsimulation. The dead \texttt{gov.contrib.policyengine.economy.energy\_bills} parameter is flagged for removal or implementation.
+Three of this paper's limitations are model gaps rather than data gaps, and each is precise enough to fix. They are contributed upstream to PolicyEngine UK rather than only reported here: a live price channel for the imputed energy variables, so that a cap or pump-price reform moves household spend rather than silently cutting quantities; a Warm Home Discount parameter and variable, which the model currently lacks entirely; and a primary-heating-fuel or gas-grid indicator in the microdata, without which the off-gas-grid question in Section~\ref{sec:discussion} cannot be asked of any UK microsimulation.
+
+Two calibration findings from this paper's validation work are contributed alongside them, because both are properties of the model rather than of this application. The first is the motor-fuel imputation: the imputed decile profile of motor-fuel spend is almost flat, \pounds \genFuelSpendDecileOneRawGbp{} against \pounds \genFuelSpendDecileTenRawGbp{}, where the ONS profile runs \pounds \genFuelSpendDecileOneOnsGbp{} to \pounds \genFuelSpendDecileTenOnsGbp{}, and the fuel-purchasing participation rate is identical in deciles one and ten where the National Travel Survey shows car access running from 40 per cent without a car in the poorest quintile to 14 per cent in the richest. The second is means-tested coverage: the model's entire means-tested population, \genMeansTestedHouseholdsM{} million households, sits well below the 7.2 million households on Universal Credit alone in May 2026. Both are quantified against published administrative and survey benchmarks and are reported upstream in that form. The contributed energy-bills parameter that no variable reads is separately flagged for removal or implementation.
 
 \subsection{Reproduction}
 \label{app:reproduce}
 
-All code, parameters and aggregate results are in the paper's public repository. The microdata are not: PolicyEngine UK's enhanced dataset is held in a private Hugging Face repository under a licence that does not permit redistribution, so reproducing the household results requires a token with access to it. The aggregate outputs in \texttt{results/} are committed, so every number in the paper can be traced from the JSON and CSV artefacts to the macro that renders it without re-running the microsimulation.
+This subsection is the one place in the paper where implementation detail is given, because reproduction requires it.
+
+All code, parameters and aggregate results are in the paper's public repository; the microdata are not. PolicyEngine UK's enhanced Family Resources Survey dataset is held in a private repository under a licence that does not permit redistribution, so reproducing the household-level results requires an access token. The aggregate outputs are committed, so every number in the paper can be traced from the stored artefacts to the macro that renders it without re-running the microsimulation:
+
+\begin{itemize}\setlength{\itemsep}{0pt}
+  \item \texttt{analysis/run\_incidence.py} --- baseline, shock and policy scoring
+  \item \texttt{analysis/run\_sensitivity.py} --- the three sweeps of this appendix
+  \item \texttt{analysis/run\_grid.py} --- the scenario grid of Figure~\ref{fig:grid}
+  \item \texttt{analysis/emit\_tex\_values.py} --- every numeric macro used in the text
+\end{itemize}
+The model gaps recorded in Section~\ref{sec:limitations} correspond to open issues in the \texttt{policyengine-uk} repository: the absence of a demand-elasticity and pass-through block is issue \#1114, and the unvalidated 0.38 VAT coverage factor is issue \#352.
 
 \begin{verbatim}
 uv sync
@@ -82,4 +129,4 @@ python -m pytest tests/              # runs without microdata
 cd paper && latexmk -pdf main.tex
 \end{verbatim}
 
-Every headline number enters the prose as a macro from \texttt{paper/values\_generated.tex}, emitted mechanically from \texttt{results/}. A macro with no corresponding key in \texttt{results/} renders as \texttt{\textbackslash GENMISSING}, so a stale or partial results tree fails visibly in the compiled PDF rather than silently preserving superseded numbers; the same mechanism is what forced the removal of the constituency and heating-fuel claims from this draft rather than allowing them to survive as unbacked prose. Pinned dependency versions, including the \texttt{policyengine-uk} release used, are in \texttt{pyproject.toml} and \texttt{uv.lock}.
+Every headline number enters the prose as a macro from \texttt{paper/values\_generated.tex}, emitted mechanically from \texttt{results/}. A macro with no corresponding key in \texttt{results/} renders as \texttt{\textbackslash GENMISSING}, so a stale or partial results tree fails visibly in the compiled document rather than silently preserving superseded numbers. This is also why no constituency-level or heating-fuel statistic appears anywhere in the paper: with no key in \texttt{results/} to back it, no such number can be rendered. Pinned dependency versions, including the \texttt{policyengine-uk} release used, are in \texttt{pyproject.toml} and \texttt{uv.lock}.

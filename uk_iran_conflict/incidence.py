@@ -39,6 +39,7 @@ baseline (see :mod:`uk_iran_conflict.policies`).
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -132,6 +133,129 @@ def load_baseline(dataset: str, period: int = 2026) -> Baseline:
     )
 
 
+# --------------------------------------------------------------------------
+# ONS-calibrated motor-fuel robustness variant
+# --------------------------------------------------------------------------
+
+#: ONS Family Spending FYE 2025 (LCFS, published 11 June 2026), motor-fuel
+#: spend, £/yr, for the **bottom** and **top** gross-income deciles. Reported in
+#: ``docs/VALIDATION.md`` Check 2d.
+ONS_MOTOR_FUEL_D1_GBP: float = 318.0
+ONS_MOTOR_FUEL_D10_GBP: float = 1_362.0
+
+#: ONS Family Spending FYE 2025, Table A1: petrol, diesel and motor oils at
+#: £18.40/week = £960/yr per household, all households. Used only as a
+#: cross-check on the interpolated profile, never as the level we impose — see
+#: :func:`rescale_motor_fuel_to_ons` for why the microdata total is preserved.
+ONS_MOTOR_FUEL_MEAN_GBP: float = 960.0
+
+
+def ons_motor_fuel_decile_targets() -> np.ndarray:
+    """Target ONS motor-fuel spend by income decile, £/yr, deciles 1-10.
+
+    ``docs/VALIDATION.md`` gives only the endpoints (D1 £318, D10 £1,362, a
+    4.3x gradient) and the all-household mean (£960). The eight interior deciles
+    are **interpolated, and that interpolation is an assumption of this
+    robustness run, not a published statistic.**
+
+    The interpolation is *log-linear* — a constant ratio between adjacent
+    deciles, :math:`(1362/318)^{1/9} = 1.173` — rather than linear in levels.
+    Two reasons, both stated so a referee can reject them:
+
+    1. Motor-fuel spend is a roughly log-linear function of income across the
+       distribution in every published UK budget-share table (it is driven by
+       car access and mileage, both of which scale multiplicatively with
+       income), so a constant-growth-factor profile is the natural shape.
+    2. A linear-in-levels profile would put the implied all-household mean at
+       £840, whereas the log-linear profile gives £801 — both below the ONS
+       £960 mean, because ONS deciles are unequivalised *gross*-income deciles
+       whose household sizes differ from ours. Neither reproduces the published
+       mean exactly, which is precisely why this function is used to set decile
+       **shares** and never the level.
+
+    Returns
+    -------
+    np.ndarray
+        Ten target means, £/yr, in decile order.
+    """
+    ratio = (ONS_MOTOR_FUEL_D10_GBP / ONS_MOTOR_FUEL_D1_GBP) ** (1.0 / 9.0)
+    return ONS_MOTOR_FUEL_D1_GBP * ratio ** np.arange(10.0)
+
+
+def ons_motor_fuel_scale_factors(base: Baseline) -> np.ndarray:
+    """Per-decile rescaling factors that impose the ONS motor-fuel profile.
+
+    Index ``d - 1`` holds the factor for decile ``d``.
+    """
+    targets = ons_motor_fuel_decile_targets()
+    fuel = base.motor_fuel
+    w = base.weight
+    current = np.zeros(10)
+    counts = np.zeros(10)
+    for d in range(1, 11):
+        sel = base.decile == d
+        current[d - 1] = wsum(fuel[sel], w[sel])
+        counts[d - 1] = float(w[sel].sum())
+    total = current.sum()
+    wanted = targets * counts
+    if wanted.sum() <= 0 or total <= 0:
+        return np.ones(10)
+    # Impose ONS *shares*, then restore our own national total.
+    wanted = wanted * (total / wanted.sum())
+    with np.errstate(divide="ignore", invalid="ignore"):
+        factors = np.where(current > 0, wanted / np.where(current > 0, current, 1), 1.0)
+    return factors
+
+
+def rescale_motor_fuel_to_ons(base: Baseline) -> Baseline:
+    """Reweight motor-fuel spend onto the ONS decile profile. **Robustness only.**
+
+    ``docs/VALIDATION.md`` Check 2d documents the defect this addresses: the
+    LCFS-imputed motor-fuel spend in the microdata is essentially flat across
+    the income distribution (D1 £1,073 against D10 £1,333) where ONS Family
+    Spending runs £318 to £1,362, and it gives deciles 1 and 10 an identical
+    38% fuel-purchasing rate against DfT NTS0703's 60% versus 86% car access.
+    Motor fuel carries most of the modelled loss, so the defect contaminates the
+    decile-1 burden and the headline gradient.
+
+    What is preserved, and why
+    --------------------------
+    **The national total is preserved; the decile shares are replaced.** Each
+    household's petrol and diesel are multiplied by a single factor for its
+    decile, so within-decile relative variation is untouched, and the factors
+    are normalised so that weighted aggregate motor-fuel spend is exactly
+    unchanged. The alternative — importing the ONS *level* (£960 against our
+    £1,210) — would confound two distinct defects: the shape problem documented
+    in Check 2d and the level problem in Checks 2a and 3, which also runs the
+    *other* way on domestic energy. Preserving the total isolates the
+    distributional correction, keeps the aggregate loss comparable with the main
+    specification, and leaves the level question to be reported separately.
+
+    Assumptions a referee should see
+    --------------------------------
+    * ONS deciles are unequivalised **gross**-income deciles; ours are
+      PolicyEngine net-income deciles. The two rankings are not the same
+      households, so this is a profile transplant, not a reconciliation, and it
+      will overstate the correction somewhat (VALIDATION.md makes the same
+      caveat about its illustrative recalculation).
+    * The interior deciles are interpolated — see
+      :func:`ons_motor_fuel_decile_targets`.
+    * Households with a missing or out-of-range decile are left unscaled.
+
+    This is **off by default**. The main specification remains the raw
+    microdata.
+    """
+    factors = ons_motor_fuel_scale_factors(base)
+    per_household = np.ones(base.n)
+    for d in range(1, 11):
+        per_household[base.decile == d] = factors[d - 1]
+    return dataclasses.replace(
+        base,
+        petrol=base.petrol * per_household,
+        diesel=base.diesel * per_household,
+    )
+
+
 @dataclass(frozen=True)
 class ShockCost:
     """Per-household first-order cost of one scenario, decomposed by fuel."""
@@ -151,6 +275,27 @@ class ShockCost:
         return self.gas + self.electricity
 
 
+def sustained_pump_factors(scenario: Any) -> tuple[float, float]:
+    """(petrol, diesel) pump multipliers **after** peak-to-year damping.
+
+    ``reforms.pump_price_factors`` returns the raw quoted moves, which for the
+    realised path are observed *peaks*. Charging a household the peak pump price
+    for twelve months while damping the gas peak to its cap-relevant fraction is
+    the inconsistency ``docs/VALIDATION.md`` Check 2b identifies, so the
+    scenario's ``pass_through.pump_sustained_fraction`` is applied here. It
+    defaults to 1.0, so any scenario that does not set it is unchanged.
+    """
+    from uk_iran_conflict import reforms  # noqa: PLC0415 — avoids a cycle
+
+    petrol_factor, diesel_factor = reforms.pump_price_factors(scenario)
+    pass_through = getattr(scenario, "pass_through", None)
+    fraction = float(getattr(pass_through, "pump_sustained_fraction", 1.0))
+    return (
+        1.0 + fraction * (petrol_factor - 1.0),
+        1.0 + fraction * (diesel_factor - 1.0),
+    )
+
+
 def shock_cost(base: Baseline, scenario: Any) -> ShockCost:
     """First-order cost of ``scenario``: quantity fixed, price moved.
 
@@ -163,7 +308,7 @@ def shock_cost(base: Baseline, scenario: Any) -> ShockCost:
     from uk_iran_conflict import reforms  # noqa: PLC0415 — avoids a cycle
 
     gas_factor, elec_factor = reforms.retail_factors(scenario)
-    petrol_factor, diesel_factor = reforms.pump_price_factors(scenario)
+    petrol_factor, diesel_factor = sustained_pump_factors(scenario)
     return ShockCost(
         gas=base.gas * (gas_factor - 1.0),
         electricity=base.electricity * (elec_factor - 1.0),
@@ -390,8 +535,26 @@ class ScenarioResult:
     poverty_ahc_baseline: float = float("nan")
 
 
-def run_scenario(base: Baseline, scenario: Any) -> tuple[ScenarioResult, ShockCost]:
-    """Score one scenario against the baseline."""
+def run_scenario(
+    base: Baseline, scenario: Any, ons_fuel_calibration: bool = False
+) -> tuple[ScenarioResult, ShockCost]:
+    """Score one scenario against the baseline.
+
+    Parameters
+    ----------
+    ons_fuel_calibration:
+        If ``True``, motor-fuel spend is first reweighted onto the ONS Family
+        Spending decile profile via :func:`rescale_motor_fuel_to_ons`. This is a
+        **robustness variant** and is off by default: the main specification is
+        the raw microdata.
+
+    Returns the result and the :class:`ShockCost`; note that when
+    ``ons_fuel_calibration`` is set, the cost is computed on the reweighted
+    baseline, so any downstream policy scoring must use the same baseline (see
+    ``analysis/run_variants.py``).
+    """
+    if ons_fuel_calibration:
+        base = rescale_motor_fuel_to_ons(base)
     cost = shock_cost(base, scenario)
     total = cost.total
     w = base.weight

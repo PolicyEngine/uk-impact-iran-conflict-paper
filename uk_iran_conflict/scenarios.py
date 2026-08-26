@@ -112,6 +112,7 @@ __all__ = [
     "CAP_PHASE_IN_PROFILE",
     "CAP_QUARTER_LABELS",
     "REALISED_SUSTAINED_FRACTION",
+    "REALISED_PUMP_SUSTAINED_FRACTION",
     "OilPath",
     "GasPath",
     "PumpPricePath",
@@ -238,6 +239,52 @@ specified as *sustained* levels (the NIESR pair) use 1.0.
 """
 
 
+REALISED_PUMP_SUSTAINED_FRACTION: float = 0.60
+"""Peak-to-annual-average damping for the realised 2026 **pump-price** path.
+
+Why this exists
+---------------
+The realised pump moves in the brief (petrol +20%, diesel +36%) are *peaks*,
+exactly as the gas figure (+78p/therm) is a peak. The original specification
+damped the gas peak by :data:`REALISED_SUSTAINED_FRACTION` but applied the pump
+peaks undamped for a full calendar year. The stated justification — road fuel
+passes through in weeks, the cap in quarters — is a statement about **lag**, not
+about **duration**: it licenses applying the pump peak *sooner*, not applying it
+for twelve months. A peak pump price no more persists for a year than a peak gas
+price does, so the two channels are now damped on the same logic. (See
+`docs/VALIDATION.md`, Check 2b.)
+
+How 0.60 is arrived at
+----------------------
+This is a **calibration, not an estimate** — there is no published annual-average
+2026 pump series to fit. It is a transparent piecewise-linear approximation of
+the DESNZ weekly road-fuel path as described in the brief: prices were at
+pre-war levels through late February 2026, rose to their peak by roughly the
+middle of the year, held near the peak for a short plateau, and decayed back
+toward (but not to) pre-war levels over the second half. Writing the year as
+twelve equal months and the uplift as a fraction of the peak:
+
+* Jan-Feb (2 months) at ~0.0 of peak (pre-shock);
+* Mar-May (3 months) ramping 0 -> 1, averaging ~0.5;
+* Jun-Aug (3 months) at ~1.0 (the observed peak plateau);
+* Sep-Dec (4 months) decaying 1.0 -> ~0.35, averaging ~0.65.
+
+Annual average = (2 x 0.0 + 3 x 0.5 + 3 x 1.0 + 4 x 0.65) / 12 = 0.59, rounded
+to **0.60**.
+
+Deliberately **not** 0.36: :data:`REALISED_SUSTAINED_FRACTION` is calibrated to
+an entirely different instrument (the Ofgem cap's lagged forward-curve
+observation window), and reusing it here would confuse a cap-window artefact
+with a pump-price duration. Pump prices track spot crude within weeks, so the
+relevant object is a simple annual average of the realised path, which is
+necessarily *higher* than a cap-window fraction.
+
+A referee who disagrees changes this one number: it is the only place the
+damping enters, and ``realised_2026_peak_fuel`` (pump fraction 1.0) is reported
+alongside as the explicit upper bound on the fuel channel.
+"""
+
+
 # ---------------------------------------------------------------------------
 # Component paths
 # ---------------------------------------------------------------------------
@@ -356,6 +403,10 @@ class PassThroughAssumptions:
         enter the cap's observation window. 1.0 for scenarios specified as
         sustained levels; see :data:`REALISED_SUSTAINED_FRACTION` for the
         realised path.
+    pump_sustained_fraction:
+        Fraction of the quoted **pump-price** peak that is sustained across the
+        modelled year. Defaults to 1.0, which reproduces the undamped-peak
+        specification; see :data:`REALISED_PUMP_SUSTAINED_FRACTION`.
     """
 
     wholesale_share_gas_bill: float = WHOLESALE_SHARE_GAS_BILL
@@ -365,6 +416,7 @@ class PassThroughAssumptions:
     lag_quarters: int = CAP_LAG_QUARTERS
     phase_in_profile: tuple[float, ...] = CAP_PHASE_IN_PROFILE
     sustained_fraction: float = 1.0
+    pump_sustained_fraction: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.phase_in_profile:
@@ -375,6 +427,7 @@ class PassThroughAssumptions:
             "marginal_pricing_share",
             "gas_share_of_dual_fuel_bill",
             "sustained_fraction",
+            "pump_sustained_fraction",
         ):
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
@@ -404,6 +457,21 @@ class PassThroughAssumptions:
             * self.marginal_pricing_share
             * self.wholesale_share_electricity_bill
             * gas.pct_change
+        )
+
+    # -- pump prices ----------------------------------------------------
+
+    def sustained_pump_changes(self, pump: PumpPricePath) -> tuple[float, float]:
+        """Damped (petrol, diesel) proportional pump moves for the modelled year.
+
+        The quoted moves are peaks; multiplying by
+        :attr:`pump_sustained_fraction` converts them to the annual-average
+        uplift actually borne by households. With the default 1.0 this is the
+        identity, so existing scenarios are unchanged.
+        """
+        return (
+            self.pump_sustained_fraction * pump.petrol_pct_change,
+            self.pump_sustained_fraction * pump.diesel_pct_change,
         )
 
 
@@ -529,6 +597,15 @@ class Scenario:
                 self.pass_through.steady_state_electricity_shock(self.gas)
             ),
         )
+
+    @property
+    def sustained_pump_changes(self) -> tuple[float, float]:
+        """(petrol, diesel) proportional moves after pump damping.
+
+        This — not the raw :attr:`pump` peaks — is what the incidence
+        calculation charges households for a full year.
+        """
+        return self.pass_through.sustained_pump_changes(self.pump)
 
     @property
     def cap_path(self) -> tuple[CapStep, ...]:
@@ -668,16 +745,20 @@ SCENARIOS: Mapping[str, Scenario] = {
             "peaking +78p/therm, petrol +20% and diesel +36% at the pump. "
             "This is the paper's central estimate — the counterfactual is not "
             "hypothetical, it is the 2026 the UK has already lived through. "
-            "Because the wholesale figures are peaks rather than sustained "
-            "levels, only part of them reaches the cap: the damping is "
-            "calibrated to reproduce Cornwall Insight's £1,729 (+4%) October "
-            "2026 forecast."
+            "Because every quoted figure is a *peak* rather than a sustained "
+            "level, both channels are damped to the part of the peak that "
+            "actually reaches households over the modelled year: the gas leg "
+            "by a fraction calibrated to reproduce Cornwall Insight's £1,729 "
+            "(+4%) October 2026 cap forecast, and the pump leg by a "
+            "peak-to-annual-average fraction. The undamped-pump variant is "
+            "reported separately as realised_2026_peak_fuel."
         ),
         oil=OilPath(level_usd_per_bbl=PREWAR_BRENT_USD_PER_BBL + 42.0),
         gas=GasPath(change_pence_per_therm=78.0),
         pump=PumpPricePath(petrol_pct_change=0.20, diesel_pct_change=0.36),
         pass_through=PassThroughAssumptions(
-            sustained_fraction=REALISED_SUSTAINED_FRACTION
+            sustained_fraction=REALISED_SUSTAINED_FRACTION,
+            pump_sustained_fraction=REALISED_PUMP_SUSTAINED_FRACTION,
         ),
         source=_REALISED_SOURCE,
         notes=(
@@ -686,11 +767,47 @@ SCENARIOS: Mapping[str, Scenario] = {
             "entirely on PREWAR_NBP_PENCE_PER_THERM = 90p, which is an "
             "assumption, not an observation. sustained_fraction = 0.36 is "
             "calibrated, not estimated: it is the value that makes the 2026Q4 "
-            "cap step match Cornwall Insight's +4%. Pump-price changes are "
-            "observed peaks and are applied directly, without damping, since "
-            "road fuel passes through in weeks rather than quarters — the "
-            "asymmetry between the fast fuel channel and the slow cap channel "
-            "is itself a result worth reporting."
+            "cap step match Cornwall Insight's +4%. "
+            "pump_sustained_fraction = 0.60 is likewise a calibration, not an "
+            "estimate, and is a *different* object from the 0.36: it is the "
+            "annual average of the realised pump path as a fraction of its "
+            "peak, not a cap-observation-window share (see "
+            "REALISED_PUMP_SUSTAINED_FRACTION for the arithmetic). The earlier "
+            "specification of this scenario applied the pump peaks undamped "
+            "for a full year while damping gas; that is a claim about lag, not "
+            "duration, and it inflated motor fuel's share of the loss. It is "
+            "retained as realised_2026_peak_fuel, an explicit upper bound on "
+            "the fuel channel."
+        ),
+    ),
+    "realised_2026_peak_fuel": Scenario(
+        key="realised_2026_peak_fuel",
+        label="Realised 2026 shock, undamped pump peak (upper bound)",
+        description=(
+            "Identical to realised_2026 in every respect except that the "
+            "observed peak pump moves (petrol +20%, diesel +36%) are applied "
+            "undamped for the full calendar year. This is not a central "
+            "estimate: it is an explicit **upper bound** on the motor-fuel "
+            "channel, and on motor fuel's share of the total loss. It is "
+            "reported so the sensitivity of the paper's headline finding to "
+            "the pump-damping assumption is visible rather than buried, and it "
+            "is the specification the pre-audit results were produced on."
+        ),
+        oil=OilPath(level_usd_per_bbl=PREWAR_BRENT_USD_PER_BBL + 42.0),
+        gas=GasPath(change_pence_per_therm=78.0),
+        pump=PumpPricePath(petrol_pct_change=0.20, diesel_pct_change=0.36),
+        pass_through=PassThroughAssumptions(
+            sustained_fraction=REALISED_SUSTAINED_FRACTION,
+            pump_sustained_fraction=1.0,
+        ),
+        source=_REALISED_SOURCE,
+        notes=(
+            "Charging households the peak pump price for twelve months while "
+            "damping the gas peak to 0.36 is internally inconsistent, and "
+            "docs/VALIDATION.md Check 2b rejects it as a central case. It is "
+            "kept only as a bound. Any number taken from this scenario must be "
+            "reported with the undamped-peak assumption stated in the same "
+            "sentence."
         ),
     ),
 }

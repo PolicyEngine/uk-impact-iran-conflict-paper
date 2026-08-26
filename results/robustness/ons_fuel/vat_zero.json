@@ -1,0 +1,24 @@
+{
+  "policy": "vat_zero",
+  "label": "Zero-rate VAT on domestic fuel (5% -> 0%)",
+  "cost_bn": 2.081028736,
+  "stated_cost_bn": NaN,
+  "share_to_bottom_three": 0.2530852894479204,
+  "cost_per_pound_decile_one": 0.036335071016108264,
+  "mean_gain_gbp": 70.61376190185547,
+  "uncompensated_share_overall": 1.0,
+  "uncompensated_by_decile": {
+    "1": 1.0,
+    "2": 1.0,
+    "3": 1.0,
+    "4": 1.0,
+    "5": 1.0,
+    "6": 1.0,
+    "7": 1.0,
+    "8": 1.0,
+    "9": 1.0,
+    "10": 1.0
+  },
+  "net_loss_after_policy_gbp": 273.9419059187629,
+  "fully_compensated_share": 0.0
+}

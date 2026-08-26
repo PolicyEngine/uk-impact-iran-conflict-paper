@@ -16,6 +16,10 @@ Tables
 ``tab_scenario.tex``      the three scenarios side by side
 ``tab_scorecard.tex``     the five policies on the paper's scoring metrics
 ``tab_region.tex``        the 12 regions: mean loss £, % of income, households
+``tab_variants.tex``      the three realised-2026 specifications side by side
+                          (main damped-pump, peak-fuel upper bound,
+                          ONS-calibrated motor-fuel robustness), from
+                          ``results/robustness/comparison.csv``
 
 Conventions: ``booktabs`` rules only (no vertical rules), numeric columns
 right-aligned (``r``), a machine-generated header comment in every file.
@@ -45,12 +49,31 @@ SCENARIO_LABELS = (
 
 #: Policy file stem -> short display label. Ordered as the paper argues them.
 POLICY_LABELS = (
-    ("social_tariff", "Means-tested social tariff"),
-    ("jrf_block", "JRF universal discounted block"),
-    ("whd_expansion", "Warm Home Discount expansion"),
-    ("vat_zero", "Zero-rate VAT on domestic fuel"),
-    ("ippr_rebate", "IPPR flat rebate"),
+    ("social_tariff", "Social tariff"),
+    ("jrf_block", "JRF block"),
+    ("whd_expansion", "WHD expansion"),
+    ("vat_zero", "VAT zero-rate"),
+    ("ippr_rebate", "Flat rebate"),
 )
+
+
+def mc(*lines: str, align: str = "c") -> str:
+    r"""A stacked (multi-line) column header, without needing ``makecell``.
+
+    A nested one-column ``tabular`` bottom-aligned to the header row keeps the
+    column narrow: the widest line sets the column width instead of the whole
+    header running on one line. ``booktabs`` rules are unaffected.
+    """
+    inner = r" \\ ".join(lines)
+    return r"\begin{tabular}[b]{@{}" + align + r"@{}}" + inner + r"\end{tabular}"
+
+
+def small(body: list[str]) -> list[str]:
+    """Group a tabular inside ``\\small`` (and slightly tighter column
+    separation) so the wide numeric tables fit the text block. The caption sits
+    outside the group and keeps body size.
+    """
+    return [r"{\small\setlength{\tabcolsep}{4.5pt}"] + body + [r"}"]
 
 
 def jload(rel: str) -> dict:
@@ -223,9 +246,17 @@ def tab_scorecard(shock: dict) -> None:
     body = [
         r"\begin{tabular}{lrrrrr}",
         r"\toprule",
-        r"Policy & Cost (\pounds bn) & To deciles 1--3 (\%) & "
-        r"Cost per \pounds{} of decile-1 gain (\pounds) & "
-        r"Losers uncompensated (\%) & Fully compensated (\%) \\",
+        "Policy & "
+        + mc(r"Cost", r"(\pounds bn)")
+        + " & "
+        + mc(r"Share to", r"deciles 1--3 (\%)")
+        + " & "
+        + mc(r"Cost per \pounds 1", r"to decile 1 (\pounds)")
+        + " & "
+        + mc(r"Losers un-", r"compensated (\%)")
+        + " & "
+        + mc(r"Fully com-", r"pensated (\%)")
+        + r" \\",
         r"\midrule",
     ]
     for key, label in POLICY_LABELS:
@@ -238,7 +269,7 @@ def tab_scorecard(shock: dict) -> None:
             f"{100 * p['fully_compensated_share']:.1f} \\\\"
         )
     body += [r"\bottomrule", r"\end{tabular}"]
-    write("tab_scorecard.tex", body)
+    write("tab_scorecard.tex", small(body))
 
 
 def tab_region(shock: dict) -> None:
@@ -264,6 +295,70 @@ def tab_region(shock: dict) -> None:
         r"\end{tabular}",
     ]
     write("tab_region.tex", body)
+
+
+def tab_variants() -> None:
+    r"""The three realised-2026 specifications side by side.
+
+    Read straight from ``results/robustness/comparison.csv`` (one row per
+    variant) rather than re-deriving from the per-variant JSON, so the table and
+    the audit trail cannot drift apart. Three numeric columns plus a label
+    column fit the 6.3in text block comfortably at ``\small`` with stacked
+    two-line headers.
+    """
+    path = R / "robustness" / "comparison.csv"
+    with path.open(newline="") as fh:
+        rows = {r["variant"]: r for r in csv.DictReader(fh)}
+    order = (
+        ("main_damped_pump", ("Main", "specification")),
+        ("upper_bound_peak_fuel", ("Peak-fuel", "upper bound")),
+        ("robustness_ons_fuel", ("ONS-calibrated", "motor fuel")),
+    )
+    cols = [rows[key] for key, _ in order if key in rows]
+    if not cols:
+        raise KeyError(f"{path} has none of the expected variants")
+
+    def line(name: str, fn, fmt: str = "{:.2f}") -> str:
+        return name + " & " + " & ".join(fmt.format(fn(r)) for r in cols) + r" \\"
+
+    def num(column: str):
+        return lambda r: float(r[column])
+
+    def pct(column: str):
+        return lambda r: 100 * float(r[column])
+
+    body = [
+        r"\begin{tabular}{l" + "r" * len(cols) + "}",
+        r"\toprule",
+        " & " + " & ".join(mc(*head) for _, head in order[: len(cols)]) + r" \\",
+        r"\midrule",
+        line(
+            r"Aggregate additional spend (\pounds bn)",
+            num("aggregate_cost_bn"),
+            "{:.2f}",
+        ),
+        line(r"Mean loss (\pounds)", num("mean_loss_gbp"), "{:,.0f}"),
+        line(r"Mean loss (\% of income)", num("mean_loss_pct")),
+        r"\midrule",
+        line(r"Decile 1 loss (\pounds)", num("decile1_loss_gbp"), "{:,.0f}"),
+        line(r"Decile 1 loss (\% of income)", num("decile1_loss_pct")),
+        line(r"Decile 10 loss (\pounds)", num("decile10_loss_gbp"), "{:,.0f}"),
+        line(r"Decile 10 loss (\% of income)", num("decile10_loss_pct")),
+        line(r"Decile 1/10 ratio (\% of income)", num("d1_d10_ratio_pct")),
+        r"\midrule",
+        line(r"Gas share of loss (\%)", pct("gas_share_of_loss"), "{:.1f}"),
+        line(
+            r"Electricity share of loss (\%)",
+            pct("electricity_share_of_loss"),
+            "{:.1f}",
+        ),
+        line(
+            r"Motor fuel share of loss (\%)", pct("motor_fuel_share_of_loss"), "{:.1f}"
+        ),
+        r"\bottomrule",
+        r"\end{tabular}",
+    ]
+    write("tab_variants.tex", small(body))
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +395,9 @@ def float_wrap(body: list[str], caption: str, label: str) -> list[str]:
 ELASTICITY_LABELS = {
     "labandeira_short_run": "Labandeira et al., short run",
     "labandeira_long_run": "Labandeira et al., long run",
-    "priesmann_short_run": "Priesmann and Praktiknjo, short run",
-    "priesmann_long_run": "Priesmann and Praktiknjo, long run",
-    "prior_repo_replication": "Prior-repository replication",
+    "priesmann_short_run": "Priesmann \\& Praktiknjo, short run",
+    "priesmann_long_run": "Priesmann \\& Praktiknjo, long run",
+    "prior_repo_replication": "Prior-repo replication",
 }
 
 
@@ -317,7 +412,7 @@ def elasticity_label(row: dict) -> str:
         return ELASTICITY_LABELS[spec]
     eps = float(row["epsilon_mean"])
     if eps == 0:
-        return r"Flat $\varepsilon = 0$ (main specification)"
+        return r"Flat $\varepsilon = 0$ (main spec.)"
     # already inside math mode, so the ASCII hyphen renders as a minus
     return f"Flat $\\varepsilon = {eps:.1f}$"
 
@@ -327,8 +422,19 @@ def tab_elasticity() -> None:
     body = [
         r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
-        r"Specification & Mean $\varepsilon$ & Mean loss (\pounds) & "
-        r"\% of income & Aggregate (\pounds bn) & Decile 1 (\%) & Decile 10 (\%) \\",
+        "Specification & "
+        + mc(r"Mean", r"$\varepsilon$")
+        + " & "
+        + mc(r"Mean loss", r"(\pounds)")
+        + " & "
+        + mc(r"Loss", r"(\% inc.)")
+        + " & "
+        + mc(r"Aggregate", r"(\pounds bn)")
+        + " & "
+        + mc(r"Decile 1", r"(\%)")
+        + " & "
+        + mc(r"Decile 10", r"(\%)")
+        + r" \\",
         r"\midrule",
     ]
     for row in rows:
@@ -345,7 +451,7 @@ def tab_elasticity() -> None:
     write(
         "tab_elasticity.tex",
         float_wrap(
-            body,
+            small(body),
             "Demand-response sweep, realised 2026 scenario. The main "
             "specification is zero elasticity, an explicit upper bound on the "
             "welfare loss; every other row is a robustness check, not an "
@@ -361,13 +467,25 @@ def tab_elasticity() -> None:
 def tab_caplag() -> None:
     rows = sload("cap_lag.csv")
     body = [
-        r"\begin{tabular}{lllrrrr}",
+        r"\begin{tabular}{llrrrrr}",
         r"\toprule",
         r"& & \multicolumn{2}{c}{Annualised 2026} & "
-        r"\multicolumn{2}{c}{Cumulative} \\",
+        r"\multicolumn{2}{c}{Cumulative} & \\",
         r"\cmidrule(lr){3-4} \cmidrule(lr){5-6}",
-        r"Lag (quarters) & First cap quarter & Mean (\pounds) & \pounds bn & "
-        r"Mean (\pounds) & \pounds bn & Motor fuel (\pounds bn) \\",
+        mc(r"Lag", r"(quarters)", align="l")
+        + " & "
+        + mc(r"First cap", r"quarter", align="l")
+        + " & "
+        + mc(r"Mean", r"(\pounds)")
+        + " & "
+        + mc(r"Total", r"(\pounds bn)")
+        + " & "
+        + mc(r"Mean", r"(\pounds)")
+        + " & "
+        + mc(r"Total", r"(\pounds bn)")
+        + " & "
+        + mc(r"Motor fuel", r"(\pounds bn)")
+        + r" \\",
         r"\midrule",
     ]
     for row in rows:
@@ -385,7 +503,7 @@ def tab_caplag() -> None:
     write(
         "tab_caplag.tex",
         float_wrap(
-            body,
+            small(body),
             "Wholesale-to-retail lag sweep, realised 2026 scenario. The "
             "cumulative loss is exactly invariant to the lag; only the "
             "calendar-year attribution moves. The annualised column is therefore "
@@ -402,9 +520,20 @@ def tab_asymmetry() -> None:
     body = [
         r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
-        r"Marginal-pricing share & Electricity $\times$ & Mean loss (\pounds) & "
-        r"\% of income & Decile 1/10 ratio & Gas share of domestic loss (\%) & "
-        r"Aggregate (\pounds bn) \\",
+        mc(r"Marginal-", r"pricing share", align="l")
+        + " & "
+        + mc(r"Electricity", r"factor")
+        + " & "
+        + mc(r"Mean loss", r"(\pounds)")
+        + " & "
+        + mc(r"Loss", r"(\% inc.)")
+        + " & "
+        + mc(r"Decile", r"1/10 ratio")
+        + " & "
+        + mc(r"Gas share of", r"domestic loss (\%)")
+        + " & "
+        + mc(r"Aggregate", r"(\pounds bn)")
+        + r" \\",
         r"\midrule",
     ]
     for row in rows:
@@ -426,7 +555,7 @@ def tab_asymmetry() -> None:
     write(
         "tab_asymmetry.tex",
         float_wrap(
-            body,
+            small(body),
             "Marginal-pricing-share sweep, realised 2026 scenario. The gas "
             "price factor is held at 1.1404 throughout; only the electricity "
             "pass-through varies. The headline incidence barely moves, while the "
@@ -444,6 +573,7 @@ def main() -> None:
     tab_scenario()
     tab_scorecard(shock)
     tab_region(shock)
+    tab_variants()
     tab_elasticity()
     tab_caplag()
     tab_asymmetry()

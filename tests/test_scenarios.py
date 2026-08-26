@@ -12,7 +12,16 @@ import dataclasses
 import pytest
 
 from uk_iran_conflict import reforms
-from uk_iran_conflict.scenarios import SCENARIOS, Scenario, get_scenario, scenario_keys
+from uk_iran_conflict.scenarios import (
+    REALISED_PUMP_SUSTAINED_FRACTION,
+    REALISED_SUSTAINED_FRACTION,
+    SCENARIOS,
+    PassThroughAssumptions,
+    PumpPricePath,
+    Scenario,
+    get_scenario,
+    scenario_keys,
+)
 
 ALL = sorted(SCENARIOS.items())
 
@@ -187,6 +196,7 @@ def test_scenarios_are_distinct_calibrations():
             s.gas.change_pence_per_therm,
             s.pump.petrol_pct_change,
             s.pass_through.sustained_fraction,
+            s.pass_through.pump_sustained_fraction,
         )
         for s in SCENARIOS.values()
     }
@@ -245,3 +255,90 @@ def test_cap_changes_map_onto_four_policyengine_periods(key, scenario):
     changes = reforms._cap_changes(reforms.cap_levels(scenario), 2026)
     assert len(changes) == 4, key
     assert all(period.startswith("2026-") for period in changes)
+
+
+# --- pump damping (VALIDATION.md Check 2b) --------------------------------
+
+
+def test_pump_sustained_fraction_defaults_to_one_and_is_the_identity():
+    """The new parameter must leave every pre-existing scenario untouched."""
+    default = PassThroughAssumptions()
+    assert default.pump_sustained_fraction == 1.0
+    pump = PumpPricePath(petrol_pct_change=0.20, diesel_pct_change=0.36)
+    assert default.sustained_pump_changes(pump) == pytest.approx((0.20, 0.36))
+    for key in ("niesr_baseline", "niesr_adverse"):
+        scenario = get_scenario(key)
+        assert scenario.pass_through.pump_sustained_fraction == 1.0
+        assert scenario.sustained_pump_changes == pytest.approx(
+            (scenario.pump.petrol_pct_change, scenario.pump.diesel_pct_change)
+        )
+
+
+def test_pump_sustained_fraction_scales_both_fuels_linearly():
+    pump = PumpPricePath(petrol_pct_change=0.20, diesel_pct_change=0.36)
+    half = PassThroughAssumptions(pump_sustained_fraction=0.5)
+    assert half.sustained_pump_changes(pump) == pytest.approx((0.10, 0.18))
+    # Damping is proportional, so the diesel/petrol ratio is preserved.
+    petrol, diesel = half.sustained_pump_changes(pump)
+    assert diesel / petrol == pytest.approx(0.36 / 0.20)
+
+
+def test_pump_sustained_fraction_is_bounded():
+    with pytest.raises(ValueError, match="pump_sustained_fraction"):
+        PassThroughAssumptions(pump_sustained_fraction=1.5)
+    with pytest.raises(ValueError, match="pump_sustained_fraction"):
+        PassThroughAssumptions(pump_sustained_fraction=-0.1)
+
+
+def test_pump_damping_does_not_touch_the_cap_path():
+    """The pump parameter is a fuel-channel object; the cap must not move."""
+    main = get_scenario("realised_2026")
+    bound = get_scenario("realised_2026_peak_fuel")
+    assert [s.cap_gbp for s in main.cap_path] == [s.cap_gbp for s in bound.cap_path]
+    assert main.retail_shock == bound.retail_shock
+
+
+def test_realised_main_damps_the_pump_peak_and_the_bound_does_not():
+    main = get_scenario("realised_2026")
+    bound = get_scenario("realised_2026_peak_fuel")
+    assert main.pass_through.pump_sustained_fraction == pytest.approx(
+        REALISED_PUMP_SUSTAINED_FRACTION
+    )
+    assert bound.pass_through.pump_sustained_fraction == 1.0
+    # The bound applies the published peaks verbatim...
+    assert bound.sustained_pump_changes == pytest.approx((0.20, 0.36))
+    # ...and the main specification strictly less.
+    assert main.sustained_pump_changes[0] < bound.sustained_pump_changes[0]
+    assert main.sustained_pump_changes[1] < bound.sustained_pump_changes[1]
+
+
+def test_pump_damping_is_not_the_cap_damping():
+    """0.36 is calibrated to the Ofgem cap window; reusing it here would be wrong."""
+    assert REALISED_PUMP_SUSTAINED_FRACTION != REALISED_SUSTAINED_FRACTION
+    assert REALISED_PUMP_SUSTAINED_FRACTION > REALISED_SUSTAINED_FRACTION
+    assert 0.0 < REALISED_PUMP_SUSTAINED_FRACTION <= 1.0
+
+
+def test_the_two_realised_scenarios_differ_only_in_pump_damping():
+    main = get_scenario("realised_2026")
+    bound = get_scenario("realised_2026_peak_fuel")
+    for field_name in ("oil", "gas", "pump", "baseline_cap_gbp", "quarter_labels"):
+        assert getattr(main, field_name) == getattr(bound, field_name)
+    assert (
+        dataclasses.replace(main.pass_through, pump_sustained_fraction=1.0)
+        == bound.pass_through
+    )
+
+
+def test_incidence_applies_the_pump_damping():
+    """The damping must actually reach the cost calculation, not just the dataclass."""
+    from uk_iran_conflict.incidence import sustained_pump_factors
+
+    main = get_scenario("realised_2026")
+    bound = get_scenario("realised_2026_peak_fuel")
+    assert sustained_pump_factors(bound) == pytest.approx((1.20, 1.36))
+    petrol, diesel = sustained_pump_factors(main)
+    assert petrol == pytest.approx(1.0 + REALISED_PUMP_SUSTAINED_FRACTION * 0.20)
+    assert diesel == pytest.approx(1.0 + REALISED_PUMP_SUSTAINED_FRACTION * 0.36)
+    # Undamped raw factors still available for the parameter reform.
+    assert reforms.pump_price_factors(main) == pytest.approx((1.20, 1.36))

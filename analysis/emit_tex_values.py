@@ -92,6 +92,18 @@ OUT = ROOT / "paper" / "values_generated.tex"
 #: forward-looking bounds around it (methodology.tex, "Scenarios").
 CENTRAL_SCENARIO = "realised_2026"
 
+#: The undamped-pump run, retained as an explicit **upper bound** on the
+#: motor-fuel channel: peak pump prices charged for a full twelve months. The
+#: main specification damps them on the same logic as the wholesale gas peak
+#: (``docs/VALIDATION.md`` Check 2b), so every headline in the paper is a range
+#: whose top end comes from here.
+PEAK_FUEL_SCENARIO = "realised_2026_peak_fuel"
+
+#: The main specification re-scored on ONS-calibrated motor-fuel decile shares
+#: (``docs/VALIDATION.md`` Check 2d). Robustness only; the national motor-fuel
+#: total is preserved and only the decile profile is replaced.
+ONS_FUEL_DIR = "robustness/ons_fuel"
+
 SCENARIOS = ("niesr_baseline", "niesr_adverse", "realised_2026")
 
 #: Policy key -> the macro stem the prose uses. The prose names are shorter
@@ -130,6 +142,42 @@ def emit(name: str, value, fmt: str = "{:.1f}", source: str = "") -> None:
         lines.append(
             f"\\newcommand{{\\{name}}}{{\\GENMISSING}} % MISSING: {source} -> {exc}"
         )
+
+
+def note(text: str) -> None:
+    """Write a comment line into the generated file (never a macro)."""
+    lines.append(f"% {text}")
+
+
+#: The three sweep CSVs under ``results/sensitivity/`` and ``results/grid/`` were
+#: produced **before** the central scenario was re-specified, so every macro
+#: derived from them describes the peak-fuel upper bound (undamped pump prices),
+#: not the damped main specification. They cannot be recomputed here — the
+#: sweeps need the private microdata and are written by
+#: ``analysis/run_sensitivity.py`` / ``analysis/run_grid.py``. The macros are
+#: emitted with a loud comment rather than suppressed, so the prose keeps
+#: compiling while the provenance stays visible in the generated file.
+STALE_SWEEP_WARNING = (
+    "WARNING: the block below comes from a sweep CSV generated on the "
+    "PEAK-FUEL (undamped pump) specification, not the damped main "
+    "specification. Re-run analysis/run_sensitivity.py and analysis/run_grid.py "
+    "to refresh, then re-run this emitter."
+)
+
+
+def sweep_is_stale() -> bool:
+    """True if ``elasticity.csv``'s zero-elasticity row is not the main spec.
+
+    The zero-elasticity row *is* the main specification by construction, so if
+    its aggregate does not match ``results/realised_2026/shock.json`` the sweeps
+    predate the re-specification.
+    """
+    try:
+        zero = snum(srow("elasticity.csv", "spec", "flat_0.0"), "aggregate_loss_bn")
+        main_agg = float(jload(f"{CENTRAL_SCENARIO}/shock.json")["aggregate_cost_bn"])
+        return abs(zero - main_agg) > 0.05
+    except Exception:  # noqa: BLE001 — a missing sweep is reported by emit()
+        return False
 
 
 def jload(rel: str) -> dict:
@@ -215,11 +263,76 @@ _PENDING_PERSIST = {
     "genDecileOneMedianIncomeGbp": (16000.0, "{:,.0f}"),
     "genDecileOneZeroIncomeShare": (0.57, "{:.2f}"),
     "genLargeLoserOutsideMeansTest": (98.0, "{:.0f}"),
+    # The raw and ONS-calibrated motor-fuel decile means are printed by
+    # ``analysis/run_variants.py`` but not written to any results file. They
+    # quantify the Check 2d imputation defect the robustness run corrects.
+    "genFuelSpendDecileOneRawGbp": (1073.0, "{:,.0f}"),
+    "genFuelSpendDecileOneOnsGbp": (521.0, "{:,.0f}"),
+    "genFuelSpendDecileTenRawGbp": (1333.0, "{:,.0f}"),
+    "genFuelSpendDecileTenOnsGbp": (2230.0, "{:,.0f}"),
 }
+
+
+def _variant_macros(rel: str, stem: str) -> None:
+    """Emit the standard headline block for one alternative specification.
+
+    ``rel`` is a ``shock.json`` under ``results/``; ``stem`` is the macro
+    infix (``PeakFuel``, ``OnsFuel``). Digits are never used in a macro name —
+    LaTeX forbids them — so deciles stay spelled out as One and Ten.
+    """
+    emit(f"gen{stem}AggBn", lambda: jload(rel)["aggregate_cost_bn"], "{:.1f}", rel)
+    emit(f"gen{stem}LossMean", lambda: jload(rel)["mean_loss_gbp"], "{:.0f}", rel)
+    emit(f"gen{stem}LossPctIncome", lambda: jload(rel)["mean_loss_pct"], "{:.2f}", rel)
+    for tag, d in (("One", 1), ("Ten", 10)):
+        emit(
+            f"gen{stem}Decile{tag}LossGbp",
+            lambda d=d: decile_row(jload(rel), "decile", d)["mean_loss_gbp"],
+            "{:.0f}",
+            rel,
+        )
+        emit(
+            f"gen{stem}Decile{tag}LossPct",
+            lambda d=d: decile_row(jload(rel), "decile", d)["mean_loss_pct"],
+            "{:.2f}",
+            rel,
+        )
+    emit(
+        f"gen{stem}DecileRatioPct",
+        lambda: (
+            decile_row(jload(rel), "decile", 1)["mean_loss_pct"]
+            / decile_row(jload(rel), "decile", 10)["mean_loss_pct"]
+        ),
+        "{:.1f}",
+        rel,
+    )
+    for label, key in (
+        ("MotorFuel", "motor_fuel_share_of_loss"),
+        ("Gas", "gas_share_of_loss"),
+        ("Elec", "electricity_share_of_loss"),
+    ):
+        emit(
+            f"gen{stem}{label}ShareOfLoss",
+            lambda key=key: 100 * jload(rel)[key],
+            "{:.1f}",
+            rel,
+        )
+    emit(
+        f"gen{stem}DomesticShareOfLoss",
+        lambda: (
+            100
+            * (
+                jload(rel)["gas_share_of_loss"]
+                + jload(rel)["electricity_share_of_loss"]
+            )
+        ),
+        "{:.1f}",
+        rel,
+    )
 
 
 def main(draft: bool = False) -> None:
     central = f"{CENTRAL_SCENARIO}/shock.json"
+    stale = sweep_is_stale()
 
     # ------------------------------------------------------------------
     # headline loss, central (realised) scenario
@@ -399,6 +512,33 @@ def main(draft: bool = False) -> None:
         )
 
     # ------------------------------------------------------------------
+    # the two alternative specifications the audit requires
+    #
+    # The paper reports the fuel share and everything that hangs off it as a
+    # *range*: main specification (pump peak damped like the gas peak) to
+    # peak-fuel upper bound (pump peak charged for a full year). The
+    # ONS-calibrated run is a separate axis — same shock, corrected motor-fuel
+    # decile profile — and is reported alongside the main gradient, not inside
+    # the range.
+    # ------------------------------------------------------------------
+    _variant_macros(f"{PEAK_FUEL_SCENARIO}/shock.json", "PeakFuel")
+    _variant_macros(f"{ONS_FUEL_DIR}/shock.json", "OnsFuel")
+
+    # How much of the observed peak each channel is charged for over the year.
+    emit(
+        "genPumpSustainedFraction",
+        lambda: 100 * scenario_obj().pass_through.pump_sustained_fraction,
+        "{:.0f}",
+        src,
+    )
+    emit(
+        "genGasSustainedFraction",
+        lambda: 100 * scenario_obj().pass_through.sustained_fraction,
+        "{:.0f}",
+        src,
+    )
+
+    # ------------------------------------------------------------------
     # more of the decile profile: the cash peak at eight, and medians
     # ------------------------------------------------------------------
     for tag, d in (("Eight", 8), ("Nine", 9)):
@@ -512,6 +652,9 @@ def main(draft: bool = False) -> None:
     # ------------------------------------------------------------------
     # sensitivity 1: demand response, the sweep that dominates
     # ------------------------------------------------------------------
+    if stale:
+        note(STALE_SWEEP_WARNING)
+    # ------------------------------------------------------------------
     ela = "sensitivity/elasticity.csv"
     emit(
         "genElasticityAggZeroBn",
@@ -560,6 +703,9 @@ def main(draft: bool = False) -> None:
     # ------------------------------------------------------------------
     # sensitivity 2: cap lag — cumulative is invariant, annualised is windowing
     # ------------------------------------------------------------------
+    if stale:
+        note(STALE_SWEEP_WARNING)
+    # ------------------------------------------------------------------
     lag = "sensitivity/cap_lag.csv"
     emit(
         "genCapLagCumulativeMean",
@@ -599,6 +745,9 @@ def main(draft: bool = False) -> None:
 
     # ------------------------------------------------------------------
     # sensitivity 3: marginal-pricing share — composition, not incidence
+    # ------------------------------------------------------------------
+    if stale:
+        note(STALE_SWEEP_WARNING)
     # ------------------------------------------------------------------
     asym = "sensitivity/asymmetry.csv"
 
@@ -652,6 +801,60 @@ def main(draft: bool = False) -> None:
         emit(name, value, fmt, "carried constant — see _PENDING_PERSIST TODO")
 
     # ------------------------------------------------------------------
+    # --- scenario grid (results/grid/grid.csv) ---------------------------
+    if stale:
+        note(STALE_SWEEP_WARNING)
+
+    # The grid shows the paper's gradient is invariant to the gas/oil mix, and
+    # locates the frontier at which motor fuel stops dominating the loss.
+    def _grid() -> list[dict]:
+        with open(R / "grid" / "grid.csv", newline="") as fh:
+            return list(csv.DictReader(fh))
+
+    emit(
+        "genGridRatioMin",
+        lambda: min(
+            float(r["d1_d10_ratio"])
+            for r in _grid()
+            if r["d1_d10_ratio"] and float(r["d1_d10_ratio"]) > 0
+        ),
+        "{:.2f}",
+        "grid/grid.csv",
+    )
+    emit(
+        "genGridRatioMax",
+        lambda: max(float(r["d1_d10_ratio"]) for r in _grid() if r["d1_d10_ratio"]),
+        "{:.2f}",
+        "grid/grid.csv",
+    )
+
+    def _frontier() -> float:
+        """Mean gas/oil ratio at which motor fuel's share crosses 50 per cent.
+
+        Interpolated within each oil row, then averaged over rows that cross.
+        """
+        by_oil: dict[float, list[dict]] = {}
+        for r in _grid():
+            oil = float(r["oil_pct"])
+            if oil > 0:
+                by_oil.setdefault(oil, []).append(r)
+        slopes = []
+        for oil, rows in by_oil.items():
+            rows = sorted(rows, key=lambda r: float(r["gas_pct"]))
+            rows = [r for r in rows if r["motor_fuel_share_pct"]]
+            share = [float(r["motor_fuel_share_pct"]) for r in rows]
+            gas = [float(r["gas_pct"]) for r in rows]
+            for i in range(len(share) - 1):
+                if share[i] >= 50 >= share[i + 1]:
+                    t = (share[i] - 50) / (share[i] - share[i + 1])
+                    slopes.append((gas[i] + t * (gas[i + 1] - gas[i])) / oil)
+                    break
+        if not slopes:
+            raise ValueError("no 50 per cent crossing found in grid")
+        return sum(slopes) / len(slopes)
+
+    emit("genGridFrontierSlope", _frontier, "{:.2f}", "grid/grid.csv")
+
     # write
     # ------------------------------------------------------------------
     header = [
@@ -677,8 +880,16 @@ def main(draft: bool = False) -> None:
     ]
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(header + lines) + "\n")
-    resolved = len(lines) - len(missing)
-    print(f"wrote {OUT} ({len(lines)} macros, {resolved} resolved)")
+    n_macros = sum(1 for line in lines if line.startswith("\\newcommand"))
+    resolved = n_macros - len(missing)
+    print(f"wrote {OUT} ({n_macros} macros, {resolved} resolved)")
+    if stale:
+        print(
+            "WARNING: results/sensitivity/*.csv and results/grid/grid.csv were "
+            "generated on the peak-fuel specification; the macros derived from "
+            "them do not describe the damped main spec. Re-run "
+            "analysis/run_sensitivity.py and analysis/run_grid.py."
+        )
     if missing:
         print(f"WARNING: {len(missing)} macros emitted as \\GENMISSING:")
         for m in missing:

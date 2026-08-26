@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Sweep the two independent macro drivers of the shock and score every cell.
+
+The paper's three named scenarios are single points in a two-dimensional space.
+The shock has exactly two genuinely independent drivers:
+
+* **wholesale gas**, which reaches households through the Ofgem default tariff
+  cap and therefore through ``gas_consumption`` and ``electricity_consumption``;
+* **crude oil**, which reaches households at the pump through ``petrol_spending``
+  and ``diesel_spending``.
+
+They are independent because the UK gas price is an NBP/LNG story and the pump
+price is a Brent/refining story; a Hormuz closure moves both, but a European
+storage or Norwegian-outage shock moves only the first and an OPEC+ decision
+only the second. Sweeping them against each other shows which combinations make
+this a pump-price event and which make it a domestic-bill event — the question
+raised by the headline finding that motor fuel is 67.8% of the loss
+(``docs/FINDINGS.md`` §2).
+
+Every cell is built with the existing :mod:`uk_iran_conflict.scenarios`
+machinery (``PassThroughAssumptions`` -> ``retail_shock`` -> ``cap_path``) and
+scored with :func:`uk_iran_conflict.incidence.run_scenario` against a **single**
+loaded :class:`~uk_iran_conflict.incidence.Baseline`; the microdata load is the
+slow step and happens once.
+
+Usage::
+
+    python analysis/run_grid.py               # 6x6 grid, period 2026
+    python analysis/run_grid.py --steps 7
+
+Needs the private PolicyEngine UK microdata exactly as ``run_incidence.py``
+does: ``HUGGING_FACE_TOKEN`` in the gitignored ``.env``.
+
+Writes ``results/grid/grid.csv``, one row per cell.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+try:  # works whether run as `python analysis/run_grid.py` or `-m analysis.run_grid`
+    from run_incidence import _load_env, dataset_path
+except ImportError:  # pragma: no cover
+    from analysis.run_incidence import _load_env, dataset_path
+
+from uk_iran_conflict import scenarios as scen
+from uk_iran_conflict.incidence import load_baseline, run_scenario, wmean, wsum
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "results" / "grid"
+
+#: Oil-to-pump pass-through, fitted to the three named scenarios rather than
+#: invented: each of them sets petrol at ~0.35x and diesel at ~0.55-0.63x the
+#: proportional oil move (realised 2026: +57% oil -> +20% petrol, +36% diesel;
+#: NIESR baseline: +39.8% -> +14%/+22%; NIESR adverse: +90% -> +32%/+50%).
+#: The means across the three are used, so each named scenario's own pump path
+#: is reproduced to within a couple of percentage points at its own oil move.
+#: Diesel passes through harder than petrol because the distillate market is the
+#: one exposed to Gulf refining and Hormuz shipping.
+PETROL_PASS_THROUGH: float = 0.353
+DIESEL_PASS_THROUGH: float = 0.580
+
+#: The grid is specified as a **sustained** wholesale move, so pass-through is
+#: full (``sustained_fraction = 1.0``), matching both NIESR scenarios. The
+#: realised 2026 scenario damps its *peak* to 0.36; it therefore plots on the
+#: grid at its headline gas/oil percentages but its own cell is more severe than
+#: the scenario itself. That is stated in the figure note rather than fudged.
+SUSTAINED_FRACTION: float = 1.0
+
+
+def build_scenario(gas_pct: float, oil_pct: float) -> scen.Scenario:
+    """A grid cell as a real :class:`~uk_iran_conflict.scenarios.Scenario`.
+
+    ``gas_pct`` and ``oil_pct`` are proportional moves versus the pre-war
+    reference (0.40 == +40%). The cap-path derivation is *not* reimplemented
+    here: it comes free with the ``Scenario``.
+    """
+    return scen.Scenario(
+        key=f"grid_gas{gas_pct * 100:.0f}_oil{oil_pct * 100:.0f}",
+        label=f"gas +{gas_pct * 100:.0f}%, oil +{oil_pct * 100:.0f}%",
+        description=(
+            "Synthetic scenario-grid cell: a sustained wholesale gas move of "
+            f"+{gas_pct * 100:.0f}% and a Brent move of +{oil_pct * 100:.0f}% "
+            "versus the pre-war reference."
+        ),
+        oil=scen.OilPath(
+            level_usd_per_bbl=scen.PREWAR_BRENT_USD_PER_BBL * (1.0 + oil_pct)
+        ),
+        gas=scen.GasPath(
+            change_pence_per_therm=scen.PREWAR_NBP_PENCE_PER_THERM * gas_pct
+        ),
+        pump=scen.PumpPricePath(
+            petrol_pct_change=PETROL_PASS_THROUGH * oil_pct,
+            diesel_pct_change=DIESEL_PASS_THROUGH * oil_pct,
+        ),
+        pass_through=scen.PassThroughAssumptions(sustained_fraction=SUSTAINED_FRACTION),
+        source=(
+            "Synthetic sweep around the named scenarios; pre-war references and "
+            "pass-through assumptions as in uk_iran_conflict.scenarios."
+        ),
+        notes=(
+            "Pump prices are mapped from the oil move with the petrol/diesel "
+            f"pass-through coefficients {PETROL_PASS_THROUGH}/"
+            f"{DIESEL_PASS_THROUGH}, fitted to the three named scenarios."
+        ),
+    )
+
+
+def named_points() -> pd.DataFrame:
+    """Where the three named scenarios sit in (gas %, oil %) space."""
+    rows = []
+    for key, s in scen.SCENARIOS.items():
+        rows.append(
+            {
+                "scenario": key,
+                "label": s.label,
+                "gas_pct": 100 * s.gas.pct_change,
+                "oil_pct": 100 * s.oil.pct_change,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
+    """Score one cell off the already-loaded baseline."""
+    scenario = build_scenario(gas_pct, oil_pct)
+    result, cost = run_scenario(base, scenario)
+    w = base.weight
+    d1 = result.decile[0]
+    d10 = result.decile[-1]
+    peak_cap = scenario.peak_cap_gbp
+    total = cost.total
+    losers = total > 0
+    return {
+        "gas_pct": round(100 * gas_pct, 4),
+        "oil_pct": round(100 * oil_pct, 4),
+        "gas_change_pence_per_therm": scenario.gas.change_pence_per_therm,
+        "brent_usd_per_bbl": scenario.oil.level_usd_per_bbl,
+        "petrol_pct_change": 100 * scenario.pump.petrol_pct_change,
+        "diesel_pct_change": 100 * scenario.pump.diesel_pct_change,
+        "retail_gas_pct_change": 100 * scenario.retail_shock.gas_pct_change,
+        "retail_electricity_pct_change": (
+            100 * scenario.retail_shock.electricity_pct_change
+        ),
+        "peak_cap_gbp": peak_cap,
+        "peak_cap_pct_change": 100 * (peak_cap / scenario.baseline_cap_gbp - 1.0),
+        "aggregate_cost_bn": result.aggregate_cost_bn,
+        "mean_loss_gbp": result.mean_loss_gbp,
+        "mean_loss_pct": result.mean_loss_pct,
+        "motor_fuel_share_pct": 100 * result.motor_fuel_share_of_loss,
+        "gas_share_pct": 100 * result.gas_share_of_loss,
+        "electricity_share_pct": 100 * result.electricity_share_of_loss,
+        "domestic_share_pct": 100
+        * (result.gas_share_of_loss + result.electricity_share_of_loss),
+        "decile1_loss_pct": d1.mean_loss_pct,
+        "decile10_loss_pct": d10.mean_loss_pct,
+        "d1_d10_ratio": (
+            d1.mean_loss_pct / d10.mean_loss_pct if d10.mean_loss_pct else float("nan")
+        ),
+        "decile1_loss_gbp": d1.mean_loss_gbp,
+        "decile10_loss_gbp": d10.mean_loss_gbp,
+        "share_losing_over_5pct": float(
+            w[losers][
+                (total[losers] / np.clip(base.net_income[losers], 1, None)) > 0.05
+            ].sum()
+            / w.sum()
+        ),
+        "gini_after": result.gini_after,
+        "gini_change_pp": 100 * (result.gini_after - result.gini_baseline),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--period", type=int, default=2026)
+    parser.add_argument(
+        "--steps", type=int, default=6, help="points per axis (6 -> 36 cells)"
+    )
+    parser.add_argument(
+        "--max-pct", type=float, default=100.0, help="top of both axes, in %"
+    )
+    args = parser.parse_args()
+
+    _load_env()
+    path = dataset_path()
+    print(f"dataset: {path}")
+
+    base = load_baseline(path, args.period)
+    print(f"baseline: {base.n:,} households, {base.weight.sum() / 1e6:.1f}m weighted")
+    print(
+        f"baseline spend: domestic £{wsum(base.energy, base.weight) / 1e9:.1f}bn, "
+        f"motor fuel £{wsum(base.motor_fuel, base.weight) / 1e9:.1f}bn "
+        f"(mean £{wmean(base.motor_fuel, base.weight):.0f})"
+    )
+
+    axis = np.linspace(0.0, args.max_pct / 100.0, args.steps)
+    rows = [cell_row(base, gas_pct, oil_pct) for oil_pct in axis for gas_pct in axis]
+    df = pd.DataFrame(rows)
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUT / "grid.csv", index=False)
+    named_points().to_csv(OUT / "named_points.csv", index=False)
+    print(f"\nwrote {OUT / 'grid.csv'} ({len(df)} cells)")
+
+    live = df[(df["gas_pct"] > 0) | (df["oil_pct"] > 0)]
+    for col, fmt in [
+        ("mean_loss_gbp", "£{:.0f}"),
+        ("aggregate_cost_bn", "£{:.1f}bn"),
+        ("d1_d10_ratio", "{:.2f}x"),
+        ("motor_fuel_share_pct", "{:.1f}%"),
+    ]:
+        lo, hi = live[col].min(), live[col].max()
+        print(f"  {col:22} {fmt.format(lo)} to {fmt.format(hi)}")
+
+    flip = live[live["motor_fuel_share_pct"] < 50]
+    print(
+        "\nmotor fuel stops dominating in "
+        f"{len(flip)} of {len(live)} live cells; "
+        + (
+            f"smallest gas move that flips a cell: +{flip['gas_pct'].min():.0f}% gas"
+            if len(flip)
+            else "never within the swept range"
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

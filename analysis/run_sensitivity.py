@@ -48,6 +48,7 @@ from uk_iran_conflict.incidence import (
     Baseline,
     load_baseline,
     run_scenario,
+    sustained_pump_factors,
     wmean,
     wshare,
     wsum,
@@ -147,7 +148,12 @@ def _headline(base: Baseline, cost: np.ndarray) -> dict[str, float]:
 def _price_ratios(scenario) -> dict[str, float]:
     """Carrier price ratios (p1/p0) implied by a scenario."""
     gas_factor, elec_factor = reforms.retail_factors(scenario)
-    petrol_factor, diesel_factor = reforms.pump_price_factors(scenario)
+    # Must use the damped pump factors, not the raw peaks: ``reforms`` returns
+    # the quoted peak moves, and the peak-to-year damping lives in ``incidence``
+    # alongside the gas damping. Reading the raw peaks here silently ran the
+    # elasticity and cap-lag sweeps on the peak-fuel upper bound rather than the
+    # main specification.
+    petrol_factor, diesel_factor = sustained_pump_factors(scenario)
     return {
         "gas": gas_factor,
         "electricity": elec_factor,

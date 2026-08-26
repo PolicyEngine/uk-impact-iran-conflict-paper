@@ -1,0 +1,24 @@
+{
+  "policy": "ippr_rebate",
+  "label": "IPPR network-windfall rebate (\u00a3183 flat)",
+  "cost_bn": 5.393116722394083,
+  "stated_cost_bn": NaN,
+  "share_to_bottom_three": 0.30838115740891053,
+  "cost_per_pound_decile_one": 0.029470583780063186,
+  "mean_gain_gbp": 182.999994923551,
+  "uncompensated_share_overall": 0.4070674777030945,
+  "uncompensated_by_decile": {
+    "1": 0.27690789103507996,
+    "2": 0.32826483249664307,
+    "3": 0.3330115079879761,
+    "4": 0.4373152256011963,
+    "5": 0.3840656876564026,
+    "6": 0.4392077922821045,
+    "7": 0.42727136611938477,
+    "8": 0.5161840915679932,
+    "9": 0.5170599818229675,
+    "10": 0.4264068007469177
+  },
+  "net_loss_after_policy_gbp": 161.55567228250936,
+  "fully_compensated_share": 0.5929325819015503
+}

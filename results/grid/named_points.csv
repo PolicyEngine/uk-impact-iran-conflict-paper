@@ -1,0 +1,5 @@
+scenario,label,gas_pct,oil_pct
+niesr_baseline,NIESR baseline ($103/bbl),22.22222222222222,39.75576662143826
+niesr_adverse,NIESR adverse ($140/bbl),50.0,89.95929443690636
+realised_2026,Realised 2026 shock,86.66666666666667,56.98778833107191
+realised_2026_peak_fuel,"Realised 2026 shock, undamped pump peak (upper bound)",86.66666666666667,56.98778833107191

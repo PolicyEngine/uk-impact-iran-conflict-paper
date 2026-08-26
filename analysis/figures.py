@@ -45,6 +45,8 @@ from uk_iran_conflict import scenarios as scen  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
 CENTRAL = "realised_2026"
+#: The undamped-pump run, used only as a visual upper-bound reference.
+PEAK_FUEL = "realised_2026_peak_fuel"
 SCENARIO_ORDER = ("niesr_baseline", "realised_2026", "niesr_adverse")
 POLICY_ORDER = (
     "social_tariff",
@@ -650,7 +652,34 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
     axr.set_ylim(0, 100)
     axr.yaxis.set_major_formatter(fs.PCT_FMT)
     axr.set_ylabel("Share of the household's loss, %")
-    axr.set_title("B motor fuel is ~two-thirds of the loss in every decile")
+    # The peak-fuel run charges the observed pump peak for a full year; the main
+    # specification damps it on the same logic as the gas peak. Marking where
+    # the motor-fuel segment would start under that upper bound turns the panel
+    # into the range the paper reports, at the cost of one dashed line.
+    main_domestic = 100 * (s["gas_share_of_loss"] + s["electricity_share_of_loss"])
+    peak = shock(PEAK_FUEL)
+    peak_domestic = 100 * (
+        peak["gas_share_of_loss"] + peak["electricity_share_of_loss"]
+    )
+    axr.axhline(peak_domestic, ls="--", lw=1.3, color=fs.DARK, zorder=5)
+    # The bars fill the panel, so the label sits on the line itself in a
+    # white box rather than in non-existent white space.
+    axr.text(
+        3.0,
+        peak_domestic,
+        "peak-fuel upper bound: motor fuel "
+        f"{100 * peak['motor_fuel_share_of_loss']:.0f}% of the loss",
+        ha="center",
+        va="center",
+        fontsize=7.5,
+        color=fs.DARK,
+        zorder=6,
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.0, "alpha": 0.92},
+    )
+    axr.set_title(
+        f"B motor fuel is about {100 * s['motor_fuel_share_of_loss']:.0f}% "
+        "of the loss in every decile"
+    )
     fs.only_y_grid(axr)
 
     for ax in (axl, axr):
@@ -664,11 +693,15 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
     )
     fs.note(
         fig,
-        f"Realised 2026 scenario. Across all households motor fuel is "
+        f"Realised 2026, main specification (the pump peak damped on the same "
+        f"logic as the wholesale gas peak). Across all households motor fuel is "
         f"{100 * s['motor_fuel_share_of_loss']:.0f}% of the aggregate loss, gas "
         f"{100 * s['gas_share_of_loss']:.0f}% and electricity "
-        f"{100 * s['electricity_share_of_loss']:.0f}% — so a domestic-bill instrument "
-        "can reach only about a third of the shock.\nSource: authors' calculations on "
+        f"{100 * s['electricity_share_of_loss']:.0f}%, so a domestic-bill instrument "
+        f"can reach at most {main_domestic:.0f}% "
+        f"of the shock; on the peak-fuel upper bound (dashed) motor fuel is "
+        f"{100 * peak['motor_fuel_share_of_loss']:.0f}% and that reach falls to "
+        f"{peak_domestic:.0f}%.\nSource: authors' calculations on "
         "PolicyEngine UK (LCFS-imputed spend, NEED-calibrated quantities).",
         y=-0.03,
     )
@@ -681,7 +714,7 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
 
 
 def fig6_uncompensated() -> Path:
-    fig, ax = plt.subplots(figsize=(10.4, 5.4))
+    fig, ax = plt.subplots(figsize=(10.8, 4.9))
     d = np.arange(1, 11)
 
     for key in POLICY_ORDER:
