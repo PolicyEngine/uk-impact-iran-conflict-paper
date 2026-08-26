@@ -1,0 +1,24 @@
+{
+  "policy": "whd_expansion",
+  "label": "Warm Home Discount expansion (\u00a3150)",
+  "cost_bn": 0.6923133572888732,
+  "stated_cost_bn": NaN,
+  "share_to_bottom_three": 0.6003247902750178,
+  "cost_per_pound_decile_one": 0.01431272727992556,
+  "mean_gain_gbp": 23.491674182258254,
+  "uncompensated_share_overall": 0.8705954551696777,
+  "uncompensated_by_decile": {
+    "1": 0.7284346222877502,
+    "2": 0.7284506559371948,
+    "3": 0.7590050101280212,
+    "4": 0.8047019243240356,
+    "5": 0.8415564298629761,
+    "6": 0.9213680624961853,
+    "7": 0.9498600363731384,
+    "8": 0.9780929088592529,
+    "9": 0.9840695261955261,
+    "10": 0.9954168796539307
+  },
+  "net_loss_after_policy_gbp": 292.749024883151,
+  "fully_compensated_share": 0.12940463423728943
+}

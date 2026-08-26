@@ -1,130 +1,85 @@
-% =====================================================================
-% SCAFFOLD --- robustness tables and figures pending analysis/run_all.py
-% and analysis/robustness.py. Labels and captions are final; table bodies
-% and \gen* macro values are emitted by analysis/emit_tex_values.py.
-% =====================================================================
-
 \appendix
-\section{Additional tables and figures}
+\section{Sensitivity, robustness and reproduction}
 \label{sec:appendix}
 
-\subsection{Elasticity sensitivity}
+Three sweeps are reported, each re-running the full pipeline on the realised 2026 central scenario against the same baseline. They are presented in order of how much they move the answer, and that ordering is itself the appendix's main message: \textbf{demand response dominates, the calendar-year lag comes second, and the marginal-pricing share is a distant third}. A reader deciding where to direct scepticism should direct it at the elasticity assumption and nowhere else.
+
+No constituency-level robustness statistic appears in this appendix. The data release carries no constituency weight matrix, so the seat-level rank correlations an earlier design called for are not computable and none has been substituted (Section~\ref{sec:step3}).
+
+\subsection{Demand response: the sweep that matters}
 \label{app:elasticity}
 
-The main specification is zero-elasticity by construction: equation~\eqref{eq:firstorder} evaluates the price change at pre-shock quantities, which is the \citet{deaton1980} first-order approximation and an upper bound on the welfare loss. Elasticity is therefore a robustness check on the main result, not an alternative main result --- an important framing point, because a paper that reported an elasticity-adjusted central estimate would be reporting a number driven by a parameter it did not estimate.
+The main specification is zero-elasticity by construction: equation~\eqref{eq:firstorder} evaluates the price change at pre-shock quantities, which is the \citet{deaton1980} first-order approximation and an explicit upper bound on the welfare loss. Elasticity is therefore a robustness check on the main result, not an alternative main result --- an important framing point, because an elasticity-adjusted central estimate would be a number driven by a parameter this paper does not estimate.
 
-I re-run the full pipeline under constant own-price elasticities of $-0.2$, $-0.4$, $-0.6$ and $-0.8$, applied separately to gas, electricity and road fuel, with the upper end anchored on the 0.8 used in UKMOD's total cost of ownership routine. Two features of the results are worth anticipating. First, the aggregate loss shrinks monotonically with the elasticity, by construction. Second --- and this is the substantive check --- the \emph{distributional} results should be far more stable than the aggregate ones, because the elasticity is applied uniformly and therefore scales all households similarly; the extent to which the decile gradient and the constituency rank correlation move under elasticity variation is the test of whether the paper's conclusions survive the assumption. Under an elasticity of $-0.8$ the mean loss falls to \genElasticityMeanLossHigh{} per cent of its zero-elasticity value while the constituency rank correlation moves to \genElasticityRankCorrHigh{}, against \genConstituencyRankCorr{} in the main specification.
+The sweep applies the constant-elasticity spend factor $(p_1/p_0)^{1+\varepsilon}$ --- never a linear approximation, which would misbehave at the top of the grid --- over a flat grid from $\varepsilon = 0$ to $\varepsilon = -0.8$, and additionally under five named published specifications: Labandeira, Labeaga and L\'opez-Otero's short- and long-run per-carrier means, Priesmann and Praktiknjo's income-varying short and long run, and a replication of a prior repository's decile-varying configuration.
 
-A caveat on the exercise itself: applying a constant elasticity to a capped price is not innocuous, because households facing a standing charge plus a unit rate face a marginal price that differs from their average price, and the block designs scored in Section~\ref{sec:results-policy} change the marginal price for some households and not others. The elasticity sweep here uses the unit rate as the relevant margin and does not model standing-charge effects.
+\paragraph{Magnitude.} This is by a wide margin the largest source of uncertainty in the paper. The aggregate loss runs from \pounds\genElasticityAggZeroBn{} billion at $\varepsilon = 0$ to \pounds\genElasticityAggHighBn{} billion at $\varepsilon = -0.8$, and the relationship is close to linear: each additional $0.1$ of elasticity removes roughly a tenth of the upper bound. Quoted as a range that alone spans a factor of five, which would make the paper uninformative --- so the relevant question is which part of the grid is credible for a within-year price spike.
 
-\begin{table}[htbp]
-\centering
-\caption{Elasticity sensitivity: mean loss, decile-one and decile-ten percentage losses, aggregate additional spending, and the constituency rank correlation, under own-price elasticities of 0 (main specification), $-0.2$, $-0.4$, $-0.6$ and $-0.8$.}
-\label{tab:elasticity}
-\begin{tabular}{lrrrrr}
-\toprule
-Elasticity & Mean \pounds\ loss & D1 \% & D10 \% & Aggregate (\pounds bn) & Rank corr. \\
-\midrule
-% populated from results/robustness/elasticity_sweep.csv
-\multicolumn{6}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{The credible short-run band is much narrower.} The published short-run estimates cluster tightly. Labandeira's short-run per-carrier means shave \genLabandeiraShortShaved{} per cent off the upper bound; Priesmann's income-varying short run shaves \genPriesmannShortShaved{} per cent. A reader who rejects the zero-elasticity headline outright therefore lands near \pounds 10 billion and a mean household loss in the low \pounds 300s, not somewhere qualitatively different from the \pounds\genAggSpendRealisedBn{} billion and \pounds\genCentralLossMean{} reported in the main specification. Labandeira's \emph{long}-run figures shave 72 per cent, but they embed appliance and vehicle stock turnover and are the wrong horizon for a 2026 spike; they bound the exercise and are not a candidate headline.
+
+\paragraph{What does not change.} Nothing about the distributional story. A flat elasticity rescales every decile by the same factor, so the decile-one to decile-ten percentage ratio stays at \genDecileRatioPct{} to one across the entire flat grid. The income-varying specifications \emph{do} flatten the gradient --- Priesmann's takes the ratio from \genDecileRatioPct{} to \genPriesmannDecileRatio{} to one --- because poor households are modelled as the ones with room to cut back. That flattening is precisely the ``heat or eat'' objection in numerical form: it treats involuntary rationing as welfare-neutral substitution, and treating a household that cannot afford to heat its home as having merely revealed a preference is the substantive reason this paper keeps the upper bound as its headline. Either way the qualitative ordering survives every row of the sweep: the poor lose more in percentage terms and less in cash in all fourteen specifications.
+
+\input{tables/tab_elasticity}
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/figA1_elasticity.png}
-\caption{Decile incidence profile under each assumed own-price elasticity. Flat relative spacing between the lines indicates that the distributional conclusions are invariant to the elasticity assumption even where the level of the loss is not.}
+\caption{Decile incidence profile under each elasticity specification. The parallel spacing of the flat-grid lines shows that the distributional conclusions are invariant to a uniform elasticity assumption even where the level of the loss is not; the income-varying specifications flatten the gradient, for the reason discussed in the text.}
 \label{fig:elasticity}
 \end{figure}
 
-\subsection{Scenario sensitivity}
-\label{app:scenario}
+A caveat on the exercise itself: applying a constant elasticity to a capped price is not innocuous, because households facing a standing charge plus a unit rate face a marginal price that differs from their average price, and the block designs scored in Section~\ref{sec:policy} change the marginal price for some households and not others. The sweep uses the unit rate as the relevant margin and does not model standing-charge effects.
 
-Table~\ref{tab:scenariogrid} reports the headline aggregates across a grid of oil and gas paths, rather than only the three named scenarios of Section~\ref{sec:step1}. The grid varies Brent from \$80 to \$160 per barrel and the gas premium over baseline from zero to 100 per cent, on the grounds that the correlation between oil and gas is imperfect --- Hormuz closure affects LNG and crude through partially distinct channels, and the UK's exposure runs primarily through gas while its inflation exposure runs substantially through oil. Reporting a grid rather than a scenario line makes the separate sensitivities visible: the household loss is far more responsive to the gas axis than the oil axis, while the CPI implication of any cell is the reverse.
-
-\begin{table}[htbp]
-\centering
-\caption{Scenario grid: mean household loss and bottom-decile percentage loss across Brent price levels and gas premia. Named scenarios of Section~\ref{sec:step1} marked.}
-\label{tab:scenariogrid}
-\begin{tabular}{lrrrrr}
-\toprule
-& \multicolumn{5}{c}{Gas premium over baseline} \\
-\cmidrule(lr){2-6}
-Brent (\$/bbl) & 0\% & 25\% & 50\% & 75\% & 100\% \\
-\midrule
-% populated from results/robustness/scenario_grid.csv
-\multicolumn{6}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=.85\textwidth]{../results/figures/figA2_scenario_grid.png}
-\caption{Heat map of the mean household loss across the oil-price and gas-premium grid, with the three named scenarios marked. The near-vertical contours show that UK household incidence is driven by the gas axis.}
-\label{fig:scenariogrid}
-\end{figure}
-
-\subsection{Cap-lag and pass-through sensitivity}
+\subsection{Cap lag: a windowing artefact, not an effect}
 \label{app:caplag}
 
-The two parameters of equation~\eqref{eq:passthrough} are calibrated rather than estimated (Section~\ref{sec:discussion}, gap (a)), so their sensitivity is reported explicitly. I vary the pass-through coefficient $\phi_{\text{gas}}$ over $\{0.35, 0.40, 0.45, 0.50, 0.55\}$, spanning the published range of the wholesale share of a dual-fuel bill, and the lag $\ell$ over two, three and four quarters. I also vary the electricity attenuation factor $\psi$ over the range implied by marginal-pricing frequencies between 75 and 95 per cent.
+The lag $\ell$ in equation~\eqref{eq:passthrough} places the quarterly phase-in profile on the calendar starting at 2026Q1. It is the paper's most contestable calibration, so it is swept over one to four quarters and both the annualised 2026 loss and the undiscounted cumulative loss over the whole path are reported. The domestic-energy channel is lagged; motor fuel is not, because pump prices pass through in weeks.
 
-The lag matters for a different reason than the coefficient. Because losses are annualised over the modelled year (Section~\ref{sec:step1}), lengthening the lag pushes part of the shock outside the reporting window, which reduces the measured loss without reducing the shock --- a reporting-window artefact rather than an economic effect. Table~\ref{tab:caplag} therefore reports both the annualised loss and the undiscounted cumulative loss over the full path, so the two can be distinguished. Under $\ell = 4$ quarters the annualised loss falls to \genLagFourAnnualisedShare{} per cent of the main specification while the cumulative loss changes by \genLagFourCumulativeShare{} per cent.
+The two columns tell opposite stories, and that is the point of reporting both. The \emph{cumulative} loss is exactly invariant to the lag: \pounds\genCapLagCumulativeMean{} per household, \pounds\genCapLagCumulativeBn{} billion, at every value of $\ell$ from one to four. A lag shifts the path in time; it does not change its size. The \emph{annualised} 2026 figure, by contrast, falls from \pounds\genCapLagAnnualisedLagOne{} at $\ell = 1$ to \pounds\genCapLagAnnualisedLagFour{} at $\ell = 4$, with the paper's $\ell = 3$ giving \pounds\genCapLagAnnualisedPaper{}. That entire movement is a windowing artefact: at $\ell = 3$ only 2026Q4 falls inside the calendar year, so a small fraction of the eventual domestic pass-through is booked to 2026 and the shock is overwhelmingly a 2027 event that the 2026 window happens to clip.
 
-\begin{table}[htbp]
-\centering
-\caption{Cap pass-through and lag sensitivity: annualised and cumulative mean household loss under alternative $\phi_{\text{gas}}$, lag $\ell$, and electricity attenuation $\psi$.}
-\label{tab:caplag}
-\begin{tabular}{lrrrr}
-\toprule
-Specification & $\phi_{\text{gas}}$ & $\ell$ (quarters) & Annualised \pounds & Cumulative \pounds \\
-\midrule
-% populated from results/robustness/cap_lag_sweep.csv
-\multicolumn{5}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
+Two consequences for how the paper's numbers should be read. First, any statement of the form ``the 2026 loss is $X$'' is lag-sensitive by roughly \pounds 40 per household across the plausible range, while any statement about the total burden of the shock is not sensitive at all --- so the cumulative figure is quoted as the burden and the annual figure only as calendar-year attribution. Second, the annualised figures are dominated by motor fuel (\pounds\genMotorFuelAnnualisedBn{} billion of the annualised total at $\ell = 3$), precisely because the fast pump channel and the slow cap channel arrive in different years. That is a result worth stating rather than a footnote: the 2026 calendar year is almost purely a pump-price event, and the domestic-bill event lands in 2027, after the Budget that is supposed to respond to it.
+
+\input{tables/tab_caplag}
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/figA3_cap_lag.png}
-\caption{Modelled cap paths under alternative pass-through coefficients and lags, against the realised Ofgem announcements for the quarters already published. The fit to the published quarters is the only external validation available for the calibration.}
+\caption{Annualised and cumulative mean household loss under lags of one to four quarters. The flat cumulative line against the declining annualised line is the distinction the appendix is built to make.}
 \label{fig:caplag}
 \end{figure}
 
-\subsection{Asymmetry check}
+\subsection{Marginal-pricing share: composition, not incidence}
 \label{app:asymmetry}
 
-Because asymmetric gas-electricity shocking is the paper's distinctive modelling choice, Table~\ref{tab:asymmetry} reports what changes if it is abandoned. The symmetric counterfactual applies a single proportional shock to total domestic energy consumption, as a model without separate fuel quantities would be obliged to do. The aggregate loss is close to unchanged by construction; the comparison of interest is the constituency rank correlation and the composition of the tails, which is where the choice bites.
+The share of the time a gas-fired plant sets the GB marginal electricity price governs how far a wholesale gas move reaches the electricity cap. The main specification uses 0.85; setting it to 1.00 recovers the naive symmetric assumption that the move reaches electricity undamped, and 0.70 bounds it from below.
 
-\begin{table}[htbp]
-\centering
-\caption{Asymmetric versus symmetric fuel shocking: aggregate loss, decile profile, constituency rank correlation, and the number of seats changing tail membership.}
-\label{tab:asymmetry}
-\begin{tabular}{lrr}
-\toprule
-& Asymmetric (main) & Symmetric \\
-\midrule
-% populated from results/robustness/asymmetry_check.csv
-\multicolumn{3}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
+Stated plainly: it barely moves the answer. Going the whole way from 0.70 to 1.00 changes the mean household loss from \pounds\genAsymMeanLossLow{} to \pounds\genAsymMeanLossHigh{}, a difference of \genAsymMeanShiftPct{} per cent, and the decile-one to decile-ten percentage ratio is frozen at \genAsymRatioLow{} against \genAsymRatioHigh{} across the entire range. Nothing in the paper's distributional conclusions turns on this parameter, and Section~\ref{sec:step1} says so rather than claiming otherwise.
+
+Where it does bite is composition, which is the one column that moves materially: the gas share of the domestic-energy loss falls from \genGasShareDomesticLow{} per cent at 0.70 to \genGasShareDomesticHigh{} per cent at 1.00, against \genGasShareDomesticCentral{} per cent in the main specification. Under the naive symmetric assumption the shock looks like an essentially even gas--electricity event; under the paper's calibration it is meaningfully gas-weighted. That matters for policy design and not for headline incidence: a gas-only social tariff, an electricity-side levy rebate, and the JRF block's choice of which unit rate to discount all land differently depending on which fuel carries the loss.
+
+The honest summary is therefore narrow. The asymmetry is defensible on its merits and is the right modelling choice, but it is a compositional refinement rather than a load-bearing assumption. A referee who insists on the symmetric assumption gets a five per cent larger mean loss and identical distributional conclusions. And it moves the answer an order of magnitude less than the elasticity assumption does --- five per cent against up to 82 per cent --- which is why the uncertainty ranking at the head of this appendix puts it last.
+
+\input{tables/tab_asymmetry}
+
+\subsection{Upstream contributions arising}
+\label{app:upstream}
+
+Three of this paper's limitations are model gaps rather than data gaps, and each is precise enough to fix. They are contributed upstream to PolicyEngine UK rather than only reported here: a live price channel for the imputed energy variables, so that a cap or pump-price reform moves household spend rather than silently cutting quantities; a Warm Home Discount parameter and variable, which the model currently lacks entirely; and a primary-heating-fuel or gas-grid indicator in the microdata, without which the off-gas-grid question in Section~\ref{sec:discussion} cannot be asked of any UK microsimulation. The dead \texttt{gov.contrib.policyengine.economy.energy\_bills} parameter is flagged for removal or implementation.
 
 \subsection{Reproduction}
 \label{app:reproduce}
 
-All code, parameters and aggregate results are in the paper's public repository. The microdata are not: PolicyEngine UK's enhanced dataset is held in a private Hugging Face repository under a licence that does not permit redistribution, so reproducing the household results requires a token with access to \texttt{policyengine/policyengine-uk-data}. The aggregate outputs in \texttt{results/} are committed, so every number in the paper can be traced from the JSON and CSV artifacts to the macro that renders it without re-running the microsimulation.
+All code, parameters and aggregate results are in the paper's public repository. The microdata are not: PolicyEngine UK's enhanced dataset is held in a private Hugging Face repository under a licence that does not permit redistribution, so reproducing the household results requires a token with access to it. The aggregate outputs in \texttt{results/} are committed, so every number in the paper can be traced from the JSON and CSV artefacts to the macro that renders it without re-running the microsimulation.
 
 \begin{verbatim}
 uv sync
-export HUGGING_FACE_TOKEN=hf_...     # needs policyengine-uk-data access
-python analysis/run_all.py           # scenarios + reforms -> results/*.json
+export HUGGING_FACE_TOKEN=hf_...     # needs private dataset access
+python analysis/run_incidence.py     # scenarios + policies -> results/*.json
+python analysis/run_sensitivity.py   # three sweeps -> results/sensitivity/*.csv
+python analysis/emit_tables.py       # results/ -> paper/tables/*.tex
 python analysis/emit_tex_values.py   # results/ -> paper/values_generated.tex
 python -m pytest tests/              # runs without microdata
 cd paper && latexmk -pdf main.tex
 \end{verbatim}
 
-Every headline number enters the prose as a macro from \texttt{paper/values\_generated.tex}, emitted mechanically from \texttt{results/}. A macro with no corresponding key in \texttt{results/} renders as \texttt{\textbackslash GENMISSING}, so a stale or partial results tree fails visibly in the compiled PDF rather than silently preserving superseded numbers. Pinned dependency versions, including the \texttt{policyengine-uk} release used, are in \texttt{pyproject.toml} and \texttt{uv.lock}.
+Every headline number enters the prose as a macro from \texttt{paper/values\_generated.tex}, emitted mechanically from \texttt{results/}. A macro with no corresponding key in \texttt{results/} renders as \texttt{\textbackslash GENMISSING}, so a stale or partial results tree fails visibly in the compiled PDF rather than silently preserving superseded numbers; the same mechanism is what forced the removal of the constituency and heating-fuel claims from this draft rather than allowing them to survive as unbacked prose. Pinned dependency versions, including the \texttt{policyengine-uk} release used, are in \texttt{pyproject.toml} and \texttt{uv.lock}.

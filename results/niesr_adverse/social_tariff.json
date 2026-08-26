@@ -1,0 +1,24 @@
+{
+  "policy": "social_tariff",
+  "label": "Means-tested social tariff (35% bill discount)",
+  "cost_bn": 1.381111808,
+  "stated_cost_bn": NaN,
+  "share_to_bottom_three": 0.5750645323568184,
+  "cost_per_pound_decile_one": 0.016256040338324472,
+  "mean_gain_gbp": 46.864078521728516,
+  "uncompensated_share_overall": 0.8603433966636658,
+  "uncompensated_by_decile": {
+    "1": 0.7132125496864319,
+    "2": 0.7101688981056213,
+    "3": 0.7408097982406616,
+    "4": 0.7788837552070618,
+    "5": 0.8316732048988342,
+    "6": 0.910591721534729,
+    "7": 0.9475220441818237,
+    "8": 0.9751639366149902,
+    "9": 0.9833570718765259,
+    "10": 0.9947558045387268
+  },
+  "net_loss_after_policy_gbp": 670.7360229492188,
+  "fully_compensated_share": 0.13965657353401184
+}

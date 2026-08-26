@@ -1,0 +1,24 @@
+{
+  "policy": "jrf_block",
+  "label": "JRF universal discounted block (50% of typical use, + per-child)",
+  "cost_bn": 2.3135637284365025,
+  "stated_cost_bn": 5.0,
+  "share_to_bottom_three": 0.3161262332244344,
+  "cost_per_pound_decile_one": 0.027302980219275682,
+  "mean_gain_gbp": 78.50416973197757,
+  "uncompensated_share_overall": 0.8827388882637024,
+  "uncompensated_by_decile": {
+    "1": 0.856701135635376,
+    "2": 0.877499520778656,
+    "3": 0.8189218640327454,
+    "4": 0.8977296948432922,
+    "5": 0.8860527873039246,
+    "6": 0.8879145383834839,
+    "7": 0.8763933777809143,
+    "8": 0.8843297958374023,
+    "9": 0.912714958190918,
+    "10": 0.9163033366203308
+  },
+  "net_loss_after_policy_gbp": 639.0959476537895,
+  "fully_compensated_share": 0.11726114898920059
+}

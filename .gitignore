@@ -30,3 +30,6 @@ paper/main.pdf
 paper/*.log
 paper/*.blg
 paper/*.xdv
+
+# real figures ARE committed; only the build artifacts are not
+!results/figures/

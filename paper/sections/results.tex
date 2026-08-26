@@ -1,174 +1,135 @@
-% =====================================================================
-% SCAFFOLD ONLY --- pending analysis/run_all.py
-% No results exist yet. This section fixes the table and figure schedule,
-% their labels, captions and the \gen* macros each will consume, so that
-% analysis/emit_tex_values.py can be written against a settled contract.
-% Every numeric claim below is a \gen* macro; missing keys emit \GENMISSING
-% so a stale results/ tree fails visibly at build time. Prose around the
-% macros is written in final form where the sign or ordering of the result
-% is implied by construction, and left deliberately neutral where it is not.
-% =====================================================================
-
 \section{Results}
 \label{sec:results}
 
-I report the price path first, then first-order incidence by decile, then the constituency crossing that is the paper's central object, then the policy scorecard. Unless stated otherwise, figures are for the realised 2026 scenario; the baseline and adverse scenarios bound it and are reported alongside. All losses are annual, in 2026 prices, and expressed both in pounds and as a share of equivalised disposable income on the HBAI concept.
+I report the price path first, then the aggregate and mean loss, then incidence by decile on both metrics, then the within-decile dispersion that the decile averages conceal, then the decomposition of the loss by fuel---which is the section that reframes the policy problem---then incidence by region, and finally the policy scorecard. Unless stated otherwise, figures are for the realised 2026 scenario; the NIESR baseline and adverse scenarios bound it and are reported alongside in Table~\ref{tab:scenario}. All losses are annual, in 2026 prices, and expressed both in pounds and as a share of equivalised disposable income on the HBAI concept. All estimates are gross of any policy response until Section~\ref{sec:results-policy}, static, use-side only, and computed at zero demand elasticity, which makes them an explicit upper bound for a given price path.
 
 \subsection{The price path}
 \label{sec:results-prices}
 
-Table~\ref{tab:pricepath} reports the modelled quarterly path of the Ofgem default tariff cap and of pump prices under each scenario, alongside the wholesale inputs that generate them through equation~\eqref{eq:passthrough}. Under the realised scenario the annualised gas unit rate rises \genGasUnitRatePct{} per cent and the electricity unit rate \genElecUnitRatePct{} per cent, the asymmetry reflecting the smaller wholesale share of the electricity cap; the annualised dual-fuel cap for a typical household reaches \pounds \genCapAnnualised{} against \pounds \genCapBaselineLevel{} in the pre-shock baseline.
-
-\begin{table}[htbp]
-\centering
-\caption{Modelled wholesale inputs, Ofgem cap path and pump prices by quarter and scenario. Wholesale columns are forward-window averages; cap columns apply the pass-through coefficient $\phi_f$ and lag $\ell$ of Section~\ref{sec:step1}; the final row annualises by consumption-weighted averaging over the modelled year.}
-\label{tab:pricepath}
-\begin{tabular}{lrrrrrr}
-\toprule
-& \multicolumn{2}{c}{Baseline} & \multicolumn{2}{c}{Realised} & \multicolumn{2}{c}{Adverse} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
-Quarter & Gas & Elec. & Gas & Elec. & Gas & Elec. \\
-\midrule
-% populated by analysis/emit_tex_values.py from results/price_path.csv
-\multicolumn{7}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
+Under the realised scenario the annualised gas unit rate rises \genGasUnitRatePct{} per cent and the electricity unit rate \genElecUnitRatePct{} per cent, the asymmetry reflecting the smaller wholesale share of the electricity cap and the different lag structure of the two fuels. The annualised dual-fuel cap for a typical household reaches \pounds \genCapAnnualised{} against \pounds \genCapBaselineLevel{} in the pre-shock baseline. On the road-fuel side the wholesale move enters far more directly: pump prices track crude with a lag of weeks rather than quarters and with no cap to attenuate them, which is the mechanical reason for the fuel decomposition reported in Section~\ref{sec:results-fuel}.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/fig1_price_path.png}
-\caption{Wholesale gas and oil paths and the implied Ofgem cap and pump-price paths, by scenario. The visible horizontal displacement between the wholesale series and the cap series is the two-to-three-quarter averaging lag; the vertical compression is the wholesale share of the bill.}
+\caption{Wholesale gas and oil paths and the implied Ofgem cap and pump-price paths, by scenario. The horizontal displacement between the wholesale series and the cap series is the two-to-three-quarter averaging lag; the vertical compression is the wholesale share of the bill. The pump-price series shows neither, which is why road fuel dominates the loss.}
 \label{fig:pricepath}
 \end{figure}
 
-Figure~\ref{fig:pricepath} makes the two transmission features visible at once: the lag between the wholesale move and the household bill, and the attenuation from the non-commodity components of the cap. It is also the figure that shows why peak-based bill-rise estimates in the policy literature exceed annualised ones.
+Figure~\ref{fig:pricepath} makes the two transmission features of the domestic cap visible at once: the lag between the wholesale move and the household bill, and the attenuation from the non-commodity components of the cap. It is also the figure that shows why peak-based bill-rise estimates in the policy literature exceed annualised ones. One consequence of the lag deserves emphasis, and is developed in the appendix: because the cap moves in quarterly steps, the choice of lag reallocates the loss across calendar years without changing its cumulative size, so the cumulative figure is the one to read and the annual figure is an attribution convention.
 
-\subsection{First-order incidence by decile}
-\label{sec:results-decile}
+\subsection{Aggregate and mean loss}
+\label{sec:results-aggregate}
 
-Table~\ref{tab:decile} reports the annual cost increase by equivalised disposable income decile in pounds and as a share of income. The mean household loses \pounds \genCentralLossMean{}, or \genCentralLossPctIncome{} per cent of income. The two orderings diverge by construction of the underlying data rather than by assumption: in cash the loss rises across deciles, from \pounds \genDecileOneLossGbp{} in decile one to \pounds \genDecileTenLossGbp{} in decile ten, while as a share of income it falls, from \genDecileOneLossPct{} per cent to \genDecileTenLossPct{} per cent. The ratio of the bottom-decile to top-decile percentage loss is \genDecileRatioPct{}.
+Additional household spending on gas, electricity and motor fuel under the realised scenario totals \pounds \genAggSpendRealisedBn{} billion, or \pounds \genCentralLossMean{} for the mean household, equal to \genCentralLossPctIncome{} per cent of equivalised disposable income on the aggregate ratio. The bounding scenarios put the aggregate at \pounds \genAggSpendBaselineBn{} billion under the NIESR baseline and \pounds \genAggSpendAdverseBn{} billion under the adverse \$140 case, a range of better than two to one that is driven entirely by the assumed commodity path rather than by anything in the microdata.
 
 \begin{table}[htbp]
 \centering
-\caption{Annual household energy cost increase by equivalised disposable income decile, realised scenario: mean pound loss, loss as a share of equivalised disposable income, and the decomposition into gas, electricity and road fuel. Gross of any policy response.}
+\caption{Headline aggregates under the NIESR baseline, NIESR adverse and realised 2026 scenarios. Static, use-side only, zero-elasticity; see Section~\ref{sec:limitations}.}
+\label{tab:scenario}
+\input{tables/tab_scenario}
+\end{table}
+
+The mean loss admits one external check. The Resolution Foundation, working independently and from a different method, put a typical working-age household \pounds 480 worse off in 2026--27. My mean of \pounds \genCentralLossMean{} sits close to it. The two objects are not identical---theirs is a household-type figure over a fiscal year and covers a broader income concept, mine is a population mean over a calendar year restricted to the three energy channels---so the agreement should not be read as validation of the whole pipeline. It is, however, the kind of agreement one would want before believing a chain of imputations that has not previously been joined end to end, and its absence would have been a serious warning.
+
+\subsection{Incidence by decile: pounds against per cent}
+\label{sec:results-decile}
+
+Table~\ref{tab:decile} and Figure~\ref{fig:deciledual} report the annual cost increase by equivalised disposable income decile on both metrics. They disagree, and the disagreement is the paper's organising fact.
+
+\begin{table}[htbp]
+\centering
+\caption{Annual household energy and motor-fuel cost increase by equivalised disposable income decile, realised scenario: mean pound loss, loss as a share of equivalised disposable income, share of the aggregate loss borne, and weighted household counts. Gross of any policy response.}
 \label{tab:decile}
-\begin{tabular}{lrrrrr}
-\toprule
-Decile & \pounds\ loss & \% of income & Gas & Electricity & Road fuel \\
-\midrule
-% populated from results/decile_incidence.csv
-\multicolumn{6}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
+\input{tables/tab_decile}
 \end{table}
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/fig2_decile_dual.png}
-\caption{Energy cost increase by income decile on two metrics: bars give the mean loss in pounds (left axis), the line gives the loss as a share of equivalised disposable income (right axis). The crossing of the two series is the paper's organising fact.}
+\caption{Energy and motor-fuel cost increase by income decile on two metrics: bars give the mean loss in pounds (left axis), the line gives the loss as a share of equivalised disposable income (right axis). The divergence of the two series is the paper's organising fact.}
 \label{fig:deciledual}
 \end{figure}
+
+As a share of income the burden falls steeply and almost monotonically, from \genDecileOneLossPct{} per cent in decile one to \genDecileTenLossPct{} per cent in decile ten, a ratio of \genDecileRatioPct{} to one. The one interruption is decile eight, at \genDecileEightLossPct{} per cent, which sits above deciles six, seven and nine; the reason is the same one that governs the cash profile.
+
+In pounds the picture is different, and here the earlier draft of this paper was simply wrong. The cash loss does \emph{not} rise monotonically across deciles. It runs from \pounds \genDecileOneLossGbp{} in decile one to \pounds \genDecileTenLossGbp{} in decile ten, so the endpoints are ordered as \citet{fetzer2024} would predict, but the maximum falls on decile \emph{eight}, at \pounds \genDecileEightLossGbp{}, with decile nine at \pounds \genDecileNineLossGbp{} also above the top decile; and decile one loses more in cash than deciles two and three. The Fetzer--Gazze--Bishop result---that affluent areas are more exposed in pounds---therefore holds in this data as a broad tendency and fails as a monotone ranking. Reporting it as monotone, as the policy literature often does when it quotes only the endpoints, would overstate how cleanly a consumption-proportional subsidy tracks income.
+
+The obvious referee objection to the percentage gradient is that it is an artefact of dividing by small incomes at the bottom. It is not, and the point is worth settling before proceeding. First, the gradient survives on medians rather than aggregate ratios, and in fact widens: the median household in decile one loses \genDecileOneMedianLossPct{} per cent of income against \genDecileTenMedianLossPct{} per cent in decile ten, a ratio of \genMedianDecileRatioPct{} to one against \genDecileRatioPct{} to one on the aggregate ratio. A median is immune to a handful of near-zero denominators by construction. Second, decile one's median equivalised disposable income is \pounds \genDecileOneMedianIncomeGbp{}, which is a low income but not a degenerate one. Third, only \genDecileOneZeroIncomeShare{} per cent of decile-one households report zero or negative income, so the population capable of generating an explosive ratio is negligible. The percentage gradient is a property of budget shares, not of the denominator.
+
+Two features of the bottom decile are nonetheless real and should not be smoothed over. Its aggregate-ratio burden of \genDecileOneLossPct{} per cent is roughly three times its median burden of \genDecileOneMedianLossPct{} per cent, which tells us that the decile-one mean is pulled up by a genuinely extreme upper tail rather than by measurement noise; and that tail is the subject of the next subsection.
+
+\subsection{Within-decile dispersion}
+\label{sec:results-heterogeneity}
+
+Decile averages are the wrong summary for this shock. Table~\ref{tab:intradecile} reports the tenth, fiftieth and ninetieth percentiles of the percentage burden within each decile, together with the share of households in each decile losing more than five and more than ten per cent of net income.
+
+\begin{table}[htbp]
+\centering
+\caption{Within-decile distribution of the percentage burden, realised scenario: percentiles of the loss as a share of equivalised disposable income, and the share of households losing more than five and more than ten per cent of income, by decile.}
+\label{tab:intradecile}
+\input{tables/tab_intra_decile}
+\end{table}
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/fig3_within_decile.png}
-\caption{Within-decile dispersion of the percentage loss: box plots by decile with whiskers at the 10th and 90th percentiles. Shows how far horizontal dispersion inside each decile exceeds the vertical gradient across deciles.}
+\caption{Within-decile dispersion of the percentage loss: distribution by decile with markers at the tenth, fiftieth and ninetieth percentiles. Horizontal dispersion inside each decile exceeds the vertical gradient across decile means.}
 \label{fig:withindecile}
 \end{figure}
 
-Figure~\ref{fig:withindecile} is the within-decile counterpart. The interdecile range of the mean percentage loss is \genBetweenDecileRangePct{} percentage points, while the mean within-decile interdecile range is \genWithinDecileRangePct{} percentage points --- the quantitative form of the \citet{cronin2019} point, and the reason the uncompensated-loser metric in Section~\ref{sec:results-policy} does work that decile averages cannot.
+The interdecile range of the mean percentage loss---the vertical, between-decile spread---is \genBetweenDecileRangePct{} percentage points. The mean within-decile p90--p10 range is \genWithinDecileRangePct{} percentage points. Horizontal dispersion inside deciles thus exceeds vertical dispersion across them, which is the quantitative form of the \citet{cronin2019} result and, so far as I know, its first statement for a UK energy shock. Decile one is much the widest: its ninetieth percentile burden is \genDecileOnePNinetyLossPct{} per cent of income against a median of \genDecileOneMedianLossPct{} per cent, and \genDecileOneShareAboveFivePct{} per cent of the decile loses more than five per cent of net income while \genDecileOneShareAboveTenPct{} per cent loses more than ten. These are the households the policy debate is nominally about, and no instrument calibrated on a decile mean will find them. It is also the reason the uncompensated-loser count in Section~\ref{sec:results-policy} does work that a decile-average incidence table cannot.
 
-\subsection{Fuel-mix and heating-type heterogeneity}
-\label{sec:results-heterogeneity}
+\subsection{What the loss is made of: motor fuel dominates}
+\label{sec:results-fuel}
 
-Table~\ref{tab:heating} breaks losses down by primary heating fuel and by on- versus off-gas-grid status. Because the shock is applied asymmetrically to gas and electricity, the ranking of household types is a direct consequence of the Step 1 calibration and not of the microdata alone: gas-heated households absorb the larger unit-rate move, while electrically heated and off-grid households face a smaller proportional move from a higher baseline unit cost. Off-gas-grid households lose \pounds \genOffGridLossGbp{} on average against \pounds \genOnGridLossGbp{} on grid.
-
-\begin{table}[htbp]
-\centering
-\caption{Losses by primary heating fuel, gas-grid connection, tenure and household composition, realised scenario. Reported in pounds and as a share of income, with the population share of each group.}
-\label{tab:heating}
-\begin{tabular}{lrrr}
-\toprule
-Group & Population share & \pounds\ loss & \% of income \\
-\midrule
-% populated from results/heterogeneity.csv
-\multicolumn{4}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Incidence by parliamentary constituency}
-\label{sec:results-constituency}
-
-Figure~\ref{fig:maps} is the paper's headline result: the same shock mapped across all 650 Westminster constituencies on the two metrics side by side. The left panel shades each seat by mean loss as a share of income; the right panel shades the same seats by mean loss in pounds. The two maps are close to negatives of one another. The Spearman rank correlation between the two constituency rankings is \genConstituencyRankCorr{}, and of the fifty seats worst affected in percentage terms only \genTailOverlapCount{} also appear among the fifty worst affected in pounds.
+Figure~\ref{fig:fueldecomp} decomposes the aggregate loss by fuel, and it is the single result in this paper most likely to change how the Autumn Budget question is posed.
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=\textwidth]{../results/figures/fig4_constituency_maps.png}
-\caption{Energy cost increase by Westminster parliamentary constituency, realised scenario. Left: mean loss as a share of equivalised disposable income. Right: mean loss in pounds per year. Same shock, same households, same colour scale quantiles --- opposite geographies. Constituency estimates rest on re-optimised synthetic weights (Section~\ref{sec:limitations}); rankings are more reliable than levels.}
-\label{fig:maps}
+\includegraphics[width=.85\textwidth]{../results/figures/fig5_fuel_decomposition.png}
+\caption{Decomposition of the aggregate household loss into motor fuel, gas and electricity, by scenario and by income decile. Motor fuel dominates in every scenario, and the domestic-bill channels together account for under a third of the total.}
+\label{fig:fueldecomp}
 \end{figure}
+
+Motor fuel accounts for \genMotorFuelShareOfLoss{} per cent of the aggregate loss under the realised scenario. Gas accounts for \genGasShareOfLoss{} per cent and electricity for \genElecShareOfLoss{} per cent. The split is stable across scenarios: under the NIESR adverse case it is \genMotorFuelShareOfLossAdverse{} per cent, \genGasShareOfLossAdverse{} per cent and \genElecShareOfLossAdverse{} per cent respectively. This is not primarily a domestic energy bill shock. It is primarily a pump price shock that also raises bills.
+
+Three things follow. The first is mechanical and explains Section~\ref{sec:results-decile}: the non-monotone cash profile is a vehicle-ownership profile, not a dwelling-efficiency profile. Car ownership, vehicle count and annual mileage all rise with income and then flatten or fall at the very top, where households are more urban, better served by public transport and more likely to hold a single low-mileage vehicle. Decile eight is where high mileage and multiple vehicles coincide most strongly, which is why it, and not decile ten, bears the largest cash loss. The efficiency channel that \citet{fetzer2024} identify is present in the gas component but is outweighed at the aggregate.
+
+The second is that the transmission mechanism is quite different from the one the price-cap literature analyses. The domestic channel is lagged, capped and attenuated to the wholesale share of the bill; the road-fuel channel is prompt, uncapped, and passes through close to one for one net of duty. The same wholesale move therefore reaches households mainly through the channel with the least institutional damping, which no analysis conducted in cap-path terms alone will show.
+
+The third is the policy implication, and it is severe. Every instrument in the live debate---the means-tested social tariff, the JRF universal discounted block, the Warm Home Discount expansion, and VAT zero-rating of domestic fuel---operates on the domestic bill. Each is therefore confined \emph{by construction} to at most \genDomesticShareOfLoss{} per cent of the loss, regardless of how well it is targeted within that share. When Section~\ref{sec:results-policy} finds that all four leave most losers uncompensated, the binding constraint is not targeting precision. It is that they are aimed at the smaller part of the shock. Fuel duty, which is the natural instrument on the larger part, is absent from the debate; I return to this in Section~\ref{sec:policy} while noting that its own distributional and environmental properties are far from straightforward.
+
+\subsection{Incidence by region}
+\label{sec:results-region}
+
+The finest geography available on this microdata is the region, of which there are twelve including the three devolved nations. Constituency-level estimates, which an earlier version of this paper proposed as its headline, are not possible here: the microdata carries no constituency weight matrix and its local-authority field is a degenerate default. Section~\ref{sec:limitations} sets out what would be required to restore that analysis. Region is a coarse cut, and I report it as a description rather than as a causal claim about places.
+
+\begin{table}[htbp]
+\centering
+\caption{Mean household loss by region and devolved nation, realised scenario, in pounds and as a share of equivalised disposable income, with weighted household counts. Ranked by percentage burden.}
+\label{tab:region}
+\input{tables/tab_region}
+\end{table}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=.75\textwidth]{../results/figures/fig5_constituency_scatter.png}
-\caption{Constituency-level scatter of pound loss against percentage-of-income loss, with seats in either tail labelled and marker size proportional to the seat's share of households on means-tested benefits. The scatter quantifies what the paired maps show qualitatively.}
-\label{fig:constituencyscatter}
+\includegraphics[width=.85\textwidth]{../results/figures/fig4_region.png}
+\caption{Mean loss by region on both metrics, pounds and per cent of equivalised disposable income. The two rankings agree far more closely at regional level than the decile rankings do, because regional income differences dominate the within-region composition effects that drive the decile result.}
+\label{fig:region}
 \end{figure}
 
-\begin{table}[htbp]
-\centering
-\caption{The twenty constituencies worst affected on each metric, side by side, with each seat's rank on the other metric. Illustrates directly that a policy calibrated to one ranking misses the other.}
-\label{tab:worstseats}
-\begin{tabular}{lrrlrr}
-\toprule
-\multicolumn{3}{c}{Worst by \% of income} & \multicolumn{3}{c}{Worst by \pounds} \\
-\cmidrule(lr){1-3}\cmidrule(lr){4-6}
-Constituency & \% & \pounds\ rank & Constituency & \pounds & \% rank \\
-\midrule
-% populated from results/constituency_incidence.csv
-\multicolumn{6}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Scenario comparison}
-\label{sec:results-scenario}
-
-Table~\ref{tab:scenario} sets the three scenarios against one another on the headline aggregates: total additional household energy spending, the mean loss, the bottom-decile percentage loss, and the number of households pushed below the fuel-poverty and relative-poverty thresholds. Aggregate additional household energy and fuel spending is \pounds \genAggSpendRealisedBn{} billion in the realised scenario against \pounds \genAggSpendAdverseBn{} billion in the adverse one.
-
-\begin{table}[htbp]
-\centering
-\caption{Headline aggregates under the baseline, realised and adverse scenarios. Static, use-side only, zero-elasticity; see Section~\ref{sec:limitations}.}
-\label{tab:scenario}
-\begin{tabular}{lrrr}
-\toprule
-& Baseline & Realised & Adverse \\
-\midrule
-% populated from results/scenario_summary.csv
-\multicolumn{4}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
-\end{table}
+The regional gradient runs from the North East, at \genRegionMaxLossPct{} per cent of income and \pounds \genRegionMaxLossGbp{}, to London at \genRegionMinLossPct{} per cent and \pounds \genRegionMinLossGbp{}. Unlike the decile comparison, the pound and percentage rankings here are broadly concordant: the regions that lose most in per cent also tend to lose most in pounds, because between-region income differences and between-region car-dependence differences point the same way. London and the South East are simultaneously the highest-income and the least car-dependent regions, and Northern Ireland's low position reflects both income and its distinct energy mix. The regional result is therefore a weaker version of the decile result rather than an independent one, and I do not build on it.
 
 \subsection{Scoring the policy responses}
 \label{sec:results-policy}
 
-Table~\ref{tab:scorecard} scores the five responses of Section~\ref{sec:step4} on the three metrics. The means-tested social tariff delivers \genSocialTariffShareBottomThree{} per cent of its spend to deciles one to three at a cost of \pounds \genSocialTariffCostBn{} billion, but leaves \genSocialTariffUncompensatedShare{} per cent of losing households uncompensated. The JRF universal discounted block costs \pounds \genJrfCostBn{} billion and leaves \genJrfUncompensatedShare{} per cent uncompensated, delivering \genJrfShareBottomThree{} per cent of spend to deciles one to three. The Warm Home Discount expansion costs \pounds \genWhdCostBn{} billion; the VAT cut on domestic fuel costs \pounds \genVatCutCostBn{} billion and delivers \genVatCutShareBottomThree{} per cent to the bottom three deciles; the flat rebate costs \pounds \genRebateCostBn{} billion. Cost per pound of bottom-decile gain runs from \pounds \genBestCostPerPound{} to \pounds \genWorstCostPerPound{} across the five.
+Table~\ref{tab:scorecard} scores the five responses of Section~\ref{sec:step4} on exchequer cost, the share of spend reaching deciles one to three, cost per pound of bottom-decile gain, and the share of losing households left uncompensated.
 
 \begin{table}[htbp]
 \centering
-\caption{Policy scorecard: exchequer cost, cost per pound of bottom-decile gain, share of spend reaching deciles one to three, and share of losing households left uncompensated, for each of the five responses, evaluated against the realised scenario.}
+\caption{Policy scorecard: exchequer cost, share of spend reaching deciles one to three, cost per pound of decile-one gain, and share of losing households left wholly or partly uncompensated, for each of the five responses, evaluated against the realised scenario.}
 \label{tab:scorecard}
-\begin{tabular}{lrrrr}
-\toprule
-Reform & Cost (\pounds bn) & \pounds\ per \pounds\ D1 gain & \% to D1--D3 & \% losers uncompensated \\
-\midrule
-% populated from results/policy_scorecard.csv
-\multicolumn{5}{c}{\emph{[table body generated]}} \\
-\bottomrule
-\end{tabular}
+\input{tables/tab_scorecard}
 \end{table}
 
 \begin{figure}[htbp]
@@ -181,13 +142,25 @@ Reform & Cost (\pounds bn) & \pounds\ per \pounds\ D1 gain & \% to D1--D3 & \% l
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/fig7_policy_deciles.png}
-\caption{Net change in household disposable income by decile under each policy, shock included, as a share of baseline income. Shows which policies fully offset the shock at the bottom and where each leaves a residual loss.}
+\caption{Net change in household disposable income by decile under each policy, shock included, as a share of baseline income. Shows which policies offset the shock at the bottom and where each leaves a residual loss.}
 \label{fig:policydeciles}
 \end{figure}
+
+On the conventional targeting metric the ranking is the expected one. The Warm Home Discount expansion sends \genWhdShareBottomThree{} per cent of its spend to deciles one to three and the means-tested social tariff \genSocialTariffShareBottomThree{} per cent, against \genJrfShareBottomThree{} per cent for the JRF universal block, \genRebateShareBottomThree{} per cent for the flat rebate and \genVatCutShareBottomThree{} per cent for VAT zero-rating. Cost per pound of bottom-decile gain runs from \pounds \genBestCostPerPound{} for the Warm Home Discount expansion to \pounds \genWorstCostPerPound{} for the VAT cut. If targeting efficiency were the objective, the argument would end here in favour of means-testing.
+
+It does not end here, for three reasons.
+
+First, the contrast this paper originally expected between the social tariff and the JRF block on within-decile coverage does not survive contact with the data. Both leave \genSocialTariffUncompensatedShare{} per cent of losing households uncompensated---the figures are equal to the reported precision---at costs of \pounds \genSocialTariffCostBn{} billion and \pounds \genJrfCostBn{} billion respectively. The universal block's advantage is in \emph{who} it reaches, not in how many it leaves short: it reaches losing households outside the means-tested system that the social tariff cannot see, while failing to reach them with enough money to close their loss. Figure~\ref{fig:uncompensated} shows the difference in composition that the headline count conceals, and Figure~\ref{fig:benefitstatus} shows it by benefit status directly. This is a correction to a claim made in an earlier draft of this paper and I state it as such. It is also worth noting that my parameterisation of the JRF block costs \pounds \genJrfCostBn{} billion against JRF's own costing of around \pounds 5 billion, so what I score is a less generous scheme than the one they propose; the coverage finding is about the design, but the compensation adequacy finding is conditional on my calibration and would improve under theirs.
+
+Second, VAT zero-rating compensates nobody fully: \genVatCutUncompensatedShare{} per cent of losers remain uncompensated. This is arithmetic rather than a modelling artefact. Removing a five per cent reduced rate is at most a \genVatCutMaxOffsetPct{} per cent reduction in the domestic bill, which cannot offset a domestic price rise of the order of \genGasUnitRatePct{} per cent, and it reaches none of the motor-fuel channel that carries \genMotorFuelShareOfLoss{} per cent of the loss. It is the worst option on every metric here and its appeal is administrative speed.
+
+Third, the only option that compensates a majority of losers is the one with no targeting at all. The IPPR flat rebate leaves \genRebateUncompensatedShare{} per cent uncompensated, meaning \genRebateFullyCompensatedShare{} per cent are fully compensated, at a cost of \pounds \genRebateCostBn{} billion---roughly four times the social tariff. Part of that is simply generosity, and a social tariff funded to \pounds \genRebateCostBn{} billion would perform better than the one scored here. But part is structural: a flat cash payment is the only instrument in the set that is not tied to the domestic bill, so it is the only one not confined to the \genDomesticShareOfLoss{} per cent of the loss that the bill represents. Universality is doing less work here than channel-independence is. That reading is consistent with \citet{levell2025}, whose optimum includes a strictly positive price subsidy precisely because observable-based transfers cannot reach every loser, and with \citet{sallee2019} on the infeasibility of compensating all losers from observables.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=.85\textwidth]{../results/figures/fig8_benefit_status.png}
-\caption{Compensation rates split by receipt of means-tested benefits. The quantitative form of the \genNonMeansTestedStruggling{} per cent statistic: the share of struggling households outside the means-tested system, and what each policy delivers to them.}
+\caption{Compensation rates split by receipt of means-tested benefits. Shows what each policy delivers to losing households outside the means-tested system, which is where the social tariff and the universal block differ despite their identical headline uncompensated share.}
 \label{fig:benefitstatus}
 \end{figure}
+
+One caveat applies to the two means-tested rows specifically. PolicyEngine's modelled means-tested population is \genMeansTestedSharePct{} per cent of households, below administrative caseloads because modelled take-up is applied. The social tariff's and the Warm Home Discount expansion's reach is therefore probably understated and their uncompensated shares correspondingly overstated; those two figures should be read as an upper bound on the uncompensated count. This does not affect the VAT or flat-rebate rows, which do not condition on benefit receipt, and it does not overturn the ranking, since closing the entire gap between modelled and administrative caseloads would not bring either instrument near the flat rebate's coverage.

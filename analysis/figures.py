@@ -1,308 +1,986 @@
 #!/usr/bin/env python3
-"""Figure builders for the paper, off cached results/ artifacts.
+"""Build every figure in ``results/figures/`` from the committed results.
 
-No microsimulation runs here — presentation only, from the JSON/CSV written by
-``analysis/run_all.py``.
+Usage::
 
-The headline figure is :func:`constituency_two_maps`: **two side-by-side
-constituency choropleths of the same shock** — loss as a share of income, and
-loss in pounds. They rank the 650 seats almost oppositely, which is the paper's
-Step 3 contribution: Fetzer, Gazze & Bishop (2024) find affluent areas more
-exposed in £; the budget-share literature finds poor households more exposed in
-%. Both are true, and no existing UK analysis shows them at seat level.
+    uv run python analysis/figures.py            # all figures
+    uv run python analysis/figures.py fig2 fig4  # a subset, by prefix
+    uv run python analysis/figures.py --refresh  # recompute the micro cache
 
-Usage:
-    python analysis/figures.py [--results results] [--out results/figures]
-                               [--scenario niesr_adverse]
+Most figures read only ``results/<scenario>/*.json`` and
+``uk_iran_conflict.scenarios`` (no microdata needed). Three of them —
+the fuel decomposition, the policy-gain-by-decile panel and the
+benefit-status figure — need household-level cuts that the committed JSON
+does not carry, so they are recomputed from the PolicyEngine UK microdata
+using exactly the same code path as ``analysis/run_incidence.py`` and cached
+as JSON outside the repo. If the microdata is unavailable those three
+figures are skipped with a loud message rather than faked.
+
+Geography note: the dataset carries **region** (12) and **country** (4).
+Its ``local_authority`` column is degenerate and there is no constituency
+weight matrix in this dataset, so the constituency figure promised in the
+brief is not producible here; ``fig4_region.png`` is the honest
+substitute and ``fig5_fuel_decomposition.png`` replaces the constituency
+scatter.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import figstyle as fs  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+
+from uk_iran_conflict import scenarios as scen  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "analysis"))
-
-import figstyle  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.cm import ScalarMappable  # noqa: E402
-from matplotlib.colors import Normalize, TwoSlopeNorm  # noqa: E402
-
-#: 2024 Westminster constituency boundaries (GSS-coded), staged in data/.
-BOUNDARIES = ROOT / "data" / "uk_constituencies_2024.geojson"
-
-DECILES = list(range(1, 11))
-
-
-# --------------------------------------------------------------------------
-# loading
-# --------------------------------------------------------------------------
-
-
-def load_cell(results: Path, scenario: str, policy: str = "shock") -> dict:
-    """Load one (scenario, policy) result JSON."""
-    return json.loads((results / scenario / f"{policy}.json").read_text())
-
-
-def decile_series(cell: Mapping, block: str) -> np.ndarray:
-    """Pull a 10-vector out of a result block (JSON keys are strings)."""
-    values = cell[block]
-    return np.array(
-        [float(values[str(d)] if str(d) in values else values[d]) for d in DECILES]
-    )
+RESULTS = ROOT / "results"
+CENTRAL = "realised_2026"
+SCENARIO_ORDER = ("niesr_baseline", "realised_2026", "niesr_adverse")
+POLICY_ORDER = (
+    "social_tariff",
+    "jrf_block",
+    "whd_expansion",
+    "vat_zero",
+    "ippr_rebate",
+)
+POLICY_SHORT = {
+    "social_tariff": "Social tariff\n(means-tested)",
+    "jrf_block": "JRF discounted\nblock",
+    "whd_expansion": "Warm Home\nDiscount £150",
+    "vat_zero": "VAT zero-rate\non fuel",
+    "ippr_rebate": "IPPR flat\nrebate £183",
+}
+POLICY_COLORS = {
+    "social_tariff": fs.BLUE,
+    "jrf_block": fs.TEAL,
+    "whd_expansion": fs.BLUE_LIGHT,
+    "vat_zero": fs.GREY,
+    "ippr_rebate": fs.TEAL_DARK,
+}
+CACHE = Path(tempfile.gettempdir()) / "uk_iran_conflict_micro_cache.json"
 
 
 # --------------------------------------------------------------------------
-# the headline figure
+# committed results
 # --------------------------------------------------------------------------
 
 
-def load_constituency_frame(results: Path) -> pd.DataFrame:
-    """Join the cached constituency impacts onto 2024 boundary polygons."""
-    import geopandas as gpd  # noqa: PLC0415 — heavy optional dependency
-
-    impacts = pd.read_csv(results / "geo" / "constituency_impacts.csv")
-    polygons = gpd.read_file(BOUNDARIES)[["GSScode", "geometry"]]
-    merged = polygons.merge(impacts, left_on="GSScode", right_on="code", how="inner")
-    dropped = len(impacts) - len(merged)
-    if dropped:
-        print(f"warning: {dropped} constituencies did not join to a boundary")
-    # The published GeoJSON is mislabelled EPSG:4326 but carries British
-    # National Grid eastings/northings; assign the true CRS (no reprojection).
-    return merged.set_crs(27700, allow_override=True)
+def load(scenario: str, name: str) -> dict:
+    return json.loads((RESULTS / scenario / f"{name}.json").read_text())
 
 
-def _map_panel(ax, gdf, column: str, cmap, norm, title: str) -> ScalarMappable:
-    gdf.plot(
-        column=column, cmap=cmap, norm=norm, ax=ax, edgecolor="white", linewidth=0.12
-    )
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.set_title(title, color=figstyle.INK, pad=8)
-    return ScalarMappable(norm=norm, cmap=cmap)
+def shock(scenario: str = CENTRAL) -> dict:
+    return load(scenario, "shock")
 
 
-def constituency_two_maps(results: Path, out: Path, clip_pct: float = 95.0) -> Path:
-    """THE headline figure: % of income lost and £ lost, side by side.
+def deciles(scenario: str = CENTRAL) -> list[dict]:
+    return sorted(shock(scenario)["decile"], key=lambda r: r["decile"])
 
-    Left panel: mean household loss as a share of net income (diverging, grey
-    losses). Right panel: mean household loss in pounds (sequential magnitude).
-    Both scales are clipped at the ``clip_pct`` percentile of |value| so a
-    handful of extreme seats does not crush the gradient across the rest.
 
-    The two panels are the same shock. Their geographies are close to
-    opposites — that is the figure's whole argument, and the caption should
-    say so.
-    """
-    figstyle.apply_style()
-    gdf = load_constituency_frame(results)
+# --------------------------------------------------------------------------
+# micro cuts not present in the committed JSON
+# --------------------------------------------------------------------------
 
-    pct = gdf["relative_change"].to_numpy(dtype=float) * 100
-    cash = gdf["average_change"].to_numpy(dtype=float)
 
-    pct_max = float(np.nanpercentile(np.abs(pct), clip_pct)) or float(
-        np.nanmax(np.abs(pct))
-    )
-    pct_norm = TwoSlopeNorm(vcenter=0.0, vmin=-pct_max, vmax=pct_max)
-    # Losses are negative; plot the magnitude on the sequential ramp so
-    # "darker = worse hit" reads the same way in both panels.
-    magnitude = np.abs(cash)
-    cash_norm = Normalize(
-        vmin=float(np.nanpercentile(magnitude, 100 - clip_pct)),
-        vmax=float(np.nanpercentile(magnitude, clip_pct)),
-    )
-    gdf = gdf.assign(_pct=pct, _cash_magnitude=magnitude)
+def _micro_compute() -> dict:
+    """Recompute the household-level cuts the figures need, from microdata."""
+    from run_incidence import _load_env, dataset_path  # noqa: PLC0415
 
-    fig, axes = plt.subplots(1, 2, figsize=figstyle.TWOMAP)
-    sm_pct = _map_panel(
-        axes[0],
-        gdf,
-        "_pct",
-        figstyle.DIVERGING,
-        pct_norm,
-        "Loss as a share of net income (%)",
-    )
-    sm_cash = _map_panel(
-        axes[1],
-        gdf,
-        "_cash_magnitude",
-        figstyle.SEQUENTIAL,
-        cash_norm,
-        "Loss per household (£/year)",
+    from uk_iran_conflict import policies as pol  # noqa: PLC0415
+    from uk_iran_conflict.incidence import (  # noqa: PLC0415
+        load_baseline,
+        shock_cost,
+        wmean,
     )
 
-    for ax, sm in ((axes[0], sm_pct), (axes[1], sm_cash)):
-        cbar = fig.colorbar(
-            sm, ax=ax, orientation="horizontal", fraction=0.035, pad=0.01, extend="both"
+    _load_env()
+    path = dataset_path()
+    base = load_baseline(path, 2026)
+    mt = pol.means_tested_flag(path, 2026)
+    cost = shock_cost(base, scen.SCENARIOS[CENTRAL])
+
+    w = base.weight
+    loss = cost.total
+    pos = base.net_income > 0
+    burden = np.zeros_like(loss)
+    burden[pos] = 100 * loss[pos] / base.net_income[pos]
+
+    out: dict = {"fuel_by_decile": [], "gain_by_decile": {}, "benefit": {}}
+
+    for d in range(1, 11):
+        sel = base.decile == d
+        out["fuel_by_decile"].append(
+            {
+                "decile": d,
+                "gas": wmean(cost.gas[sel], w[sel]),
+                "electricity": wmean(cost.electricity[sel], w[sel]),
+                "motor_fuel": wmean(cost.motor_fuel[sel], w[sel]),
+            }
         )
-        cbar.outline.set_visible(False)
 
-    path = out / "fig_constituency_two_maps.png"
-    figstyle.save(fig, path)
-    return path
+    gains: dict[str, np.ndarray] = {}
+    for key in POLICY_ORDER:
+        gain = pol.POLICIES[key].gain(base, cost, mt)
+        gains[key] = gain
+        out["gain_by_decile"][key] = [
+            wmean(gain[base.decile == d], w[base.decile == d]) for d in range(1, 11)
+        ]
 
+    # benefit-status cut
+    groups = {"means_tested": mt, "not_means_tested": ~mt}
+    for gname, sel in groups.items():
+        wl = w[sel]
+        entry = {
+            "households_m": float(wl.sum() / 1e6),
+            "share_of_households": float(wl.sum() / w.sum()),
+            "mean_loss_gbp": wmean(loss[sel], wl),
+            "mean_loss_pct": float(
+                100
+                * (loss[sel & pos] * w[sel & pos]).sum()
+                / (base.net_income[sel & pos] * w[sel & pos]).sum()
+            ),
+            "mean_gain_gbp": {key: wmean(gains[key][sel], wl) for key in POLICY_ORDER},
+            "uncompensated_share": {},
+        }
+        for key in POLICY_ORDER:
+            losers = sel & (loss > 0)
+            wln = w[losers]
+            net = loss[losers] - gains[key][losers]
+            entry["uncompensated_share"][key] = (
+                float(wln[net > 0].sum() / wln.sum()) if wln.sum() > 0 else float("nan")
+            )
+        out["benefit"][gname] = entry
 
-# --------------------------------------------------------------------------
-# decile charts
-# --------------------------------------------------------------------------
-
-
-def decile_impact_chart(results: Path, out: Path, scenario: str) -> Path:
-    """Two-panel decile chart of the bare shock: £ change and % of income.
-
-    The same crossing as the maps, in the conventional decile form: the cash
-    loss rises with income while the relative loss falls with it (the Deaton
-    first-order incidence of Step 2).
-    """
-    figstyle.apply_style()
-    cell = load_cell(results, scenario, "shock")
-    cash = decile_series(cell, "decile_average_change")
-    relative = decile_series(cell, "decile_relative_change") * 100
-
-    fig, axes = plt.subplots(1, 2, figsize=figstyle.TWOPANEL)
-    axes[0].bar(DECILES, cash, color=figstyle.BLUE)
-    figstyle.decile_ax(axes[0], "Change in net income (£/year)")
-    figstyle.zero_line(axes[0])
-
-    axes[1].bar(DECILES, relative, color=figstyle.TEAL)
-    figstyle.decile_ax(axes[1], "Change in net income (% of baseline)")
-    figstyle.zero_line(axes[1])
-
-    path = out / f"fig_decile_impact_{scenario}.png"
-    figstyle.save(fig, path)
-    return path
-
-
-def intra_decile_chart(
-    results: Path, out: Path, scenario: str, policy: str = "shock"
-) -> Path:
-    """Stacked winners/losers within each decile — the uncompensated-loser figure.
-
-    PolicyEngine's ``IntraDecileImpact`` bands. The point (Cronin, Fullerton &
-    Sexton 2019; Douenne 2020; Sallee 2019): even where a policy makes a decile
-    better off on average, a large share of that decile still loses, and no
-    observable-based transfer closes the gap.
-    """
-    figstyle.apply_style()
-    cell = load_cell(results, scenario, policy)
-    bands = cell["intra_decile"]
-
-    fig, ax = plt.subplots(figsize=figstyle.SINGLE)
-    bottom = np.zeros(len(DECILES))
-    for key, color in figstyle.INTRA_DECILE_COLORS.items():
-        values = np.array(
-            [
-                float((bands[str(d)] if str(d) in bands else bands[d])[key]) * 100
-                for d in DECILES
-            ]
-        )
-        ax.bar(
-            DECILES,
-            values,
-            bottom=bottom,
-            color=color,
-            label=figstyle.INTRA_DECILE_LABELS[key],
-            width=0.75,
-        )
-        bottom += values
-    figstyle.decile_ax(ax, "Share of households (%)")
-    ax.set_ylim(0, 100)
-    figstyle.legend_below(ax, ncol=3)
-
-    path = out / f"fig_intra_decile_{scenario}_{policy}.png"
-    figstyle.save(fig, path)
-    return path
+    # the anchor fact: of households carrying a heavy energy burden, how many
+    # are outside the means-tested system the social tariff can reach?
+    for threshold in (3.0, 5.0, 10.0):
+        heavy = pos & (burden > threshold)
+        wh = w[heavy]
+        out["benefit"][f"heavy_burden_gt{threshold:.0f}pct"] = {
+            "households_m": float(wh.sum() / 1e6),
+            "share_not_means_tested": (
+                float(w[heavy & ~mt].sum() / wh.sum()) if wh.sum() > 0 else float("nan")
+            ),
+        }
+    # same cut, by decile, for the panel
+    out["benefit"]["heavy_by_decile"] = [
+        {
+            "decile": d,
+            "share_not_means_tested": (
+                float(
+                    w[(base.decile == d) & pos & (burden > 5) & ~mt].sum()
+                    / max(w[(base.decile == d) & pos & (burden > 5)].sum(), 1e-9)
+                )
+            ),
+            "households_m": float(
+                w[(base.decile == d) & pos & (burden > 5)].sum() / 1e6
+            ),
+        }
+        for d in range(1, 11)
+    ]
+    return out
 
 
-# --------------------------------------------------------------------------
-# policy comparison
-# --------------------------------------------------------------------------
-
-
-def policy_comparison_chart(
-    results: Path, out: Path, scenario: str, policies: Sequence[str] | None = None
-) -> Path:
-    """Compare the five responses on the three metrics the paper scores.
-
-    Panels: (1) exchequer cost, £bn; (2) share of spend reaching deciles 1-3;
-    (3) share of decile 1 still left worse off than pre-shock — the metric
-    everyone misses, and the one on which the means-tested options do worst
-    (~40% of households struggling to heat their home are not on means-tested
-    benefits).
-    """
-    figstyle.apply_style()
-    if policies is None:
-        policies = [p for p in figstyle.POLICY_COLORS if p != "shock"]
-
-    cost, bottom_three, losers, labels, colors = [], [], [], [], []
-    for policy in policies:
+def micro(refresh: bool = False) -> dict | None:
+    """Cached micro cuts, or ``None`` if the microdata is unavailable."""
+    if not refresh and CACHE.exists():
         try:
-            cell = load_cell(results, scenario, policy)
-        except FileNotFoundError:
-            print(f"warning: no result for {scenario}/{policy}; skipping")
-            continue
-        gains = decile_series(cell, "decile_average_change")
-        positive = np.clip(gains, 0.0, None)
-        total = positive.sum()
-        bands = cell["intra_decile"]
-        d1 = bands["1"] if "1" in bands else bands[1]
-        cost.append(-cell["exchequer_cost"] / 1e9)
-        bottom_three.append(100 * positive[:3].sum() / total if total else 0.0)
-        losers.append(100 * (d1["lose_less_5"] + d1["lose_more_5"]))
-        labels.append(policy.replace("_", " "))
-        colors.append(figstyle.POLICY_COLORS.get(policy, figstyle.BLUE))
+            return json.loads(CACHE.read_text())
+        except json.JSONDecodeError:
+            pass
+    try:
+        data = _micro_compute()
+    except Exception as exc:  # noqa: BLE001 — absence of microdata is expected
+        print(f"  !! microdata unavailable ({type(exc).__name__}: {exc})")
+        return None
+    CACHE.write_text(json.dumps(data, indent=1))
+    return data
 
-    fig, axes = plt.subplots(1, 3, figsize=(13.0, 4.5))
-    for ax, values, title in (
-        (axes[0], cost, "Exchequer cost (£bn)"),
-        (axes[1], bottom_three, "Share of gains to deciles 1-3 (%)"),
-        (axes[2], losers, "Decile 1 left worse off (%)"),
-    ):
-        ax.bar(range(len(values)), values, color=colors)
-        ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=30, ha="right")
-        ax.set_ylabel(title)
-        ax.grid(axis="x", visible=False)
-        figstyle.zero_line(ax)
 
-    path = out / f"fig_policy_comparison_{scenario}.png"
-    figstyle.save(fig, path)
-    return path
+# ==========================================================================
+# fig1 — scenario price paths and the gas/electricity asymmetry
+# ==========================================================================
+
+
+def fig1_price_path() -> Path:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.4), width_ratios=[1.45, 1])
+
+    quarters = scen.SCENARIOS[CENTRAL].quarter_labels
+    baseline_cap = scen.SCENARIOS[CENTRAL].baseline_cap_gbp
+    x = np.arange(len(quarters) + 1)
+    xlabels = ["2026Q3\n(actual)", *[q.replace("Q", "\nQ") for q in quarters]]
+
+    ax1.axhline(baseline_cap, color=fs.GREY, lw=0.9, ls=(0, (4, 3)), zorder=1)
+    ax1.text(
+        x[-1] + 0.6,
+        baseline_cap + 6,
+        f"Jul–Sep 2026 cap £{baseline_cap:,.0f}",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=fs.GREY,
+    )
+
+    for key in SCENARIO_ORDER:
+        sc = scen.SCENARIOS[key]
+        caps = [baseline_cap, *[step.cap_gbp for step in sc.cap_path]]
+        color = fs.SCENARIO_COLORS[key]
+        ax1.step(
+            x,
+            caps,
+            where="post",
+            color=color,
+            lw=2.4 if key == CENTRAL else 1.8,
+            zorder=3,
+            label=sc.label,
+        )
+        ax1.scatter(x, caps, s=18, color=color, zorder=4)
+        ax1.annotate(
+            f"£{caps[-1]:,.0f}",
+            (x[-1], caps[-1]),
+            xytext=(6, 0),
+            textcoords="offset points",
+            va="center",
+            fontsize=8.5,
+            color=color,
+            fontweight="bold",
+        )
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(xlabels)
+    ax1.set_xlim(-0.3, len(quarters) + 0.75)
+    ax1.set_ylabel("Ofgem default tariff cap, £/yr (typical dual fuel)")
+    ax1.yaxis.set_major_formatter(fs.GBP_FMT)
+    ax1.set_title("A implied cap path: lagged, quantised into quarterly steps")
+    ax1.legend(loc="upper left")
+    fs.only_y_grid(ax1)
+
+    # panel B — the asymmetry
+    from uk_iran_conflict import reforms  # noqa: PLC0415
+
+    keys = list(SCENARIO_ORDER)
+    gas = []
+    elec = []
+    for key in keys:
+        g, e = reforms.retail_factors(scen.SCENARIOS[key])
+        gas.append(100 * (g - 1))
+        elec.append(100 * (e - 1))
+
+    idx = np.arange(len(keys))
+    width = 0.36
+    bg = ax2.bar(idx - width / 2, gas, width, color=fs.BLUE, label="Gas")
+    be = ax2.bar(idx + width / 2, elec, width, color=fs.TEAL, label="Electricity")
+    ax2.set_xticks(idx)
+    ax2.set_xticklabels(
+        [scen.SCENARIOS[k].label.replace(" (", "\n(") for k in keys], fontsize=8.5
+    )
+    ax2.set_ylabel("Steady-state retail unit-price rise, %")
+    ax2.yaxis.set_major_formatter(fs.PCT_FMT)
+    ax2.set_ylim(0, max(gas) * 1.28)
+    fs.label_bars(ax2, bg, gas, fmt="+{:.1f}%")
+    fs.label_bars(ax2, be, elec, fmt="+{:.1f}%")
+    ax2.set_title(
+        "B gas and electricity move asymmetrically\n"
+        "(gas sets the power price ~85% of the time)"
+    )
+    ax2.legend(loc="upper left", bbox_to_anchor=(0.0, 0.92))
+    fs.only_y_grid(ax2)
+
+    fig.suptitle(
+        "Figure 1. From wholesale to the bill: scenario price paths, 2026Q4–2027Q3",
+        y=1.06,
+    )
+    fs.note(
+        fig,
+        "Wholesale is ~45% of a dual-fuel bill and the cap lags the forward curve by "
+        "2–3 quarters; electricity is attenuated by the marginal-pricing share and its "
+        "smaller wholesale cost share.\nSource: authors' calculations, "
+        "uk_iran_conflict.scenarios; Ofgem cap (Jul 2026 TDCV basis); "
+        "Cornwall Insight 19 Aug 2026.",
+        y=-0.06,
+    )
+    return fs.save(fig, "fig1_price_path.png")
+
+
+# ==========================================================================
+# fig2 — THE headline: £ vs % of income by decile
+# ==========================================================================
+
+
+def fig2_decile_dual() -> Path:
+    rows = deciles()
+    d = np.array([r["decile"] for r in rows])
+    gbp = np.array([r["mean_loss_gbp"] for r in rows])
+    pct = np.array([r["mean_loss_pct"] for r in rows])
+    s = shock()
+
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(11.4, 5.0), sharex=True)
+
+    # A — cash
+    bars = axl.bar(d, gbp, color=fs.BLUE, width=0.72)
+    bars[0].set_color(fs.BLUE_LIGHT)
+    bars[-1].set_color(fs.BLUE_LIGHT)
+    axl.axhline(s["mean_loss_gbp"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)), zorder=4)
+    axl.text(
+        10.45,
+        s["mean_loss_gbp"] + gbp.max() * 0.015,
+        f"mean £{s['mean_loss_gbp']:,.0f}",
+        fontsize=8,
+        va="bottom",
+        ha="right",
+        color=fs.DARK,
+    )
+    axl.set_ylim(0, gbp.max() * 1.16)
+    fs.label_bars(axl, bars, gbp, fmt="£{:,.0f}")
+    axl.set_ylabel("Mean annual loss, £ per household")
+    axl.yaxis.set_major_formatter(fs.GBP_FMT)
+    axl.set_title("A cash: the rich lose more")
+    fs.only_y_grid(axl)
+
+    # B — share of income
+    bars = axr.bar(d, pct, color=fs.TEAL, width=0.72)
+    bars[0].set_color(fs.TEAL_DARK)
+    axr.axhline(s["mean_loss_pct"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)), zorder=4)
+    axr.text(
+        10.45,
+        s["mean_loss_pct"] + pct.max() * 0.015,
+        f"mean {s['mean_loss_pct']:.2f}%",
+        fontsize=8,
+        va="bottom",
+        ha="right",
+        color=fs.DARK,
+    )
+    axr.set_ylim(0, pct.max() * 1.16)
+    fs.label_bars(axr, bars, pct, fmt="{:.2f}%")
+    axr.set_ylabel("Mean annual loss, % of net income")
+    axr.yaxis.set_major_formatter(fs.PCT_FMT)
+    axr.set_title("B burden: the poor lose more")
+    fs.only_y_grid(axr)
+
+    ratio_gbp = gbp[-1] / gbp[0]
+    ratio_pct = pct[0] / pct[-1]
+    axl.annotate(
+        f"D10 loses {ratio_gbp:.1f}× D1 in £",
+        xy=(0.03, 0.93),
+        xycoords="axes fraction",
+        fontsize=9,
+        color=fs.BLUE_DARK,
+        fontweight="bold",
+    )
+    axr.annotate(
+        f"D1 loses {ratio_pct:.1f}× D10 as a share of income",
+        xy=(0.03, 0.93),
+        xycoords="axes fraction",
+        fontsize=9,
+        color=fs.TEAL_DARK,
+        fontweight="bold",
+    )
+
+    for ax in (axl, axr):
+        ax.set_xticks(range(1, 11))
+        ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+        ax.set_xlim(0.4, 10.6)
+
+    fig.suptitle(
+        "Figure 2. The same shock, two orderings: £ loss rises with income, "
+        "burden falls",
+        y=1.02,
+    )
+    fs.note(
+        fig,
+        f"Realised 2026 scenario; £{s['aggregate_cost_bn']:.1f}bn total, mean "
+        f"£{s['mean_loss_gbp']:,.0f} per household ({s['mean_loss_pct']:.2f}% of net "
+        "income). First-order (Deaton) incidence: quantities fixed, so an upper bound. "
+        "Percent is the aggregate ratio of weighted loss to weighted net income within "
+        "the decile.\nSource: authors' calculations on PolicyEngine UK (enhanced FRS "
+        "2023-24, uprated to 2026).",
+        y=-0.03,
+    )
+    return fs.save(fig, "fig2_decile_dual.png")
+
+
+# ==========================================================================
+# fig3 — within-decile dispersion
+# ==========================================================================
+
+
+def fig3_within_decile() -> Path:
+    rows = sorted(shock()["intra_decile"], key=lambda r: r["decile"])
+    d = np.array([r["decile"] for r in rows])
+    p10 = np.array([r["p10_loss_pct"] for r in rows])
+    p50 = np.array([r["p50_loss_pct"] for r in rows])
+    p90 = np.array([r["p90_loss_pct"] for r in rows])
+    above5 = np.array([100 * r["share_above_5pct"] for r in rows])
+
+    fig, (axl, axr) = plt.subplots(
+        1, 2, figsize=(11.4, 5.0), width_ratios=[1.5, 1], sharex=True
+    )
+
+    for xi, lo, hi in zip(d, p10, p90, strict=False):
+        axl.plot([xi, xi], [lo, hi], color=fs.TEAL_LIGHT, lw=9, solid_capstyle="butt")
+    axl.scatter(d, p10, s=26, color=fs.GREY, zorder=3, label="10th percentile")
+    axl.scatter(d, p90, s=26, color=fs.BLUE, zorder=3, label="90th percentile")
+    axl.plot(
+        d,
+        p50,
+        color=fs.TEAL_DARK,
+        lw=2.0,
+        zorder=4,
+        marker="o",
+        ms=5,
+        label="Median household",
+    )
+    axl.set_yscale("log")
+    axl.set_yticks([0.03, 0.1, 0.3, 1, 3, 10])
+    axl.set_yticklabels(["0.03%", "0.1%", "0.3%", "1%", "3%", "10%"])
+    axl.set_ylabel("Loss as % of net income (log scale)")
+    axl.set_title("A within-decile spread dwarfs the between-decile gradient")
+    axl.legend(loc="upper right", ncols=3, fontsize=8.5)
+    fs.only_y_grid(axl)
+
+    span_within = p90 / np.maximum(p10, 1e-9)
+    axl.annotate(
+        f"p90/p10 within a decile: {span_within.min():.0f}×–{span_within.max():.0f}×\n"
+        f"median across deciles varies only "
+        f"{p50.max() / p50.min():.1f}×",
+        xy=(0.02, 0.05),
+        xycoords="axes fraction",
+        fontsize=8.5,
+        color=fs.DARK,
+    )
+
+    bars = axr.bar(d, above5, color=fs.BLUE, width=0.72)
+    bars[0].set_color(fs.TEAL_DARK)
+    axr.set_ylim(0, above5.max() * 1.2)
+    fs.label_bars(axr, bars, above5, fmt="{:.1f}%")
+    axr.set_ylabel("Share of households losing >5% of net income")
+    axr.yaxis.set_major_formatter(fs.PCT_FMT)
+    axr.set_title("B heavy losers exist in every decile")
+    fs.only_y_grid(axr)
+
+    for ax in (axl, axr):
+        ax.set_xticks(range(1, 11))
+        ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+        ax.set_xlim(0.4, 10.6)
+
+    fig.suptitle(
+        "Figure 3. Horizontal beats vertical: dispersion of the loss within "
+        "income deciles",
+        y=1.02,
+    )
+    fs.note(
+        fig,
+        "Realised 2026 scenario. Bands span the weighted 10th–90th percentile of the "
+        "household loss as a share of net income; households with non-positive net "
+        "income are excluded from the ratio. The pattern is Cronin, Fullerton & Sexton "
+        "(2019): horizontal redistribution exceeds vertical.\nSource: authors' "
+        "calculations on PolicyEngine UK.",
+        y=-0.03,
+    )
+    return fs.save(fig, "fig3_within_decile.png")
+
+
+# ==========================================================================
+# fig4 — region panel (replaces the impossible constituency map)
+# ==========================================================================
+
+
+def fig4_region() -> Path:
+    rows = shock()["region"]
+    names = [fs.pretty_region(r["name"]) for r in rows]
+    gbp = np.array([r["mean_loss_gbp"] for r in rows])
+    pct = np.array([r["mean_loss_pct"] for r in rows])
+    s = shock()
+
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(11.6, 5.2))
+
+    order = np.argsort(gbp)
+    y = np.arange(len(order))
+    bars = axl.barh(y, gbp[order], color=fs.BLUE, height=0.68)
+    bars[-1].set_color(fs.BLUE_DARK)
+    axl.set_yticks(y)
+    axl.set_yticklabels([names[i] for i in order])
+    axl.set_xlim(0, gbp.max() * 1.2)
+    axl.xaxis.set_major_formatter(fs.GBP_FMT)
+    axl.set_xlabel("Mean annual loss, £ per household")
+    axl.axvline(s["mean_loss_gbp"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)))
+    axl.text(
+        s["mean_loss_gbp"],
+        len(order) - 0.2,
+        f"  UK mean £{s['mean_loss_gbp']:,.0f}",
+        fontsize=8,
+        color=fs.DARK,
+        va="top",
+    )
+    fs.label_hbars(axl, bars, gbp[order], fmt="£{:,.0f}")
+    axl.set_title("A cash loss")
+    fs.only_x_grid(axl)
+
+    order_p = np.argsort(pct)
+    bars = axr.barh(y, pct[order_p], color=fs.TEAL, height=0.68)
+    bars[-1].set_color(fs.TEAL_DARK)
+    axr.set_yticks(y)
+    axr.set_yticklabels([names[i] for i in order_p])
+    axr.set_xlim(0, pct.max() * 1.2)
+    axr.xaxis.set_major_formatter(fs.PCT_FMT)
+    axr.set_xlabel("Mean annual loss, % of net income")
+    axr.axvline(s["mean_loss_pct"], color=fs.DARK, lw=1.0, ls=(0, (4, 3)))
+    axr.text(
+        s["mean_loss_pct"],
+        len(order) - 0.2,
+        f"  UK mean {s['mean_loss_pct']:.2f}%",
+        fontsize=8,
+        color=fs.DARK,
+        va="top",
+    )
+    fs.label_hbars(axr, bars, pct[order_p], fmt="{:.2f}%")
+    axr.set_title("B burden")
+    fs.only_x_grid(axr)
+
+    fig.suptitle(
+        "Figure 4. Where the shock lands: mean household loss by region",
+        y=1.03,
+    )
+    fs.note(
+        fig,
+        "Realised 2026 scenario, 12 ONS regions/nations. Unlike the decile view the "
+        "two orderings largely agree: the North East is worst on both margins, London "
+        "least exposed on both. The dataset carries region and country only, so no "
+        "constituency-level cut is possible here.\nSource: authors' calculations on "
+        "PolicyEngine UK.",
+        y=-0.03,
+    )
+    return fs.save(fig, "fig4_region.png")
+
+
+# ==========================================================================
+# fig5 — fuel decomposition by decile
+# ==========================================================================
+
+
+def fig5_fuel_decomposition(cache: dict) -> Path:
+    rows = cache["fuel_by_decile"]
+    d = np.array([r["decile"] for r in rows])
+    gas = np.array([r["gas"] for r in rows])
+    elec = np.array([r["electricity"] for r in rows])
+    motor = np.array([r["motor_fuel"] for r in rows])
+    total = gas + elec + motor
+    s = shock()
+
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(11.4, 5.0), sharex=True)
+
+    axl.bar(d, gas, width=0.72, color=fs.FUEL_COLORS["gas"], label="Gas")
+    axl.bar(
+        d,
+        elec,
+        bottom=gas,
+        width=0.72,
+        color=fs.FUEL_COLORS["electricity"],
+        label="Electricity",
+    )
+    axl.bar(
+        d,
+        motor,
+        bottom=gas + elec,
+        width=0.72,
+        color=fs.FUEL_COLORS["motor_fuel"],
+        label="Motor fuel (petrol + diesel)",
+    )
+    for xi, t in zip(d, total, strict=False):
+        axl.text(xi, t * 1.02, f"£{t:,.0f}", ha="center", va="bottom", fontsize=8)
+    axl.set_ylim(0, total.max() * 1.18)
+    axl.yaxis.set_major_formatter(fs.GBP_FMT)
+    axl.set_ylabel("Mean annual loss, £ per household")
+    axl.set_title("A composition of the cash loss")
+    axl.legend(loc="upper left", fontsize=8.5)
+    fs.only_y_grid(axl)
+
+    share_gas = 100 * gas / total
+    share_elec = 100 * elec / total
+    share_motor = 100 * motor / total
+    axr.bar(d, share_gas, width=0.72, color=fs.FUEL_COLORS["gas"])
+    axr.bar(
+        d, share_elec, bottom=share_gas, width=0.72, color=fs.FUEL_COLORS["electricity"]
+    )
+    axr.bar(
+        d,
+        share_motor,
+        bottom=share_gas + share_elec,
+        width=0.72,
+        color=fs.FUEL_COLORS["motor_fuel"],
+    )
+    for xi, sg, se, sm in zip(d, share_gas, share_elec, share_motor, strict=False):
+        axr.text(
+            xi,
+            sg / 2,
+            f"{sg:.0f}",
+            ha="center",
+            va="center",
+            fontsize=7.5,
+            color="white",
+        )
+        axr.text(
+            xi,
+            sg + se / 2,
+            f"{se:.0f}",
+            ha="center",
+            va="center",
+            fontsize=7.5,
+            color=fs.DARK,
+        )
+        axr.text(
+            xi,
+            sg + se + sm / 2,
+            f"{sm:.0f}",
+            ha="center",
+            va="center",
+            fontsize=7.5,
+            color="white",
+        )
+    axr.set_ylim(0, 100)
+    axr.yaxis.set_major_formatter(fs.PCT_FMT)
+    axr.set_ylabel("Share of the household's loss, %")
+    axr.set_title("B motor fuel is ~two-thirds of the loss in every decile")
+    fs.only_y_grid(axr)
+
+    for ax in (axl, axr):
+        ax.set_xticks(range(1, 11))
+        ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+        ax.set_xlim(0.4, 10.6)
+
+    fig.suptitle(
+        "Figure 5. What the loss is made of: gas, electricity and motor fuel by decile",
+        y=1.02,
+    )
+    fs.note(
+        fig,
+        f"Realised 2026 scenario. Across all households motor fuel is "
+        f"{100 * s['motor_fuel_share_of_loss']:.0f}% of the aggregate loss, gas "
+        f"{100 * s['gas_share_of_loss']:.0f}% and electricity "
+        f"{100 * s['electricity_share_of_loss']:.0f}% — so a domestic-bill instrument "
+        "can reach only about a third of the shock.\nSource: authors' calculations on "
+        "PolicyEngine UK (LCFS-imputed spend, NEED-calibrated quantities).",
+        y=-0.03,
+    )
+    return fs.save(fig, "fig5_fuel_decomposition.png")
+
+
+# ==========================================================================
+# fig6 — uncompensated losers by decile, by policy
+# ==========================================================================
+
+
+def fig6_uncompensated() -> Path:
+    fig, ax = plt.subplots(figsize=(10.4, 5.4))
+    d = np.arange(1, 11)
+
+    for key in POLICY_ORDER:
+        score = load(CENTRAL, key)
+        y = np.array([100 * score["uncompensated_by_decile"][str(i)] for i in d])
+        ax.plot(
+            d,
+            y,
+            marker="o",
+            ms=5,
+            lw=2.2 if key in ("social_tariff", "ippr_rebate") else 1.6,
+            color=POLICY_COLORS[key],
+            label=(
+                f"{POLICY_SHORT[key].replace(chr(10), ' ')} (£{score['cost_bn']:.1f}bn)"
+            ),
+        )
+
+    ax.set_ylim(0, 105)
+    ax.set_xticks(d)
+    ax.set_xlim(0.7, 10.3)
+    ax.yaxis.set_major_formatter(fs.PCT_FMT)
+    ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+    ax.set_ylabel("Losing households still worse off after the policy, %")
+    ax.axhline(100, color=fs.GREY_LIGHT, lw=0.9)
+    ax.text(
+        10.2, 101, "nobody fully compensated", ha="right", fontsize=8, color=fs.GREY
+    )
+    ax.legend(loc="lower right", ncols=2, fontsize=8.5)
+    fs.only_y_grid(ax)
+
+    ax.set_title(
+        "Figure 6. Most losers stay uncompensated: the flat rebate covers the most, "
+        "the social tariff only at the bottom",
+        pad=12,
+    )
+    fs.note(
+        fig,
+        "Realised 2026 scenario. A household counts as uncompensated if its loss "
+        "exceeds its gain from the policy; the denominator is losing households in the "
+        "decile. VAT zero-rating leaves 100% uncompensated everywhere because it "
+        "returns only the 5% VAT on the domestic bill, a fraction of a loss that is "
+        "mostly motor fuel.\nSource: authors' calculations on PolicyEngine UK.",
+        y=-0.02,
+    )
+    return fs.save(fig, "fig6_uncompensated.png")
+
+
+# ==========================================================================
+# fig7 — mean gain by decile per policy, against the loss
+# ==========================================================================
+
+
+def fig7_policy_deciles(cache: dict) -> Path:
+    d = np.arange(1, 11)
+    loss = np.array([r["mean_loss_gbp"] for r in deciles()])
+
+    fig, ax = plt.subplots(figsize=(11.0, 5.6))
+    width = 0.16
+    offsets = (np.arange(len(POLICY_ORDER)) - (len(POLICY_ORDER) - 1) / 2) * width
+
+    for off, key in zip(offsets, POLICY_ORDER, strict=False):
+        gains = np.array(cache["gain_by_decile"][key])
+        score = load(CENTRAL, key)
+        ax.bar(
+            d + off,
+            gains,
+            width,
+            color=POLICY_COLORS[key],
+            label=(
+                f"{POLICY_SHORT[key].replace(chr(10), ' ')} — "
+                f"£{score['cost_bn']:.1f}bn, "
+                f"{100 * score['share_to_bottom_three']:.0f}% to D1–3"
+            ),
+        )
+
+    ax.plot(
+        d,
+        loss,
+        color=fs.DARK,
+        lw=2.2,
+        marker="D",
+        ms=5,
+        zorder=5,
+        label="Loss from the shock",
+    )
+    ax.set_xticks(d)
+    ax.set_xlim(0.4, 10.6)
+    ax.set_ylim(0, loss.max() * 1.22)
+    ax.yaxis.set_major_formatter(fs.GBP_FMT)
+    ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+    ax.set_ylabel("Mean annual amount, £ per household")
+    ax.legend(loc="upper left", ncols=2, fontsize=8.5)
+    fs.only_y_grid(ax)
+    ax.set_title(
+        "Figure 7. Every option is small against the loss it is meant to offset",
+        pad=12,
+    )
+    fs.note(
+        fig,
+        "Realised 2026 scenario; bars are the mean gain per household in the decile "
+        "(including non-recipients), the line is the mean loss. Costs are simulated, "
+        "not sponsors' stated costings.\nSource: authors' calculations on "
+        "PolicyEngine UK.",
+        y=-0.02,
+    )
+    return fs.save(fig, "fig7_policy_deciles.png")
+
+
+# ==========================================================================
+# fig8 — the crux: means-tested status
+# ==========================================================================
+
+
+def fig8_benefit_status(cache: dict) -> Path:
+    b = cache["benefit"]
+    mt = b["means_tested"]
+    nmt = b["not_means_tested"]
+    heavy = b["heavy_burden_gt5pct"]
+    heavy_rows = b["heavy_by_decile"]
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.2, 5.0), width_ratios=[0.85, 1.5, 1.2])
+    axa, axb, axc = axes
+
+    # A — the loss, by status
+    groups = ["On a means-tested\nbenefit", "Not on a means-tested\nbenefit"]
+    xs = np.arange(2)
+    colors = [fs.TEAL_DARK, fs.BLUE]
+    gbp_vals = [mt["mean_loss_gbp"], nmt["mean_loss_gbp"]]
+    pct_vals = [mt["mean_loss_pct"], nmt["mean_loss_pct"]]
+
+    bars = axa.bar(xs, gbp_vals, width=0.6, color=colors)
+    axa.set_ylim(0, max(gbp_vals) * 1.25)
+    fs.label_bars(axa, bars, gbp_vals, fmt="£{:,.0f}")
+    for xi, p in zip(xs, pct_vals, strict=False):
+        axa.text(
+            xi,
+            gbp_vals[xi] * 0.5,
+            f"{p:.2f}%\nof income",
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="white",
+            fontweight="bold",
+        )
+    axa.set_xticks(xs)
+    axa.set_xticklabels(
+        [
+            f"{g}\n{h:.1f}m households"
+            for g, h in zip(
+                groups, [mt["households_m"], nmt["households_m"]], strict=False
+            )
+        ],
+        fontsize=8.5,
+    )
+    axa.yaxis.set_major_formatter(fs.GBP_FMT)
+    axa.set_ylabel("Mean annual loss, £ per household")
+    axa.set_title("A the loss is larger outside\nthe means-tested system")
+    fs.only_y_grid(axa)
+
+    # B — compensation reaching each group
+    width = 0.36
+    idx = np.arange(len(POLICY_ORDER))
+    g_mt = [mt["mean_gain_gbp"][k] for k in POLICY_ORDER]
+    g_nmt = [nmt["mean_gain_gbp"][k] for k in POLICY_ORDER]
+    b1 = axb.bar(
+        idx - width / 2,
+        g_mt,
+        width,
+        color=fs.TEAL_DARK,
+        label="On a means-tested benefit",
+    )
+    b2 = axb.bar(
+        idx + width / 2,
+        g_nmt,
+        width,
+        color=fs.BLUE,
+        label="Not on a means-tested benefit",
+    )
+    axb.set_ylim(0, max(g_mt + g_nmt) * 1.24)
+    fs.label_bars(axb, b1, g_mt, fmt="£{:.0f}")
+    fs.label_bars(axb, b2, g_nmt, fmt="£{:.0f}")
+    axb.set_xticks(idx)
+    axb.set_xticklabels([POLICY_SHORT[k] for k in POLICY_ORDER], fontsize=8)
+    axb.yaxis.set_major_formatter(fs.GBP_FMT)
+    axb.set_ylabel("Mean gain, £ per household per year")
+    axb.set_title("B what each option pays\nto each group")
+    axb.legend(loc="upper left", fontsize=8.5)
+    fs.only_y_grid(axb)
+    axb.annotate(
+        "means-tested instruments\npay the other group nothing",
+        xy=(0.30, 0.60),
+        xycoords="axes fraction",
+        fontsize=8.5,
+        color=fs.GREY,
+    )
+
+    # C — the anchor fact, by decile
+    d = np.array([r["decile"] for r in heavy_rows])
+    share = np.array([100 * r["share_not_means_tested"] for r in heavy_rows])
+    bars = axc.bar(d, share, width=0.72, color=fs.BLUE)
+    for i in range(3):
+        bars[i].set_color(fs.BLUE_DARK)
+    axc.axhline(
+        100 * heavy["share_not_means_tested"], color=fs.DARK, lw=1.2, ls=(0, (4, 3))
+    )
+    axc.text(
+        10.4,
+        100 * heavy["share_not_means_tested"] + 2,
+        f"all deciles: {100 * heavy['share_not_means_tested']:.0f}%",
+        ha="right",
+        fontsize=8.5,
+        color=fs.DARK,
+        fontweight="bold",
+    )
+    axc.set_ylim(0, 105)
+    axc.set_xticks(range(1, 11))
+    axc.set_xlim(0.4, 10.6)
+    axc.yaxis.set_major_formatter(fs.PCT_FMT)
+    axc.set_xlabel("Equivalised net income decile")
+    axc.set_ylabel("Share outside the means-tested system, %")
+    axc.set_title(
+        "C of households losing >5% of income,\nthe share a social tariff cannot reach"
+    )
+    fs.only_y_grid(axc)
+
+    fig.suptitle(
+        "Figure 8. The reach problem: the hardest-hit households are largely "
+        "outside the means-tested system",
+        y=1.05,
+    )
+    fs.note(
+        fig,
+        f"Realised 2026 scenario. {heavy['households_m']:.1f}m households lose more "
+        f"than 5% of net income; "
+        f"{100 * heavy['share_not_means_tested']:.0f}% of them receive no means-tested "
+        "benefit, the counterpart of JRF's anchor statistic that ~40% of households "
+        "struggling to heat their home are not on means-tested benefits. Means-tested "
+        "receipt is any of UC, Pension Credit, tax credits, Housing Benefit, Income "
+        "Support, income-based JSA/ESA.\nSource: authors' calculations on "
+        "PolicyEngine UK.",
+        y=-0.04,
+    )
+    return fs.save(fig, "fig8_benefit_status.png")
 
 
 # --------------------------------------------------------------------------
+# driver
+# --------------------------------------------------------------------------
+
+NO_MICRO = {
+    "fig1": fig1_price_path,
+    "fig2": fig2_decile_dual,
+    "fig3": fig3_within_decile,
+    "fig4": fig4_region,
+    "fig6": fig6_uncompensated,
+}
+NEEDS_MICRO = {
+    "fig5": fig5_fuel_decomposition,
+    "fig7": fig7_policy_deciles,
+    "fig8": fig8_benefit_status,
+}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", default="results")
-    parser.add_argument("--out", default="results/figures")
-    parser.add_argument("--scenario", default="niesr_adverse")
+    parser.add_argument("which", nargs="*", help="figure prefixes, e.g. fig2 fig5")
+    parser.add_argument(
+        "--refresh", action="store_true", help="recompute the micro cache"
+    )
     args = parser.parse_args()
 
-    results = Path(args.results)
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    wanted = set(args.which) or set(NO_MICRO) | set(NEEDS_MICRO)
+    made: list[Path] = []
 
-    builders = (
-        lambda: constituency_two_maps(results, out),
-        lambda: decile_impact_chart(results, out, args.scenario),
-        lambda: intra_decile_chart(results, out, args.scenario, "shock"),
-        lambda: policy_comparison_chart(results, out, args.scenario),
-    )
-    for build in builders:
-        try:
-            build()
-        except FileNotFoundError as exc:
-            print(f"skipped (missing input): {exc}")
+    for key, fn in NO_MICRO.items():
+        if key in wanted:
+            made.append(fn())
+            print(f"  {made[-1].name}")
+
+    micro_keys = wanted & set(NEEDS_MICRO)
+    if micro_keys:
+        cache = micro(refresh=args.refresh)
+        if cache is None:
+            print(
+                f"  skipped {sorted(micro_keys)}: these need the PolicyEngine UK "
+                "microdata (set HUGGING_FACE_TOKEN in .env)"
+            )
+        else:
+            for key in sorted(micro_keys):
+                made.append(NEEDS_MICRO[key](cache))
+                print(f"  {made[-1].name}")
+
+    print(f"\n{len(made)} figures written to {fs.FIGURES_DIR}")
+    for path in made:
+        size = path.stat().st_size
+        status = "ok" if size > 10_000 else "SUSPICIOUSLY SMALL"
+        print(f"  {path.name:34} {size / 1024:7.1f} kB  {status}")
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("MPLBACKEND", "Agg")
     main()

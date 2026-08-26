@@ -1,103 +1,129 @@
 #!/usr/bin/env python3
-"""Mechanically emit paper/values_generated.tex from canonical results files.
+r"""Mechanically emit ``paper/values_generated.tex`` from the canonical results.
 
-Every headline number in the manuscript enters prose as a macro from
-``paper/values_generated.tex``; nothing is hand-transcribed. This script derives
-each macro from the canonical files under ``results/`` and writes them as LaTeX
-``\\newcommand``s. It does not edit the ``.tex`` prose itself.
+Every headline number in the manuscript enters prose as a macro defined here;
+nothing is hand-transcribed. This script derives each macro from the files under
+``results/`` (plus the pure-data price paths in
+:mod:`uk_iran_conflict.scenarios`, which need no microdata) and writes them as
+LaTeX ``\newcommand``\ s. It never edits the prose.
 
-Usage:  python analysis/emit_tex_values.py  ->  paper/values_generated.tex
+Usage
+-----
+``python analysis/emit_tex_values.py``            -> ``paper/values_generated.tex``
+``python analysis/emit_tex_values.py --draft``    -> ``\GENMISSING`` renders as a
+red ``[?]`` instead of erroring, so an incomplete tree still compiles.
 
-If a source file or key is missing (a stale tree, a mid-refactor rename), the
-macro is emitted as ``\\GENMISSING`` **with a comment naming the missing
-source**, so an incomplete tree fails visibly at LaTeX build time rather than
-silently keeping old numbers.
+Safety design
+-------------
+* :func:`emit` never raises. A missing file or key produces
+  ``\newcommand{\x}{\GENMISSING} % MISSING: <source> -> <error>`` and is listed
+  on stdout at the end, so a stale tree fails **visibly** at LaTeX build time
+  rather than silently keeping old numbers.
+* First definition wins: a repeated macro name is skipped, because
+  ``\newcommand`` errors on redefinition.
 
-Macros emitted (grouped by source):
+The real schema
+---------------
+``results/<scenario>/shock.json`` (dataclass ``incidence.ScenarioResult`` plus
+one appended key)::
 
-  the bare shock, per scenario (results/<scenario>/shock.json):
-    \\gen<Scenario>ShockCostBn \\gen<Scenario>ShockDoneAvg
-    \\gen<Scenario>ShockDoneRelPct \\gen<Scenario>ShockDtenAvg
-    \\gen<Scenario>ShockDtenRelPct \\gen<Scenario>ShockPovRelAhcPp
-    \\gen<Scenario>ShockGiniChangePp \\gen<Scenario>ShockLosersDoneePct
-    \\gen<Scenario>ShockLosersDfivePct
-    for <Scenario> in Baseline, Adverse, Realised
+    scenario, aggregate_cost_bn, mean_loss_gbp, mean_loss_pct,
+    gas_share_of_loss, electricity_share_of_loss, motor_fuel_share_of_loss,
+    decile[10]       {decile, mean_loss_gbp, mean_loss_pct,
+                      share_of_total_loss, households_m}
+    intra_decile[10] {decile, p10_loss_pct, p50_loss_pct, p90_loss_pct,
+                      share_above_5pct, share_above_10pct}
+    region[12]       {name, mean_loss_gbp, mean_loss_pct, households_m}
+    gini_baseline, gini_after, poverty_bhc_baseline, poverty_ahc_baseline,
+    means_tested_share
 
-  policy responses, central scenario (results/<central>/<policy>.json):
-    \\gen<Policy>CostBn \\gen<Policy>BottomThreeSharePct
-    \\gen<Policy>CostPerPoundDone \\gen<Policy>PovRelAhcPp
-    \\gen<Policy>LosersDoneePct \\gen<Policy>LosersDfivePct
-    for <Policy> in SocialTariff, JrfBlock, WhdExpansion, VatZero, IpprRebate
+``results/<scenario>/<policy>.json`` (dataclass ``policies.PolicyScore``)::
 
-  cross-cell spans (results/summary.csv):
-    \\genCellCount \\genPolicyCostMinBn \\genPolicyCostMaxBn
-    \\genLosersDoneMinPct \\genLosersDoneMaxPct
+    policy, label, cost_bn, stated_cost_bn, share_to_bottom_three,
+    cost_per_pound_decile_one, mean_gain_gbp, uncompensated_share_overall,
+    uncompensated_by_decile{"1".."10"}, net_loss_after_policy_gbp,
+    fully_compensated_share
 
-  constituency geography (results/geo/constituency_impacts.csv):
-    \\genSeatCount \\genSeatWorstPctName \\genSeatWorstPctValue
-    \\genSeatWorstCashName \\genSeatWorstCashValue \\genSeatRankCorrelation
+``results/<scenario>/aggregates.json``::
 
-  inequality, central scenario shock:
-    \\genBaselineGini \\genBaselineTopOnePct \\genBaselineTopTenPct
-    \\genBaselineBottomFiftyPct
+    aggregate_energy_spend_bn, aggregate_fuel_spend_bn
 
-  elasticity sensitivity (results/sensitivity/elasticity.csv):
-    \\genElasticityCostMinBn \\genElasticityCostMaxBn
+Note on ``cost_per_pound_decile_one``: as stored it is *£bn of total cost per £1
+of mean decile-one gain*, which is not a readable unit. The paper's
+"cost per pound of bottom-decile gain" is recovered here as total cost divided
+by the total gain accruing to decile one, i.e.
+
+    cost_bn * 1e9 / (mean decile-one gain * decile-one households).
+
+Sensitivity sources
+-------------------
+``results/sensitivity/elasticity.csv``  (14 rows: five named specs then the flat
+grid) -- ``spec, epsilon_mean, mean_loss_gbp, aggregate_loss_bn,
+share_of_upper_bound_shaved, decile1_loss_pct, decile10_loss_pct, ...``
+
+``results/sensitivity/cap_lag.csv``  (4 rows, one per lag) --
+``lag_quarters, annualised_mean_loss_gbp, cumulative_mean_loss_gbp,
+cumulative_loss_bn, motor_fuel_bn, ...``
+
+``results/sensitivity/asymmetry.csv``  (3 rows: 0.70 / 0.85 paper / 1.00) --
+``marginal_pricing_share, mean_loss_gbp, decile_ratio_pct,
+gas_share_of_domestic_loss, ...``
+
+Values not yet in ``results/``
+-----------------------------
+Three prose numbers are computed inside ``analysis/run_incidence.py`` but not
+persisted, and this emitter must run in CI without the private microdata token,
+so they are carried here as documented constants with a TODO naming the fix.
+See :data:`_PENDING_PERSIST`.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import time
 from pathlib import Path
-
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 R = ROOT / "results"
 OUT = ROOT / "paper" / "values_generated.tex"
 
-#: The scenario whose cells carry the paper's headline numbers.
-#: TODO(contract): must be a key of uk_iran_conflict.scenarios.SCENARIOS.
-CENTRAL_SCENARIO = "niesr_adverse"
+#: The observed shock is the paper's headline. The two NIESR paths are the
+#: forward-looking bounds around it (methodology.tex, "Scenarios").
+CENTRAL_SCENARIO = "realised_2026"
 
-SCENARIO_MACRO = {
-    "niesr_baseline": "Baseline",
-    "niesr_adverse": "Adverse",
-    "realised_2026": "Realised",
-}
+SCENARIOS = ("niesr_baseline", "niesr_adverse", "realised_2026")
+
+#: Policy key -> the macro stem the prose uses. The prose names are shorter
+#: than the file names (\genJrfCostBn, not \genJrfBlockCostBn).
 POLICY_MACRO = {
     "social_tariff": "SocialTariff",
-    "jrf_block": "JrfBlock",
-    "whd_expansion": "WhdExpansion",
-    "vat_zero": "VatZero",
-    "ippr_rebate": "IpprRebate",
+    "jrf_block": "Jrf",
+    "whd_expansion": "Whd",
+    "vat_zero": "VatCut",
+    "ippr_rebate": "Rebate",
 }
 
 lines: list[str] = []
 missing: list[str] = []
 
-
-#: Macro names already written, so a name emitted twice cannot reach the .tex.
-#: LaTeX rejects a duplicate \newcommand outright, which would break the build
-#: for a reason unrelated to the results — the paper-facing aliases below
-#: deliberately overlap the results-shaped names for a few policy costs.
+#: Macro names already written; a repeat is skipped rather than emitted twice.
 _emitted: set[str] = set()
 
 
 def emit(name: str, value, fmt: str = "{:.1f}", source: str = "") -> None:
-    """Emit one macro; on any failure emit a loud placeholder.
-
-    First definition wins: a repeated ``name`` is skipped rather than emitted
-    twice, since ``\\newcommand`` errors on redefinition.
-    """
+    r"""Emit one macro; on any failure emit a loud ``\GENMISSING`` placeholder."""
     if name in _emitted:
         return
     _emitted.add(name)
     try:
         if callable(value):
             value = value()
-        text = fmt.format(value) if not isinstance(value, str) else value
+        if value is None:
+            raise ValueError("value is None")
+        text = value if isinstance(value, str) else fmt.format(value)
+        if text.strip() in {"", "nan", "inf", "-inf"}:
+            raise ValueError(f"non-finite value {text!r}")
         lines.append(f"\\newcommand{{\\{name}}}{{{text}}}")
     except Exception as exc:  # noqa: BLE001 — every miss must surface, not abort
         missing.append(f"{name} ({source or 'unknown source'}: {exc})")
@@ -110,508 +136,531 @@ def jload(rel: str) -> dict:
     return json.loads((R / rel).read_text())
 
 
-def _decile(cell: dict, block: str, decile: int) -> float:
-    """Read one decile out of a result block (JSON keys come back as strings)."""
-    values = cell[block]
-    return float(values[str(decile)] if str(decile) in values else values[decile])
+def decile_row(shock: dict, block: str, decile: int) -> dict:
+    """One row of ``decile`` or ``intra_decile``, keyed by decile number."""
+    for row in shock[block]:
+        if int(row["decile"]) == decile:
+            return row
+    raise KeyError(f"{block} has no decile {decile}")
 
 
-def _losers(cell: dict, decile: int) -> float:
-    """Share of a decile left worse off — losers of any size."""
-    bands = cell["intra_decile"]
-    band = bands[str(decile)] if str(decile) in bands else bands[decile]
-    return float(band["lose_less_5"] + band["lose_more_5"])
+def decile_one_households_m(shock: dict) -> float:
+    return float(decile_row(shock, "decile", 1)["households_m"])
+
+
+def cost_per_pound_decile_one(policy: dict, shock: dict) -> float:
+    """Total cost, in £, per £1 of gain reaching decile one.
+
+    ``cost_per_pound_decile_one`` in the JSON is £bn per £1 of *mean* decile-one
+    gain, so the mean gain is recovered from it and multiplied by the number of
+    decile-one households to get the gain actually delivered to that decile.
+    """
+    stored = float(policy["cost_per_pound_decile_one"])
+    cost_bn = float(policy["cost_bn"])
+    if not stored:
+        raise ValueError("no decile-one gain")
+    mean_gain_d1 = cost_bn / stored
+    total_d1_gain = mean_gain_d1 * decile_one_households_m(shock) * 1e6
+    if total_d1_gain <= 0:
+        raise ValueError("non-positive decile-one gain")
+    return cost_bn * 1e9 / total_d1_gain
+
+
+# ---------------------------------------------------------------------------
+# sensitivity CSV readers
+# ---------------------------------------------------------------------------
+
+SENS = R / "sensitivity"
+
+
+def sload(name: str) -> list[dict]:
+    """Rows of one ``results/sensitivity/*.csv`` as dicts of strings."""
+    with (SENS / name).open(newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def srow(name: str, key: str, value: str) -> dict:
+    """The single row of ``name`` whose column ``key`` equals ``value``."""
+    for row in sload(name):
+        if row[key].strip() == value:
+            return row
+    raise KeyError(f"{name}: no row with {key}={value}")
+
+
+def snum(row: dict, column: str) -> float:
+    return float(row[column])
+
+
+#: The paper's calibrated lag, mirrored from
+#: ``uk_iran_conflict.scenarios.CAP_LAG_QUARTERS`` but written literally so this
+#: emitter stays importable without the package (CI runs it with no microdata).
+PAPER_CAP_LAG = "3"
+
+#: The marginal-pricing sweep endpoints and the paper's central value.
+ASYM_LOW, ASYM_CENTRAL, ASYM_HIGH = "0.7", "0.85", "1.0"
+
+# ---------------------------------------------------------------------------
+# values the pipeline computes but does not yet persist
+# ---------------------------------------------------------------------------
+
+#: TODO(results): ``analysis/run_incidence.py`` should persist a ``medians``
+#: block in ``results/<scenario>/shock.json`` carrying, per decile, the median
+#: equivalised disposable income, the share of households with zero or negative
+#: income, and the share of large losers outside the means-tested system. Until
+#: it does, these three prose numbers are carried here as constants: they come
+#: from the same verified run as the committed JSON (see ``docs/FINDINGS.md``
+#: sections 4 and 8) and cannot be recomputed here, because this emitter must
+#: run in CI without a Hugging Face token for the private microdata.
+_PENDING_PERSIST = {
+    "genDecileOneMedianIncomeGbp": (16000.0, "{:,.0f}"),
+    "genDecileOneZeroIncomeShare": (0.57, "{:.2f}"),
+    "genLargeLoserOutsideMeansTest": (98.0, "{:.0f}"),
+}
 
 
 def main(draft: bool = False) -> None:
-    # --- the bare shock, per scenario --------------------------------------
-    for scenario, macro in SCENARIO_MACRO.items():
-        rel = f"{scenario}/shock.json"
-        emit(
-            f"gen{macro}ShockCostBn",
-            lambda rel=rel: jload(rel)["exchequer_cost"] / 1e9,
-            "{:.1f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockDoneAvg",
-            lambda rel=rel: _decile(jload(rel), "decile_average_change", 1),
-            "{:.0f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockDoneRelPct",
-            lambda rel=rel: _decile(jload(rel), "decile_relative_change", 1) * 100,
-            "{:.2f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockDtenAvg",
-            lambda rel=rel: _decile(jload(rel), "decile_average_change", 10),
-            "{:.0f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockDtenRelPct",
-            lambda rel=rel: _decile(jload(rel), "decile_relative_change", 10) * 100,
-            "{:.2f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockPovRelAhcPp",
-            lambda rel=rel: jload(rel)["poverty_change"]["relative_ahc"] * 100,
-            "{:.2f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockGiniChangePp",
-            lambda rel=rel: (
-                (jload(rel)["gini_reform"] - jload(rel)["gini_baseline"]) * 100
-            ),
-            "{:.2f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockLosersDoneePct",
-            lambda rel=rel: _losers(jload(rel), 1) * 100,
-            "{:.0f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}ShockLosersDfivePct",
-            lambda rel=rel: _losers(jload(rel), 5) * 100,
-            "{:.0f}",
-            rel,
-        )
-
-    # --- policy responses, central scenario --------------------------------
-    for policy, macro in POLICY_MACRO.items():
-        rel = f"{CENTRAL_SCENARIO}/{policy}.json"
-        emit(
-            f"gen{macro}CostBn",
-            lambda rel=rel: -jload(rel)["exchequer_cost"] / 1e9,
-            "{:.1f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}PovRelAhcPp",
-            lambda rel=rel: jload(rel)["poverty_change"]["relative_ahc"] * 100,
-            "{:.2f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}LosersDoneePct",
-            lambda rel=rel: _losers(jload(rel), 1) * 100,
-            "{:.0f}",
-            rel,
-        )
-        emit(
-            f"gen{macro}LosersDfivePct",
-            lambda rel=rel: _losers(jload(rel), 5) * 100,
-            "{:.0f}",
-            rel,
-        )
-
-        def bottom_three(rel=rel) -> float:
-            cell = jload(rel)
-            gains = {
-                int(k): v
-                for k, v in cell["decile_average_change"].items()
-                if float(v) > 0
-            }
-            total = sum(gains.values())
-            return 100 * sum(gains.get(d, 0.0) for d in (1, 2, 3)) / total
-
-        emit(f"gen{macro}BottomThreeSharePct", bottom_three, "{:.0f}", rel)
-        emit(
-            f"gen{macro}CostPerPoundDone",
-            lambda rel=rel: (
-                -jload(rel)["exchequer_cost"]
-                / _decile(jload(rel), "decile_average_change", 1)
-                / 1e6
-            ),
-            "{:.2f}",
-            rel,
-        )
-
-    # --- cross-cell spans ---------------------------------------------------
-    sm = "summary.csv"
-    try:
-        summary = pd.read_csv(R / sm)
-        policies_only = summary[summary["policy"] != "shock"]
-    except Exception:  # noqa: BLE001
-        summary = policies_only = None
-    emit("genCellCount", lambda: len(summary), "{:d}", sm)
-    emit(
-        "genPolicyCostMinBn",
-        lambda: -float(policies_only["exchequer_cost_bn"].max()),
-        "{:.1f}",
-        sm,
-    )
-    emit(
-        "genPolicyCostMaxBn",
-        lambda: -float(policies_only["exchequer_cost_bn"].min()),
-        "{:.1f}",
-        sm,
-    )
-    emit(
-        "genLosersDoneMinPct",
-        lambda: 100 * float(policies_only["uncompensated_losers_decile1"].min()),
-        "{:.0f}",
-        sm,
-    )
-    emit(
-        "genLosersDoneMaxPct",
-        lambda: 100 * float(policies_only["uncompensated_losers_decile1"].max()),
-        "{:.0f}",
-        sm,
-    )
-
-    # --- constituency geography (the two-map figure) ------------------------
-    geo = "geo/constituency_impacts.csv"
-    try:
-        seats = pd.read_csv(R / geo)
-    except Exception:  # noqa: BLE001
-        seats = None
-    emit("genSeatCount", lambda: len(seats), "{:d}", geo)
-    emit(
-        "genSeatWorstPctName",
-        lambda: str(seats.loc[seats["relative_change"].idxmin(), "name"]),
-        "{}",
-        geo,
-    )
-    emit(
-        "genSeatWorstPctValue",
-        lambda: 100 * float(seats["relative_change"].min()),
-        "{:.2f}",
-        geo,
-    )
-    emit(
-        "genSeatWorstCashName",
-        lambda: str(seats.loc[seats["average_change"].idxmin(), "name"]),
-        "{}",
-        geo,
-    )
-    emit(
-        "genSeatWorstCashValue",
-        lambda: float(seats["average_change"].min()),
-        "{:.0f}",
-        geo,
-    )
-    # The paper's Step 3 point: the £ and % maps rank seats almost oppositely.
-    emit(
-        "genSeatRankCorrelation",
-        lambda: float(
-            seats["average_change"].corr(seats["relative_change"], method="spearman")
-        ),
-        "{:.2f}",
-        geo,
-    )
-
-    # --- baseline inequality ------------------------------------------------
-    base = f"{CENTRAL_SCENARIO}/shock.json"
-    emit("genBaselineGini", lambda: jload(base)["gini_baseline"], "{:.3f}", base)
-    emit(
-        "genBaselineTopOnePct",
-        lambda: jload(base)["top_one_percent_share_baseline"] * 100,
-        "{:.1f}",
-        base,
-    )
-    emit(
-        "genBaselineTopTenPct",
-        lambda: jload(base)["top_ten_percent_share_baseline"] * 100,
-        "{:.1f}",
-        base,
-    )
-    emit(
-        "genBaselineBottomFiftyPct",
-        lambda: jload(base)["bottom_fifty_percent_share_baseline"] * 100,
-        "{:.1f}",
-        base,
-    )
-
-    # --- elasticity sensitivity (#1114: PolicyEngine has none of its own) ---
-    el = "sensitivity/elasticity.csv"
-    try:
-        elast = pd.read_csv(R / el)
-    except Exception:  # noqa: BLE001
-        elast = None
-    emit(
-        "genElasticityCostMinBn",
-        lambda: float(elast["exchequer_cost_bn"].min()),
-        "{:.1f}",
-        el,
-    )
-    emit(
-        "genElasticityCostMaxBn",
-        lambda: float(elast["exchequer_cost_bn"].max()),
-        "{:.1f}",
-        el,
-    )
-
-    # --- paper-facing macro names ------------------------------------------
-    # PAPER-FACING MACROS. The prose in paper/sections/*.tex was drafted
-    # against these names; the blocks above emit the results-shaped names.
-    # Both are emitted from the SAME canonical files so the two schemes can
-    # never disagree. If a name here is unused, LaTeX simply ignores it; if a
-    # name used in prose is absent, the build fails on \GENMISSING by design.
     central = f"{CENTRAL_SCENARIO}/shock.json"
-    realised = "realised_2026/shock.json"
-    adverse = "niesr_adverse/shock.json"
 
-    def _scen(rel, *keys, scale=1.0):
-        cell = jload(rel)
-        for k in keys:
-            cell = cell[k]
-        return float(cell) * scale
-
-    # headline loss
+    # ------------------------------------------------------------------
+    # headline loss, central (realised) scenario
+    # ------------------------------------------------------------------
     emit(
-        "genCentralLossMean",
-        lambda: -_scen(central, "mean_household_change"),
-        "{:.0f}",
-        central,
+        "genCentralLossMean", lambda: jload(central)["mean_loss_gbp"], "{:.0f}", central
     )
     emit(
         "genCentralLossPctIncome",
-        lambda: -_scen(central, "mean_relative_change", scale=100),
+        lambda: jload(central)["mean_loss_pct"],
         "{:.2f}",
         central,
     )
 
-    # decile losses, both metrics — the paper's central contrast
+    # decile contrast: £ rises across deciles, % falls. The paper's core point.
     for tag, d in (("One", 1), ("Ten", 10)):
         emit(
-            f"genDecile{tag}LossPct",
-            lambda d=d: -_decile(jload(central), "decile_relative_change", d) * 100,
-            "{:.2f}",
+            f"genDecile{tag}LossGbp",
+            lambda d=d: decile_row(jload(central), "decile", d)["mean_loss_gbp"],
+            "{:.0f}",
             central,
         )
         emit(
-            f"genDecile{tag}LossGbp",
-            lambda d=d: -_decile(jload(central), "decile_average_change", d),
-            "{:.0f}",
+            f"genDecile{tag}LossPct",
+            lambda d=d: decile_row(jload(central), "decile", d)["mean_loss_pct"],
+            "{:.2f}",
             central,
         )
     emit(
         "genDecileRatioPct",
         lambda: (
-            _decile(jload(central), "decile_relative_change", 1)
-            / _decile(jload(central), "decile_relative_change", 10)
+            decile_row(jload(central), "decile", 1)["mean_loss_pct"]
+            / decile_row(jload(central), "decile", 10)["mean_loss_pct"]
         ),
         "{:.1f}",
         central,
     )
+
+    # between- vs within-decile dispersion (Cronin, Fullerton & Sexton 2019)
     emit(
         "genBetweenDecileRangePct",
-        lambda: (
-            100
-            * abs(
-                _decile(jload(central), "decile_relative_change", 1)
-                - _decile(jload(central), "decile_relative_change", 10)
-            )
+        lambda: abs(
+            decile_row(jload(central), "decile", 1)["mean_loss_pct"]
+            - decile_row(jload(central), "decile", 10)["mean_loss_pct"]
         ),
         "{:.2f}",
         central,
     )
-    emit(
-        "genWithinDecileRangePct",
-        lambda: _scen(central, "within_decile_range", scale=100),
-        "{:.2f}",
-        central,
-    )
 
-    # constituency geography — the headline figure
-    emit(
-        "genConstituencyRankCorr",
-        lambda: _scen(central, "constituency", "rank_correlation_gbp_vs_pct"),
-        "{:.2f}",
-        central,
-    )
-    emit(
-        "genTailOverlapCount",
-        lambda: _scen(central, "constituency", "tail_overlap_count"),
-        "{:.0f}",
-        central,
-    )
+    def within_decile_range() -> float:
+        """Mean across deciles of the within-decile p90-p10 loss-share range."""
+        rows = jload(central)["intra_decile"]
+        spreads = [r["p90_loss_pct"] - r["p10_loss_pct"] for r in rows]
+        return sum(spreads) / len(spreads)
 
-    # price path
+    emit("genWithinDecileRangePct", within_decile_range, "{:.2f}", central)
+
+    # ------------------------------------------------------------------
+    # aggregate additional spend, by scenario
+    # ------------------------------------------------------------------
+    for tag, scenario in (
+        ("Realised", "realised_2026"),
+        ("Adverse", "niesr_adverse"),
+        ("Baseline", "niesr_baseline"),
+    ):
+        rel = f"{scenario}/shock.json"
+        emit(
+            f"genAggSpend{tag}Bn",
+            lambda rel=rel: jload(rel)["aggregate_cost_bn"],
+            "{:.1f}",
+            rel,
+        )
+
+    # ------------------------------------------------------------------
+    # price path (pure scenario data — no microdata needed)
+    # ------------------------------------------------------------------
+    def scenario_obj():
+        from uk_iran_conflict import scenarios as scen  # noqa: PLC0415
+
+        return scen.SCENARIOS[CENTRAL_SCENARIO]
+
+    src = "uk_iran_conflict.scenarios.SCENARIOS[realised_2026]"
     emit(
         "genGasPeakPence",
-        lambda: _scen(central, "prices", "gas_peak_pence"),
+        lambda: scenario_obj().gas.change_pence_per_therm,
         "{:.0f}",
-        central,
+        src,
     )
-    emit(
-        "genOilPeakUsd",
-        lambda: _scen(central, "prices", "oil_peak_usd"),
-        "{:.0f}",
-        central,
-    )
-    emit(
-        "genOilPeakPct",
-        lambda: _scen(central, "prices", "oil_peak_pct", scale=100),
-        "{:.0f}",
-        central,
-    )
+    emit("genOilPeakUsd", lambda: scenario_obj().oil.change_usd_per_bbl, "{:.0f}", src)
+    emit("genOilPeakPct", lambda: 100 * scenario_obj().oil.pct_change, "{:.0f}", src)
     emit(
         "genGasUnitRatePct",
-        lambda: _scen(central, "prices", "gas_unit_rate_pct", scale=100),
+        lambda: 100 * scenario_obj().retail_shock.gas_pct_change,
         "{:.1f}",
-        central,
+        src,
     )
     emit(
         "genElecUnitRatePct",
-        lambda: _scen(central, "prices", "electricity_unit_rate_pct", scale=100),
+        lambda: 100 * scenario_obj().retail_shock.electricity_pct_change,
         "{:.1f}",
-        central,
+        src,
     )
-    emit(
-        "genCapAnnualised",
-        lambda: _scen(central, "prices", "cap_annualised_gbp"),
-        "{:.0f}",
-        central,
-    )
-    emit(
-        "genCapBaselineLevel",
-        lambda: _scen(central, "prices", "cap_baseline_gbp"),
-        "{:.0f}",
-        central,
-    )
+    emit("genCapAnnualised", lambda: scenario_obj().peak_cap_gbp, "{:.0f}", src)
+    emit("genCapBaselineLevel", lambda: scenario_obj().baseline_cap_gbp, "{:.0f}", src)
 
-    # aggregate spend by scenario
-    emit(
-        "genAggSpendRealisedBn",
-        lambda: _scen(realised, "aggregate_energy_spend", scale=1 / 1e9),
-        "{:.1f}",
-        realised,
-    )
-    emit(
-        "genAggSpendAdverseBn",
-        lambda: _scen(adverse, "aggregate_energy_spend", scale=1 / 1e9),
-        "{:.1f}",
-        adverse,
-    )
-
-    # heating-regime heterogeneity
-    emit(
-        "genOffGridLossGbp",
-        lambda: -_scen(central, "heating", "off_gas_grid_change"),
-        "{:.0f}",
-        central,
-    )
-    emit(
-        "genOnGridLossGbp",
-        lambda: -_scen(central, "heating", "on_gas_grid_change"),
-        "{:.0f}",
-        central,
-    )
-
-    # policy scorecard, paper-facing names
-    _POLICY_FILE = {
-        "SocialTariff": "social_tariff",
-        "Jrf": "jrf_block",
-        "Whd": "whd_expansion",
-        "VatCut": "vat_cut",
-        "Rebate": "ippr_rebate",
-    }
-    for tag, fname in _POLICY_FILE.items():
-        prel = f"{CENTRAL_SCENARIO}/{fname}.json"
-        emit(
-            f"gen{tag}CostBn",
-            lambda prel=prel: -jload(prel)["exchequer_cost"] / 1e9,
-            "{:.1f}",
-            prel,
-        )
+    # ------------------------------------------------------------------
+    # policy scorecard, central scenario
+    # ------------------------------------------------------------------
+    for policy, tag in POLICY_MACRO.items():
+        rel = f"{CENTRAL_SCENARIO}/{policy}.json"
+        emit(f"gen{tag}CostBn", lambda rel=rel: jload(rel)["cost_bn"], "{:.1f}", rel)
         emit(
             f"gen{tag}ShareBottomThree",
-            lambda prel=prel: _scen(prel, "share_to_bottom_three", scale=100),
+            lambda rel=rel: 100 * jload(rel)["share_to_bottom_three"],
             "{:.0f}",
-            prel,
+            rel,
         )
         emit(
             f"gen{tag}UncompensatedShare",
-            lambda prel=prel: _scen(prel, "uncompensated_loser_share", scale=100),
+            lambda rel=rel: 100 * jload(rel)["uncompensated_share_overall"],
             "{:.0f}",
-            prel,
+            rel,
         )
-    # the prose uses these two shorter aliases
-    emit(
-        "genJrfCostBn",
-        lambda: -jload(f"{CENTRAL_SCENARIO}/jrf_block.json")["exchequer_cost"] / 1e9,
-        "{:.1f}",
-        f"{CENTRAL_SCENARIO}/jrf_block.json",
-    )
-    emit(
-        "genNonMeansTestedStruggling",
-        lambda: _scen(central, "struggling_not_means_tested_share", scale=100),
-        "{:.0f}",
-        central,
-    )
 
-    # best/worst cost per £ of bottom-decile gain, across the five policies
-    def _cost_per_pound(select):
-        vals = []
-        for fname in _POLICY_FILE.values():
-            try:
-                cell = jload(f"{CENTRAL_SCENARIO}/{fname}.json")
-                gain = _decile(cell, "decile_average_change", 1)
-                if gain > 0:
-                    vals.append(-cell["exchequer_cost"] / 1e9 / gain)
-            except Exception:  # noqa: BLE001
-                continue
-        if not vals:
-            raise ValueError("no policy results available")
-        return select(vals)
+    def cost_per_pound(select) -> float:
+        shock = jload(central)
+        values = []
+        for policy in POLICY_MACRO:
+            values.append(
+                cost_per_pound_decile_one(
+                    jload(f"{CENTRAL_SCENARIO}/{policy}.json"), shock
+                )
+            )
+        return select(values)
 
     emit(
         "genBestCostPerPound",
-        lambda: _cost_per_pound(min),
+        lambda: cost_per_pound(min),
         "{:.2f}",
         f"{CENTRAL_SCENARIO}/<policies>.json",
     )
     emit(
         "genWorstCostPerPound",
-        lambda: _cost_per_pound(max),
+        lambda: cost_per_pound(max),
         "{:.2f}",
         f"{CENTRAL_SCENARIO}/<policies>.json",
     )
 
-    # appendix sensitivities
+    # ------------------------------------------------------------------
+    # composition of the loss: motor fuel is two thirds of it
+    # ------------------------------------------------------------------
+    for tag, scenario in (("", CENTRAL_SCENARIO), ("Adverse", "niesr_adverse")):
+        rel = f"{scenario}/shock.json"
+        for stem, key in (
+            ("MotorFuel", "motor_fuel_share_of_loss"),
+            ("Gas", "gas_share_of_loss"),
+            ("Elec", "electricity_share_of_loss"),
+        ):
+            emit(
+                f"gen{stem}ShareOfLoss{tag}",
+                lambda rel=rel, key=key: 100 * jload(rel)[key],
+                "{:.1f}",
+                rel,
+            )
+        # every domestic-bill instrument is confined to this share by construction
+        emit(
+            f"genDomesticShareOfLoss{tag}",
+            lambda rel=rel: (
+                100
+                * (
+                    jload(rel)["gas_share_of_loss"]
+                    + jload(rel)["electricity_share_of_loss"]
+                )
+            ),
+            "{:.1f}",
+            rel,
+        )
+
+    # ------------------------------------------------------------------
+    # more of the decile profile: the cash peak at eight, and medians
+    # ------------------------------------------------------------------
+    for tag, d in (("Eight", 8), ("Nine", 9)):
+        emit(
+            f"genDecile{tag}LossGbp",
+            lambda d=d: decile_row(jload(central), "decile", d)["mean_loss_gbp"],
+            "{:.0f}",
+            central,
+        )
+        emit(
+            f"genDecile{tag}LossPct",
+            lambda d=d: decile_row(jload(central), "decile", d)["mean_loss_pct"],
+            "{:.2f}",
+            central,
+        )
+
+    # The %-gradient survives on medians, so it is not a small-income artefact.
+    for tag, d in (("One", 1), ("Ten", 10)):
+        emit(
+            f"genDecile{tag}MedianLossPct",
+            lambda d=d: decile_row(jload(central), "intra_decile", d)["p50_loss_pct"],
+            "{:.2f}",
+            central,
+        )
+    # Computed from the medians *as printed* (2dp), so a reader dividing the two
+    # figures in the prose reproduces this ratio exactly.
+    emit(
+        "genMedianDecileRatioPct",
+        lambda: (
+            round(decile_row(jload(central), "intra_decile", 1)["p50_loss_pct"], 2)
+            / round(decile_row(jload(central), "intra_decile", 10)["p50_loss_pct"], 2)
+        ),
+        "{:.1f}",
+        central,
+    )
+
+    # decile one's tail: the widest within-decile spread in the distribution
+    emit(
+        "genDecileOnePNinetyLossPct",
+        lambda: decile_row(jload(central), "intra_decile", 1)["p90_loss_pct"],
+        "{:.2f}",
+        central,
+    )
+    for tag, key in (
+        ("Five", "share_above_5pct"),
+        ("Ten", "share_above_10pct"),
+    ):
+        emit(
+            f"genDecileOneShareAbove{tag}Pct",
+            lambda key=key: 100 * decile_row(jload(central), "intra_decile", 1)[key],
+            "{:.1f}",
+            central,
+        )
+
+    # ------------------------------------------------------------------
+    # region: the finest real geography this dataset supports
+    # ------------------------------------------------------------------
+    def region_extreme(select):
+        return select(jload(central)["region"], key=lambda r: r["mean_loss_pct"])
+
+    for tag, select in (("Max", max), ("Min", min)):
+        emit(
+            f"genRegion{tag}LossPct",
+            lambda select=select: region_extreme(select)["mean_loss_pct"],
+            "{:.2f}",
+            central,
+        )
+        emit(
+            f"genRegion{tag}LossGbp",
+            lambda select=select: region_extreme(select)["mean_loss_gbp"],
+            "{:.0f}",
+            central,
+        )
+
+    # ------------------------------------------------------------------
+    # means-tested coverage (a declared limitation, not a code failure)
+    # ------------------------------------------------------------------
+    for name in ("genMeansTestedShareHouseholds", "genMeansTestedSharePct"):
+        emit(
+            name, lambda: 100 * jload(central)["means_tested_share"], "{:.1f}", central
+        )
+    emit(
+        "genMeansTestedHouseholdsM",
+        lambda: (
+            jload(central)["means_tested_share"]
+            * sum(r["households_m"] for r in jload(central)["decile"])
+        ),
+        "{:.1f}",
+        central,
+    )
+
+    emit(
+        "genRebateFullyCompensatedShare",
+        lambda: (
+            100
+            * jload(f"{CENTRAL_SCENARIO}/ippr_rebate.json")["fully_compensated_share"]
+        ),
+        "{:.0f}",
+        f"{CENTRAL_SCENARIO}/ippr_rebate.json",
+    )
+
+    # Removing a 5% reduced rate is a 1 - 1/1.05 cut in the VAT-inclusive bill:
+    # an arithmetic ceiling on what zero-rating can offset.
+    emit(
+        "genVatCutMaxOffsetPct",
+        lambda: 100 * (1 - 1 / 1.05),
+        "{:.2f}",
+        "arithmetic: 5% reduced rate removed from a VAT-inclusive bill",
+    )
+
+    # ------------------------------------------------------------------
+    # sensitivity 1: demand response, the sweep that dominates
+    # ------------------------------------------------------------------
     ela = "sensitivity/elasticity.csv"
     emit(
-        "genElasticityMeanLossHigh",
-        lambda: -float(pd.read_csv(R / ela).iloc[-1]["mean_household_change"]),
-        "{:.0f}",
-        ela,
-    )
-    emit(
-        "genElasticityRankCorrHigh",
-        lambda: float(pd.read_csv(R / ela).iloc[-1]["constituency_rank_corr"]),
+        "genElasticityAggZeroBn",
+        lambda: snum(srow("elasticity.csv", "spec", "flat_0.0"), "aggregate_loss_bn"),
         "{:.2f}",
         ela,
     )
+    emit(
+        "genElasticityAggHighBn",
+        lambda: snum(srow("elasticity.csv", "spec", "flat_-0.8"), "aggregate_loss_bn"),
+        "{:.2f}",
+        ela,
+    )
+    for tag, spec in (
+        ("Labandeira", "labandeira_short_run"),
+        ("Priesmann", "priesmann_short_run"),
+    ):
+        emit(
+            f"gen{tag}ShortShaved",
+            lambda spec=spec: (
+                100
+                * snum(
+                    srow("elasticity.csv", "spec", spec), "share_of_upper_bound_shaved"
+                )
+            ),
+            "{:.0f}",
+            ela,
+        )
+    # income-varying elasticities flatten the gradient — the "heat or eat" effect
+    emit(
+        "genPriesmannDecileRatio",
+        lambda: (
+            snum(
+                srow("elasticity.csv", "spec", "priesmann_short_run"),
+                "decile1_loss_pct",
+            )
+            / snum(
+                srow("elasticity.csv", "spec", "priesmann_short_run"),
+                "decile10_loss_pct",
+            )
+        ),
+        "{:.1f}",
+        ela,
+    )
+
+    # ------------------------------------------------------------------
+    # sensitivity 2: cap lag — cumulative is invariant, annualised is windowing
+    # ------------------------------------------------------------------
     lag = "sensitivity/cap_lag.csv"
     emit(
-        "genLagFourAnnualisedShare",
-        lambda: 100 * float(pd.read_csv(R / lag).iloc[-1]["annualised_share"]),
+        "genCapLagCumulativeMean",
+        lambda: snum(
+            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG),
+            "cumulative_mean_loss_gbp",
+        ),
         "{:.0f}",
         lag,
     )
     emit(
-        "genLagFourCumulativeShare",
-        lambda: 100 * float(pd.read_csv(R / lag).iloc[-1]["cumulative_share"]),
-        "{:.0f}",
+        "genCapLagCumulativeBn",
+        lambda: snum(
+            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG), "cumulative_loss_bn"
+        ),
+        "{:.2f}",
+        lag,
+    )
+    for tag, which in (("LagOne", "1"), ("LagFour", "4"), ("Paper", PAPER_CAP_LAG)):
+        emit(
+            f"genCapLagAnnualised{tag}",
+            lambda which=which: snum(
+                srow("cap_lag.csv", "lag_quarters", which), "annualised_mean_loss_gbp"
+            ),
+            "{:.0f}",
+            lag,
+        )
+    # the annualised 2026 total is almost purely the fast pump channel
+    emit(
+        "genMotorFuelAnnualisedBn",
+        lambda: snum(
+            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG), "motor_fuel_bn"
+        ),
+        "{:.1f}",
         lag,
     )
 
-    # --- write --------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # sensitivity 3: marginal-pricing share — composition, not incidence
+    # ------------------------------------------------------------------
+    asym = "sensitivity/asymmetry.csv"
+
+    def arow(share: str) -> dict:
+        return srow("asymmetry.csv", "marginal_pricing_share", share)
+
+    for tag, share in (("Low", ASYM_LOW), ("High", ASYM_HIGH)):
+        emit(
+            f"genAsymMeanLoss{tag}",
+            lambda share=share: snum(arow(share), "mean_loss_gbp"),
+            "{:.0f}",
+            asym,
+        )
+        emit(
+            f"genAsymRatio{tag}",
+            lambda share=share: snum(arow(share), "decile_ratio_pct"),
+            "{:.2f}",
+            asym,
+        )
+    # As with the median ratio: taken off the mean losses as printed (whole
+    # pounds), so the prose's "\pounds 459 to \pounds 483" implies this figure.
+    emit(
+        "genAsymMeanShiftPct",
+        lambda: (
+            100
+            * (
+                round(snum(arow(ASYM_HIGH), "mean_loss_gbp"))
+                / round(snum(arow(ASYM_LOW), "mean_loss_gbp"))
+                - 1
+            )
+        ),
+        "{:.1f}",
+        asym,
+    )
+    for tag, share in (
+        ("Low", ASYM_LOW),
+        ("Central", ASYM_CENTRAL),
+        ("High", ASYM_HIGH),
+    ):
+        emit(
+            f"genGasShareDomestic{tag}",
+            lambda share=share: 100 * snum(arow(share), "gas_share_of_domestic_loss"),
+            "{:.1f}",
+            asym,
+        )
+
+    # ------------------------------------------------------------------
+    # carried constants: see _PENDING_PERSIST
+    # ------------------------------------------------------------------
+    for name, (value, fmt) in _PENDING_PERSIST.items():
+        emit(name, value, fmt, "carried constant — see _PENDING_PERSIST TODO")
+
+    # ------------------------------------------------------------------
+    # write
+    # ------------------------------------------------------------------
     header = [
         "% values_generated.tex — machine-generated by analysis/emit_tex_values.py",
         f"% generated {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
-        "from canonical files under results/. DO NOT EDIT BY HAND.",
-        "% \\GENMISSING marks values whose canonical source was absent at emit "
-        "time; it errors at LaTeX build time by design.",
+        f"from canonical files under results/ (central scenario: {CENTRAL_SCENARIO}).",
+        "% DO NOT EDIT BY HAND.",
+        "% \\GENMISSING marks values whose canonical source was absent or is not "
+        "computable from this dataset; it errors at LaTeX build time by design.",
         (
             "% DRAFT MODE: \\GENMISSING renders as a visible marker instead of "
             "erroring. Never commit a submitted draft built this way."
@@ -628,17 +677,23 @@ def main(draft: bool = False) -> None:
     ]
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(header + lines) + "\n")
-    print(f"wrote {OUT} ({len(lines)} macros)")
+    resolved = len(lines) - len(missing)
+    print(f"wrote {OUT} ({len(lines)} macros, {resolved} resolved)")
     if missing:
-        print(f"WARNING: {len(missing)} macros missing canonical sources:")
+        print(f"WARNING: {len(missing)} macros emitted as \\GENMISSING:")
         for m in missing:
             print("  " + m)
+    else:
+        print("all macros resolved to real values")
 
 
 if __name__ == "__main__":
     import argparse
+    import sys
 
-    _parser = argparse.ArgumentParser(description=__doc__)
+    sys.path.insert(0, str(ROOT))
+
+    _parser = argparse.ArgumentParser(description="emit paper/values_generated.tex")
     _parser.add_argument(
         "--draft",
         action="store_true",
