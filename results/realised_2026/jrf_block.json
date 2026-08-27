@@ -104,5 +104,7 @@
   "mean_loss_gbp": 376.5169677734375,
   "gain_to_loss_ratio_recipients": 0.9851619255730749,
   "reference_basis": "ofgem_typical_consumption",
-  "reference_quantity_gbp": 1723.0
+  "reference_quantity_gbp": 1723.0,
+  "admission_rule": "",
+  "admission_rule_is_upper_bound": false
 }

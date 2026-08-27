@@ -1070,6 +1070,83 @@ def test_the_reconciliation_reports_whether_it_is_informative(grid_base):
     assert out_wide["check_is_informative"] is True
 
 
+# --- round-4 finding 5: the range check the paper advertised did not run --
+
+
+def test_the_grid_never_claims_to_enforce_a_range_check(grid_base):
+    """The appendix advertised that run_grid "checks every named scenario
+    against the live grid's range and raises if one falls outside it". It never
+    did, and on this grid it must not: the range is degenerate. The scope block
+    says so permanently, so the guarantee cannot be re-advertised.
+    """
+    import pandas as pd
+
+    degenerate = pd.DataFrame({"d1_d10_ratio": [9.311577, 9.312363]})
+    out = run_grid.reconcile_named_scenarios(grid_base, degenerate)
+    scope = out["grid_scope"]
+    assert scope["range_check_enforced"] is False
+    assert scope["why_the_range_check_is_not_enforced"]
+    assert scope["what_the_grid_shows"] and scope["what_the_grid_does_not_show"]
+    assert any("petrol" in item for item in scope["what_the_grid_does_not_show"])
+    assert len(scope["enforced_checks"]) >= 2
+
+
+def test_named_scenarios_outside_the_range_are_explained_not_hidden(grid_base):
+    import pandas as pd
+
+    degenerate = pd.DataFrame({"d1_d10_ratio": [9.311577, 9.312363]})
+    out = run_grid.reconcile_named_scenarios(grid_base, degenerate)
+    assert set(out["named_scenarios_outside_grid_range"]) == {
+        key for key, v in out["scenarios"].items() if not v["inside_grid_range"]
+    }
+    assert "petrol:diesel" in out["why_named_scenarios_fall_outside_grid_range"]
+
+
+def test_the_sub_channel_bracketing_check_can_fail_and_here_does_not(grid_base):
+    """The check that replaces the range check: an aggregate ratio outside the
+    span of its own four sub-channel ratios is arithmetically impossible.
+    """
+    import pandas as pd
+
+    live = pd.DataFrame(
+        [run_grid.cell_row(grid_base, g, o) for g, o in ((0.5, 0.4), (0.8, 0.6))]
+    )
+    out = run_grid.reconcile_named_scenarios(grid_base, live)
+    assert out["sub_channel_bracketing_holds"] is True
+    assert out["sub_channel_bracketing_broken"] == []
+    for payload in out["scenarios"].values():
+        sub = payload["sub_channels"]
+        assert sub["inside_sub_channel_span"] is True
+        assert set(sub["channels"]) == set(run_grid.SUB_CHANNELS)
+        assert sum(sub["share_of_decile10_loss_by_channel"].values()) == pytest.approx(
+            1.0
+        )
+        assert payload["d1_d10_ratio"] == pytest.approx(sub["d1_d10_ratio_implied"])
+
+
+def test_the_bracketing_check_rejects_an_impossible_ratio(grid_base):
+    """It can fail — which is the whole difference from the check it replaces."""
+    scenario = scen.get_scenario("realised_2026")
+    honest = run_grid._sub_channel_decomposition(grid_base, scenario, 9.3)
+    impossible = run_grid._sub_channel_decomposition(
+        grid_base, scenario, honest["sub_channel_ratio_max"] + 1.0
+    )
+    assert impossible["inside_sub_channel_span"] is False
+
+
+def test_the_grid_holds_the_petrol_diesel_mix_fixed_in_every_cell():
+    """The reason the named scenarios fall outside the grid's range."""
+    mixes = {
+        run_grid.build_scenario(g, o).pump.diesel_pct_change
+        / run_grid.build_scenario(g, o).pump.petrol_pct_change
+        for g, o in ((0.2, 0.4), (0.6, 0.8), (1.0, 0.2))
+    }
+    assert len(mixes) == 1
+    assert mixes.pop() == pytest.approx(
+        run_grid.DIESEL_PASS_THROUGH / run_grid.PETROL_PASS_THROUGH
+    )
+
+
 # --- Round-3 finding 7: dataset_path() must read .env itself ------------
 
 import os  # noqa: E402

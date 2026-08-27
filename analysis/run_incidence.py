@@ -214,6 +214,43 @@ def main() -> None:
                 base, cost, mt, pol.COMMON_ENVELOPE_BN
             )
             print(f"   wrote {diagnostics}")
+            # Round-4 findings 1, 2, 3 and 6, printed so a run that changes
+            # them is visible in the log and not only in the JSON.
+            payload = json.loads(Path(diagnostics).read_text())
+            identity = payload["feasible_max_identity"]
+            for group in identity["identical_groups"]:
+                print(
+                    "   feasible-maximum IDENTITY: "
+                    + " == ".join(group["policies"])
+                    + f" at £{group['feasible_max_cost_bn']:.2f}bn — ONE result, "
+                    "not two"
+                )
+            ceilings = payload["flat_payment_ceilings"]
+            bill = ceilings["mean_eligible_domestic_bill_gbp"]
+            loss = ceilings["mean_eligible_loss_gbp"]
+            print(
+                f"   WHD ceiling rule {ceilings['rule_used']}: £{bill:.0f} "
+                f"(mean eligible LOSS is £{loss:.0f}, "
+                f"x{ceilings['bill_over_loss']:.1f})"
+            )
+            gap = payload["jrf_costing_gap"]
+            implied = gap["single_parameter_reconciliations"]["implied_discount"]
+            print(
+                f"   JRF gap: modelled £{gap['modelled_cost_bn']:.2f}bn vs "
+                f"£{gap['sponsor_cost_bn']:.1f}bn (x{gap['ratio']:.2f}); "
+                f"sponsor's total implies a {100 * implied:.1f}% discount on "
+                "the same block"
+            )
+            for pkey in ("social_tariff", "whd_expansion"):
+                rules = payload["by_policy"][pkey]["admission_rules"]["range"]
+                off = rules["share_of_aggregate_loss_offset"]
+                bot = rules["share_to_bottom_three"]
+                print(
+                    f"   {pkey} eligibility arm across admission rules: "
+                    f"offset {100 * off['min']:.1f}-{100 * off['max']:.1f}%, "
+                    f"D1-3 {100 * bot['min']:.1f}-{100 * bot['max']:.1f}% "
+                    f"(upper bound {100 * bot['upper_bound_rule_value']:.1f}%)"
+                )
 
     RESULTS.mkdir(exist_ok=True)
     pd.DataFrame(rows).to_csv(RESULTS / "summary.csv", index=False)

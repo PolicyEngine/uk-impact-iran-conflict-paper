@@ -245,5 +245,41 @@
       "parity_share": 0.10076583222936979,
       "factor": 1.9315574752296687
     }
+  },
+  "fuel_block_consistency": {
+    "fields": [
+      "means_tested_mean_fuel_gbp"
+    ],
+    "rtol": 1e-09,
+    "checked": {
+      "raw.means_tested_mean_fuel_gbp": {
+        "motor_fuel_margins": 223.6003875732422,
+        "means_tested_fuel": 223.6003875732422,
+        "agree": true
+      },
+      "ons_fuel_shape.means_tested_mean_fuel_gbp": {
+        "motor_fuel_margins": 176.262013529105,
+        "means_tested_fuel": 176.262013529105,
+        "agree": true
+      },
+      "ons_both_levels.means_tested_mean_fuel_gbp": {
+        "motor_fuel_margins": 139.64703510322204,
+        "means_tested_fuel": 139.64703510322204,
+        "agree": true
+      },
+      "mt_fuel_parity.means_tested_mean_fuel_gbp": {
+        "motor_fuel_margins": 1001.2027741689706,
+        "means_tested_fuel": 1001.2027741689706,
+        "agree": true
+      },
+      "nts_participation.means_tested_mean_fuel_gbp": {
+        "motor_fuel_margins": 665.0742797851562,
+        "means_tested_fuel": 665.0742797851562,
+        "agree": true
+      }
+    },
+    "all_agree": true,
+    "distinct_values_across_calibrations": 5,
+    "note": "Round-4 finding 4. `motor_fuel_margins` and `means_tested_fuel` report the same quantity by two call paths; if they ever diverge this pipeline raises and refuses to write the file."
   }
 }

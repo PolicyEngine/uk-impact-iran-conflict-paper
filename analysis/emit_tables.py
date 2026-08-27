@@ -717,6 +717,21 @@ def tab_envelope() -> None:
             cell += r"$^\dagger$"
         return cell
 
+    def admission_rule(row: dict) -> str:
+        """The admission rule recorded in ``label_used``, or "".
+
+        ROUND 4: ``common_eligibility`` rows now carry an ``[admission: ...]``
+        suffix, because the eligibility arm is scored under four different
+        admission rules and the row printed here is one of them. The table
+        marks the rows the suffix appears on rather than printing the whole
+        sentence into a cell.
+        """
+        label = row.get("label_used", "")
+        marker = "[admission:"
+        if marker not in label:
+            return ""
+        return label.split(marker, 1)[1].rsplit("]", 1)[0].strip()
+
     def is_universal(row: dict) -> bool:
         """True where eligibility has widened to (almost) every household.
 
@@ -753,6 +768,7 @@ def tab_envelope() -> None:
     ]
     infeasible = 0
     universal = 0
+    admission = 0
     for key, label in POLICY_LABELS:
         first = True
         for envelope_key, variant in ENVELOPE_ROWS:
@@ -762,6 +778,9 @@ def tab_envelope() -> None:
             if r["is_feasible"].strip().lower() != "true":
                 infeasible += 1
             variant_cell = variant
+            if admission_rule(r):
+                admission += 1
+                variant_cell += r"$^\S$"
             if is_universal(r):
                 universal += 1
                 variant_cell += r"$^\ddagger$"
@@ -816,7 +835,12 @@ def tab_envelope() -> None:
             "own rate, and is defined only for the two means-tested schemes; "
             f"$\\ddagger$ marks the {NUMBER_WORD[universal]} such rows where "
             "widening reaches every household, at which point the instrument is "
-            "means-tested in name only. No row of this table supports a claim "
+            "means-tested in name only; $\\S$ marks the "
+            f"{NUMBER_WORD[admission]} rows whose admission rule is recorded in "
+            "the stored label --- poorest-first on equivalised after-housing-costs "
+            "income, which is the perfect-observability upper bound on targeting, "
+            "one of four rules scored in Section~\\ref{sec:policy-eligibility}. "
+            "No row of this table supports a claim "
             "that one instrument ``wins at a common envelope'': the four row "
             "types answer four different questions and only the scaled rows "
             "hold spend equal across instruments, which they do by setting "

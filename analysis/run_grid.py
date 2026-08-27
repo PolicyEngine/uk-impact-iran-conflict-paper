@@ -540,6 +540,26 @@ def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
             "curve. See each scenario's `sub_channels` block, and "
             "`grid_scope.what_the_grid_does_not_show`."
         ),
+        # The headline of the sub-channel decomposition, lifted to the top
+        # level so the paper can cite it without walking the tree: petrol and
+        # diesel have very different decile gradients, and the grid's apparent
+        # "invariance" is an artefact of aggregating them at a fixed mix.
+        "sub_channel_gradients": {
+            "scenario": "realised_2026",
+            "d1_d10_ratio_by_channel": (
+                scenarios["realised_2026"]["sub_channels"]["d1_d10_ratio_by_channel"]
+                if "realised_2026" in scenarios
+                else {}
+            ),
+            "note": (
+                "Motor fuel is not one channel. Petrol and diesel have "
+                "materially different D1/D10 burden gradients in this "
+                "imputation, and every grid cell mixes them in the same fixed "
+                "proportion, so the grid cannot vary the margin that separates "
+                "the named scenarios from it. The near-invariance the grid "
+                "reports is invariance to the DOMESTIC-versus-FUEL mix only."
+            ),
+        },
         "sub_channel_bracketing_holds": not unbracketed,
         "sub_channel_bracketing_broken": unbracketed,
     }

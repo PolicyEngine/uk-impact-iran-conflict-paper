@@ -104,5 +104,7 @@
   "mean_loss_gbp": 488.3636169433594,
   "gain_to_loss_ratio_recipients": 0.14626793689715903,
   "reference_basis": "",
-  "reference_quantity_gbp": NaN
+  "reference_quantity_gbp": NaN,
+  "admission_rule": "",
+  "admission_rule_is_upper_bound": false
 }

@@ -19,11 +19,140 @@
       "absorbable_within_envelope_bn": 3.7583908571428575,
       "saturates_below_envelope": true,
       "means_tested": true,
+      "feasible_max_rule": "a 100 per cent discount: the whole shocked domestic bill of the means-tested population, i.e. free energy. Aggregated this is the SAME sum as the Warm Home Discount's bill-based ceiling \u2014 see feasible_max_identity",
+      "admission_rules": {
+        "policy": "social_tariff",
+        "envelope_bn": 5.0,
+        "default_rule": "equivalised_ahc_income",
+        "default_rule_maximises": [
+          "share_to_bottom_three"
+        ],
+        "default_rule_does_not_maximise": [
+          "share_of_aggregate_loss_offset"
+        ],
+        "upper_bound_is_on_observability_not_on_every_measure": "The default rule assumes perfect income observability and so bounds what widening can achieve as TARGETING. It does not dominate every metric: most of the modelled loss is motor fuel, which a domestic-bill instrument does not pay out on, so a rule that admits the largest bills can offset more aggregate loss while reaching fewer poor households. Report the range, and say which measure is being ranked.",
+        "rules": [
+          "equivalised_ahc_income",
+          "unequivalised_net_income",
+          "highest_domestic_bill",
+          "random"
+        ],
+        "by_rule": {
+          "equivalised_ahc_income": {
+            "admission_rule": "equivalised_ahc_income",
+            "is_upper_bound": true,
+            "what_the_state_must_observe": "after-housing-costs income and household composition for every household OUTSIDE the benefit system, ranked without error \u2014 the capability this paper argues does not exist",
+            "cost_bn": 4.999798272,
+            "eligible_share": 0.4019555151462555,
+            "share_of_aggregate_loss_offset": 0.26616156834169613,
+            "share_to_bottom_three": 0.7167344530815503,
+            "uncompensated_share_overall": 0.6209570169448853,
+            "mean_residual_loss_gbp": 276.3026428222656,
+            "cost_per_pound_decile_one": 4.194872453549276
+          },
+          "unequivalised_net_income": {
+            "admission_rule": "unequivalised_net_income",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "household net income only: no housing costs, no equivalisation. Closer to administrative income data, and mis-ranks large households and high-rent households",
+            "cost_bn": 4.999643648,
+            "eligible_share": 0.39308732748031616,
+            "share_of_aggregate_loss_offset": 0.26909509392117537,
+            "share_to_bottom_three": 0.6104430457200457,
+            "uncompensated_share_overall": 0.6297546625137329,
+            "mean_residual_loss_gbp": 275.1981201171875,
+            "cost_per_pound_decile_one": 4.366155675931867
+          },
+          "highest_domestic_bill": {
+            "admission_rule": "highest_domestic_bill",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "nothing the state does not already have: the energy account's own bill. Not an income test \u2014 it admits big users, who are not the poor",
+            "cost_bn": 4.999328768,
+            "eligible_share": 0.2033846229314804,
+            "share_of_aggregate_loss_offset": 0.3445954257746416,
+            "share_to_bottom_three": 0.2254606928863615,
+            "uncompensated_share_overall": 0.824012041091919,
+            "mean_residual_loss_gbp": 246.7709503173828,
+            "cost_per_pound_decile_one": 14.370402543953348
+          },
+          "random": {
+            "admission_rule": "random",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "nothing at all: admission by lottery among non-claimants",
+            "cost_bn": 4.999690752,
+            "eligible_share": 0.3750609755516052,
+            "share_of_aggregate_loss_offset": 0.2755170029682244,
+            "share_to_bottom_three": 0.30918648306030266,
+            "uncompensated_share_overall": 0.6517291069030762,
+            "mean_residual_loss_gbp": 272.7801513671875,
+            "cost_per_pound_decile_one": 10.385959892891364,
+            "random_draws": {
+              "seeds": [
+                20260826,
+                7,
+                101,
+                2718,
+                31415
+              ],
+              "share_of_aggregate_loss_offset": [
+                0.2755170029682244,
+                0.2709439588457406,
+                0.27386165770957616,
+                0.27349081422961086,
+                0.27500468803005657
+              ],
+              "mean": 0.2737636243566417,
+              "min": 0.2709439588457406,
+              "max": 0.2755170029682244,
+              "std": 0.001590542366244241
+            }
+          }
+        },
+        "range": {
+          "share_of_aggregate_loss_offset": {
+            "min": 0.26616156834169613,
+            "max": 0.3445954257746416,
+            "upper_bound_rule_value": 0.26616156834169613,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "highest_domestic_bill"
+          },
+          "share_to_bottom_three": {
+            "min": 0.2254606928863615,
+            "max": 0.7167344530815503,
+            "upper_bound_rule_value": 0.7167344530815503,
+            "argmin": "highest_domestic_bill",
+            "argmax": "equivalised_ahc_income"
+          },
+          "uncompensated_share_overall": {
+            "min": 0.6209570169448853,
+            "max": 0.824012041091919,
+            "upper_bound_rule_value": 0.6209570169448853,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "highest_domestic_bill"
+          },
+          "eligible_share": {
+            "min": 0.2033846229314804,
+            "max": 0.4019555151462555,
+            "upper_bound_rule_value": 0.4019555151462555,
+            "argmin": "highest_domestic_bill",
+            "argmax": "equivalised_ahc_income"
+          },
+          "cost_bn": {
+            "min": 4.999328768,
+            "max": 4.999798272,
+            "upper_bound_rule_value": 4.999798272,
+            "argmin": "highest_domestic_bill",
+            "argmax": "equivalised_ahc_income"
+          }
+        },
+        "note": "Round-4 finding 3. The headline eligibility arm uses 'equivalised_ahc_income', which assumes the state can rank every non-claimant household by equivalised after-housing-costs income. That is the capability this paper argues does not exist, so that row is an UPPER BOUND. The paper must report the range across admission rules, with the default labelled as the best case and 'random' as the no-observability benchmark."
+      },
       "envelope_arms": {
         "generosity_arm_spend_bn": 3.7583908571428575,
         "eligibility_arm_spend_bn": 4.999798272,
         "eligibility_arm_eligible_share": 0.4019555151462555,
         "eligibility_arm_is_universal": false,
+        "eligibility_arm_admission_rule": "equivalised_ahc_income",
+        "eligibility_arm_admission_rule_is_upper_bound": true,
         "envelope_bn": 5.0,
         "arms_spend_the_same": false
       }
@@ -39,6 +168,7 @@
       "absorbable_within_envelope_bn": 5.0,
       "saturates_below_envelope": false,
       "means_tested": false,
+      "feasible_max_rule": "a 100 per cent discount on the block: the first 50 per cent of typical consumption supplied free, plus the per-child allowance",
       "envelope_arms": {
         "generosity_arm_spend_bn": 5.0,
         "envelope_bn": 5.0,
@@ -56,11 +186,139 @@
       "absorbable_within_envelope_bn": 3.7583910677274983,
       "saturates_below_envelope": true,
       "means_tested": true,
+      "feasible_max_rule": "the MEAN SHOCKED DOMESTIC BILL of the eligible population (_mean_eligible_domestic_bill), NOT the payment that exhausts their loss: the mean loss among eligibles is several times smaller. Both rules are computed by flat_payment_ceilings",
+      "admission_rules": {
+        "policy": "whd_expansion",
+        "envelope_bn": 5.0,
+        "default_rule": "equivalised_ahc_income",
+        "default_rule_maximises": [
+          "share_of_aggregate_loss_offset",
+          "share_to_bottom_three"
+        ],
+        "default_rule_does_not_maximise": [],
+        "upper_bound_is_on_observability_not_on_every_measure": "The default rule assumes perfect income observability and so bounds what widening can achieve as TARGETING. It does not dominate every metric: most of the modelled loss is motor fuel, which a domestic-bill instrument does not pay out on, so a rule that admits the largest bills can offset more aggregate loss while reaching fewer poor households. Report the range, and say which measure is being ranked.",
+        "rules": [
+          "equivalised_ahc_income",
+          "unequivalised_net_income",
+          "highest_domestic_bill",
+          "random"
+        ],
+        "by_rule": {
+          "equivalised_ahc_income": {
+            "admission_rule": "equivalised_ahc_income",
+            "is_upper_bound": true,
+            "what_the_state_must_observe": "after-housing-costs income and household composition for every household OUTSIDE the benefit system, ranked without error \u2014 the capability this paper argues does not exist",
+            "cost_bn": 4.4205874773722,
+            "eligible_share": 1.0,
+            "share_of_aggregate_loss_offset": 0.292866781262581,
+            "share_to_bottom_three": 0.3002461812094432,
+            "uncompensated_share_overall": 0.4886695444583893,
+            "mean_residual_loss_gbp": 266.2476588407572,
+            "cost_per_pound_decile_one": 10.528799565588688
+          },
+          "unequivalised_net_income": {
+            "admission_rule": "unequivalised_net_income",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "household net income only: no housing costs, no equivalisation. Closer to administrative income data, and mis-ranks large households and high-rent households",
+            "cost_bn": 4.4205874773722,
+            "eligible_share": 1.0,
+            "share_of_aggregate_loss_offset": 0.292866781262581,
+            "share_to_bottom_three": 0.3002461812094432,
+            "uncompensated_share_overall": 0.4886695444583893,
+            "mean_residual_loss_gbp": 266.2476588407572,
+            "cost_per_pound_decile_one": 10.528799565588688
+          },
+          "highest_domestic_bill": {
+            "admission_rule": "highest_domestic_bill",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "nothing the state does not already have: the energy account's own bill. Not an income test \u2014 it admits big users, who are not the poor",
+            "cost_bn": 4.4205874773722,
+            "eligible_share": 1.0,
+            "share_of_aggregate_loss_offset": 0.292866781262581,
+            "share_to_bottom_three": 0.3002461812094432,
+            "uncompensated_share_overall": 0.4886695444583893,
+            "mean_residual_loss_gbp": 266.2476588407572,
+            "cost_per_pound_decile_one": 10.528799565588688
+          },
+          "random": {
+            "admission_rule": "random",
+            "is_upper_bound": false,
+            "what_the_state_must_observe": "nothing at all: admission by lottery among non-claimants",
+            "cost_bn": 4.4205874773722,
+            "eligible_share": 1.0,
+            "share_of_aggregate_loss_offset": 0.292866781262581,
+            "share_to_bottom_three": 0.3002461812094432,
+            "uncompensated_share_overall": 0.4886695444583893,
+            "mean_residual_loss_gbp": 266.2476588407572,
+            "cost_per_pound_decile_one": 10.528799565588688,
+            "random_draws": {
+              "seeds": [
+                20260826,
+                7,
+                101,
+                2718,
+                31415
+              ],
+              "share_of_aggregate_loss_offset": [
+                0.292866781262581,
+                0.292866781262581,
+                0.292866781262581,
+                0.292866781262581,
+                0.292866781262581
+              ],
+              "mean": 0.292866781262581,
+              "min": 0.292866781262581,
+              "max": 0.292866781262581,
+              "std": 0.0
+            }
+          }
+        },
+        "range": {
+          "share_of_aggregate_loss_offset": {
+            "min": 0.292866781262581,
+            "max": 0.292866781262581,
+            "upper_bound_rule_value": 0.292866781262581,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "equivalised_ahc_income"
+          },
+          "share_to_bottom_three": {
+            "min": 0.3002461812094432,
+            "max": 0.3002461812094432,
+            "upper_bound_rule_value": 0.3002461812094432,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "equivalised_ahc_income"
+          },
+          "uncompensated_share_overall": {
+            "min": 0.4886695444583893,
+            "max": 0.4886695444583893,
+            "upper_bound_rule_value": 0.4886695444583893,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "equivalised_ahc_income"
+          },
+          "eligible_share": {
+            "min": 1.0,
+            "max": 1.0,
+            "upper_bound_rule_value": 1.0,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "equivalised_ahc_income"
+          },
+          "cost_bn": {
+            "min": 4.4205874773722,
+            "max": 4.4205874773722,
+            "upper_bound_rule_value": 4.4205874773722,
+            "argmin": "equivalised_ahc_income",
+            "argmax": "equivalised_ahc_income"
+          }
+        },
+        "note": "Round-4 finding 3. The headline eligibility arm uses 'equivalised_ahc_income', which assumes the state can rank every non-claimant household by equivalised after-housing-costs income. That is the capability this paper argues does not exist, so that row is an UPPER BOUND. The paper must report the range across admission rules, with the default labelled as the best case and 'random' as the no-observability benchmark."
+      },
       "envelope_arms": {
         "generosity_arm_spend_bn": 3.7583910677274983,
         "eligibility_arm_spend_bn": 4.4205874773722,
         "eligibility_arm_eligible_share": 1.0,
         "eligibility_arm_is_universal": true,
+        "eligibility_arm_admission_rule": "equivalised_ahc_income",
+        "eligibility_arm_admission_rule_is_upper_bound": true,
         "envelope_bn": 5.0,
         "arms_spend_the_same": false
       }
@@ -76,6 +334,7 @@
       "absorbable_within_envelope_bn": 2.10514112,
       "saturates_below_envelope": true,
       "means_tested": false,
+      "feasible_max_rule": "the reduced rate itself: removing more than five percentage points is a negative VAT rate",
       "envelope_arms": {
         "generosity_arm_spend_bn": 2.10514112,
         "envelope_bn": 5.0,
@@ -93,6 +352,7 @@
       "absorbable_within_envelope_bn": 5.0,
       "saturates_below_envelope": false,
       "means_tested": false,
+      "feasible_max_rule": "the sponsor's own parameter: the instrument is funded by the network-company windfall and \u00a3183 already spends it, so there is no headroom above the stated value",
       "envelope_arms": {
         "generosity_arm_spend_bn": 5.0,
         "envelope_bn": 5.0,
@@ -109,6 +369,109 @@
     "modelled_over_ofgem": 0.524540773326411,
     "block_share": 0.5,
     "note": "JRF peg the discounted block to Ofgem typical consumption. The modelled median is the weighted median of this model's own domestic bill, which the validation notes is materially below the Ofgem basis; a block set on it is not the sponsor's block and its cost is not comparable with the sponsor's costing."
+  },
+  "feasible_max_identity": {
+    "tolerance": 1e-06,
+    "feasible_max_cost_bn": {
+      "social_tariff": 3.7583908571428575,
+      "jrf_block": 21.863056976967414,
+      "whd_expansion": 3.7583910677274983,
+      "vat_zero": 2.10514112,
+      "ippr_rebate": 5.393116722394083
+    },
+    "identical_groups": [
+      {
+        "policies": [
+          "social_tariff",
+          "whd_expansion"
+        ],
+        "feasible_max_cost_bn": 3.7583908571428575,
+        "max_absolute_difference_bn": 2.1058464083623107e-07,
+        "distinct_results": 1,
+        "reported_as_distinct_results": 2
+      }
+    ],
+    "identical_to": {
+      "social_tariff": [
+        "whd_expansion"
+      ],
+      "whd_expansion": [
+        "social_tariff"
+      ]
+    },
+    "any_identical": true,
+    "report_as_one_result": true,
+    "distinct_feasible_maxima": 4,
+    "proof": "A 100% discount on every eligible household's shocked domestic bill and a flat payment equal to the WEIGHTED MEAN of those same bills, paid to the same population, are the same aggregate sum by the definition of a weighted mean. The equality is an identity, not a finding, and the two rows are one result.",
+    "note": "Round-4 finding 1. Any group listed here must be reported as ONE result. Two instruments whose ceilings are the same number by construction do not independently confirm saturation."
+  },
+  "flat_payment_ceilings": {
+    "rule_used": "mean_eligible_domestic_bill",
+    "rules": [
+      "mean_eligible_domestic_bill",
+      "mean_eligible_loss"
+    ],
+    "mean_eligible_domestic_bill_gbp": 814.3114013671875,
+    "mean_eligible_loss_gbp": 125.42019653320312,
+    "bill_over_loss": 6.492665646171354,
+    "cost_at_bill_rule_bn": 3.758391163876648,
+    "cost_at_loss_rule_bn": 0.5788671970337677,
+    "eligible_households_m": 4.6154225,
+    "what_each_rule_is": {
+      "mean_eligible_domestic_bill": "the mean shocked domestic energy bill of the eligible population: the point beyond which a payment is no longer energy-bill support of any kind, because it exceeds the bill it is meant to help pay. This is the rule the scorecard uses.",
+      "mean_eligible_loss": "the mean TOTAL shock loss of the eligible population: the flat payment that, paid to all of them, spends exactly their aggregate loss. This is the rule the paper's prose described. It is far smaller, because the means-tested population is imputed very little motor fuel and motor fuel carries most of the loss."
+    },
+    "note": "The paper may describe the ceiling as bill-exhausting or as loss-exhausting, but not as both, and the number it quotes must match the rule it names."
+  },
+  "jrf_costing_gap": {
+    "comparable": true,
+    "why_comparable": "The modelled block is pegged to JRF's own reference quantity (ofgem_typical_consumption, \u00a31,723), which is what JRF_DEFAULT_REFERENCE_BASIS selects. The two costings are on the same basis and the comparison may not be declined.",
+    "sponsor_cost_bn": 5.0,
+    "modelled_cost_bn": 10.931528812369129,
+    "gap_bn": 5.9315288123691285,
+    "ratio": 2.186305762473826,
+    "decomposition": {
+      "universal_ceiling_block_bn": 12.694454058,
+      "per_child_allowance_bn": 0.9019157563691272,
+      "universal_ceiling_total_bn": 13.596369814369128,
+      "block_truncation_bn": 2.6648410019999993,
+      "block_truncation_share_of_ceiling": 0.20992167050465838,
+      "modelled_block_bn": 10.029613056,
+      "residual_unexplained_by_microdata_bn": 5.9315288123691285,
+      "note": "The modelled bill distribution enters through ONE channel: households whose whole bill is below the block cannot use all of it. That channel makes the modelled block CHEAPER, so it cannot explain a modelled cost above the sponsor's. The whole of the gap survives it."
+    },
+    "per_household": {
+      "households_m": 29.470584,
+      "sponsor_implied_gbp": 169.66070302509107,
+      "modelled_gbp": 370.930172689117,
+      "mechanical_full_block_gbp": 430.75,
+      "microdata_free": "These four numbers use no microdata beyond the household count. A 50 per cent discount on 50 per cent of a \u00a31,723 typical bill is \u00a3431 a household; JRF's own total is \u00a3170. The gap is arithmetic in the sponsor's published figures, not an artefact of this model."
+    },
+    "single_parameter_reconciliations": {
+      "implied_discount": 0.20429921975799864,
+      "modelled_discount": 0.5,
+      "implied_block_share": 0.1694547151730494,
+      "implied_block_share_is_defined": true,
+      "modelled_block_share": 0.5,
+      "implied_eligible_share_poorest_first": 0.4591103792190552,
+      "modelled_eligible_share": 1.0,
+      "note": "Each of these three, alone, reproduces the sponsor's total. Only one of the three is unpublished by the sponsor."
+    },
+    "parameter_provenance": {
+      "block_share": "sponsor: 50 per cent of typical consumption",
+      "reference_quantity": "sponsor: Ofgem typical consumption (the default reference basis, so the modelled block and JRF's are on the SAME basis and their costings are directly comparable)",
+      "discount": "OURS. JRF say 'a discounted rate' and do not publish the rate. 50 per cent is this paper's assumption, chosen by analogy with the social tariff, and it is not attributable to JRF",
+      "per_child_gbp": "OURS. JRF propose a per-child allowance without publishing its value; \u00a360 is this paper's assumption",
+      "eligibility": "sponsor: universal. JRF describe the block as universal by design, which is the feature they contrast with a social tariff",
+      "total_cost_bn": "sponsor: ~\u00a35bn"
+    },
+    "netting_off_existing_support": {
+      "warm_home_discount_modelled_bn": 0.6923133572888732,
+      "share_of_gap_it_could_close": 0.11671752413057139,
+      "can_close_gap": false,
+      "note": "Netting off existing support is the third candidate explanation and it does not survive: the Warm Home Discount is the only one of the five instruments that presently exists, and its modelled cost is far below the gap."
+    },
+    "resolution": "RESOLVED. The gap is not a difference of basis, not a difference of eligible set that JRF state, and not netting off. It is the discount rate: JRF publish the block SIZE and the total but not the RATE, and the 50 per cent modelled here is this paper's own assumption. JRF's own total implies a discount of about 20 per cent on the same block. The paper should report the modelled block as a 50 per cent discount costing \u00a310.9bn, state that JRF's \u00a35bn corresponds to a 20 per cent discount on the same block, and stop describing the difference as generosity, as incomparable bases, or as unexplained."
   },
   "large_loser_outside_means_test": {
     "threshold_pct": 5.0,

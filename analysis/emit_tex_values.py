@@ -1344,6 +1344,52 @@ def main(draft: bool = False) -> None:
         "{:.2f}",
         RECON,
     )
+    # ROUND 4. Why the named scenarios sit outside the grid's range is now
+    # diagnosed rather than guessed at: petrol and diesel have materially
+    # different decile gradients, and every grid cell fixes the petrol:diesel
+    # mix, so the grid traces a one-dimensional curve through a four-channel
+    # space. The range check is permanently unenforced and the file says so;
+    # two checks that CAN fail are enforced and are named here.
+    def _sub_channel() -> dict:
+        return recon()["sub_channel_gradients"]["d1_d10_ratio_by_channel"]
+
+    for tag, channel in (
+        ("Gas", "gas"),
+        ("Elec", "electricity"),
+        ("Petrol", "petrol"),
+        ("Diesel", "diesel"),
+    ):
+        emit(
+            f"genGridSubChannelRatio{tag}",
+            lambda channel=channel: _sub_channel()[channel],
+            "{:.2f}",
+            RECON,
+        )
+    emit(
+        "genGridRangeCheckEnforced",
+        lambda: "is" if recon()["grid_scope"]["range_check_enforced"] else "is not",
+        source=RECON,
+    )
+    emit(
+        "genGridEnforcedCheckCount",
+        lambda: number_word(len(recon()["grid_scope"]["enforced_checks"])),
+        source=RECON,
+    )
+    emit(
+        "genGridSubChannelBracketingHolds",
+        lambda: "does" if recon()["sub_channel_bracketing_holds"] else "does not",
+        source=RECON,
+    )
+    emit(
+        "genGridSubChannelBracketingBrokenCount",
+        lambda: number_word(len(recon()["sub_channel_bracketing_broken"])),
+        source=RECON,
+    )
+    emit(
+        "genGridLiveCellCount",
+        lambda: number_word(recon()["grid_scope"]["live_cells"]),
+        source=RECON,
+    )
     emit(
         "genGridReconDomesticOnlyMax",
         lambda: max(
@@ -4661,6 +4707,282 @@ def main(draft: bool = False) -> None:
         lambda: 100 * jrf_ref()["block_share"],
         "{:.0f}",
         "policy_diagnostics.json",
+    )
+
+    # --- the JRF costing gap, decomposed --------------------------------
+    #
+    # ROUND 4. The gap used to be reported as unexplained. It is not: the
+    # microdata can only make the block CHEAPER (a household whose whole bill
+    # is under the block cannot use all of it), and the gap survives that
+    # channel whole. What closes it is the discount RATE, which JRF do not
+    # publish and this paper chose. Everything below is read from
+    # ``jrf_costing_gap``; nothing here is a constant.
+    DIAG = "policy_diagnostics.json"
+
+    def jrf_gap() -> dict:
+        return diagnostics()["jrf_costing_gap"]
+
+    emit("genJrfGapModelledBn", lambda: jrf_gap()["modelled_cost_bn"], "{:.2f}", DIAG)
+    emit("genJrfGapSponsorBn", lambda: jrf_gap()["sponsor_cost_bn"], "{:.1f}", DIAG)
+    emit("genJrfGapBn", lambda: jrf_gap()["gap_bn"], "{:.2f}", DIAG)
+    emit("genJrfGapRatio", lambda: jrf_gap()["ratio"], "{:.2f}", DIAG)
+    emit(
+        "genJrfUniversalCeilingBn",
+        lambda: jrf_gap()["decomposition"]["universal_ceiling_total_bn"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genJrfBlockTruncationBn",
+        lambda: jrf_gap()["decomposition"]["block_truncation_bn"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genJrfBlockTruncationSharePct",
+        lambda: 100 * jrf_gap()["decomposition"]["block_truncation_share_of_ceiling"],
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genJrfHouseholdsM",
+        lambda: jrf_gap()["per_household"]["households_m"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genJrfSponsorPerHouseholdGbp",
+        lambda: jrf_gap()["per_household"]["sponsor_implied_gbp"],
+        "{:,.0f}",
+        DIAG,
+    )
+    emit(
+        "genJrfMechanicalPerHouseholdGbp",
+        lambda: jrf_gap()["per_household"]["mechanical_full_block_gbp"],
+        "{:,.0f}",
+        DIAG,
+    )
+    emit(
+        "genJrfModelledPerHouseholdGbp",
+        lambda: jrf_gap()["per_household"]["modelled_gbp"],
+        "{:,.0f}",
+        DIAG,
+    )
+    emit(
+        "genJrfImpliedDiscountPct",
+        lambda: 100 * jrf_gap()["single_parameter_reconciliations"]["implied_discount"],
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genJrfModelledDiscountPct",
+        lambda: 100 * jrf_gap()["single_parameter_reconciliations"]["modelled_discount"],
+        "{:.0f}",
+        DIAG,
+    )
+    emit(
+        "genJrfImpliedBlockSharePct",
+        lambda: (
+            100 * jrf_gap()["single_parameter_reconciliations"]["implied_block_share"]
+        ),
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genJrfImpliedEligibleSharePct",
+        lambda: 100
+        * jrf_gap()["single_parameter_reconciliations"][
+            "implied_eligible_share_poorest_first"
+        ],
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genJrfNettingWhdBn",
+        lambda: jrf_gap()["netting_off_existing_support"][
+            "warm_home_discount_modelled_bn"
+        ],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genJrfNettingShareOfGapPct",
+        lambda: 100
+        * jrf_gap()["netting_off_existing_support"]["share_of_gap_it_could_close"],
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genJrfNettingClosesGap",
+        lambda: (
+            "does"
+            if jrf_gap()["netting_off_existing_support"]["can_close_gap"]
+            else "does not"
+        ),
+        source=DIAG,
+    )
+
+    # --- the two flat-payment ceilings, side by side --------------------
+    #
+    # The scorecard uses the bill-exhausting rule; an earlier draft described
+    # the loss-exhausting one. Both are emitted so the prose can name the rule
+    # it quotes and the number can be checked against it.
+    def ceilings() -> dict:
+        return diagnostics()["flat_payment_ceilings"]
+
+    emit(
+        "genWhdCeilingBillRuleGbp",
+        lambda: ceilings()["mean_eligible_domestic_bill_gbp"],
+        "{:,.0f}",
+        DIAG,
+    )
+    emit(
+        "genWhdCeilingLossRuleGbp",
+        lambda: ceilings()["mean_eligible_loss_gbp"],
+        "{:,.0f}",
+        DIAG,
+    )
+    emit(
+        "genWhdCeilingRuleRatio",
+        lambda: ceilings()["bill_over_loss"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genWhdCeilingBillRuleCostBn",
+        lambda: ceilings()["cost_at_bill_rule_bn"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genWhdCeilingLossRuleCostBn",
+        lambda: ceilings()["cost_at_loss_rule_bn"],
+        "{:.2f}",
+        DIAG,
+    )
+    emit(
+        "genWhdCeilingRuleUsed",
+        lambda: str(ceilings()["rule_used"]).replace("_", " "),
+        source=DIAG,
+    )
+
+    # --- admission rules for the widened-eligibility arm ----------------
+    #
+    # ROUND 4. The eligibility arm's default rule ranks every non-claimant on
+    # equivalised AHC income, which is the observability this paper argues does
+    # not exist. Four rules are now scored. The default is the WORST of them on
+    # the offset, so the finding does not rest on the assumption; what the
+    # assumption buys is targeting. Macro names carry no digits.
+    ADMISSION_TAGS = (
+        ("Ahc", "equivalised_ahc_income"),
+        ("NetIncome", "unequivalised_net_income"),
+        ("Bill", "highest_domestic_bill"),
+        ("Random", "random"),
+    )
+    ADMISSION_METRICS = (
+        ("EligibleSharePct", "eligible_share", "{:.1f}"),
+        ("OffsetPct", "share_of_aggregate_loss_offset", "{:.1f}"),
+        ("BottomThreePct", "share_to_bottom_three", "{:.1f}"),
+        ("UncompensatedPct", "uncompensated_share_overall", "{:.1f}"),
+    )
+
+    def admission(policy: str) -> dict:
+        return diagnostics()["by_policy"][policy]["admission_rules"]
+
+    for policy_tag, policy_key in (
+        ("SocialTariff", "social_tariff"),
+        ("Whd", "whd_expansion"),
+    ):
+        for rule_tag, rule_key in ADMISSION_TAGS:
+            for metric_tag, metric_key, fmt in ADMISSION_METRICS:
+                emit(
+                    f"gen{policy_tag}Admission{rule_tag}{metric_tag}",
+                    lambda p=policy_key, r=rule_key, m=metric_key: (
+                        100 * float(admission(p)["by_rule"][r][m])
+                    ),
+                    fmt,
+                    DIAG,
+                )
+        emit(
+            f"gen{policy_tag}AdmissionRuleCount",
+            lambda p=policy_key: number_word(len(admission(p)["rules"])),
+            source=DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionOffsetMinPct",
+            lambda p=policy_key: (
+                100 * admission(p)["range"]["share_of_aggregate_loss_offset"]["min"]
+            ),
+            "{:.1f}",
+            DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionOffsetMaxPct",
+            lambda p=policy_key: (
+                100 * admission(p)["range"]["share_of_aggregate_loss_offset"]["max"]
+            ),
+            "{:.1f}",
+            DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionBottomThreeMinPct",
+            lambda p=policy_key: (
+                100 * admission(p)["range"]["share_to_bottom_three"]["min"]
+            ),
+            "{:.1f}",
+            DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionBottomThreeMaxPct",
+            lambda p=policy_key: (
+                100 * admission(p)["range"]["share_to_bottom_three"]["max"]
+            ),
+            "{:.1f}",
+            DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionDefaultIsWorstOffset",
+            lambda p=policy_key: (
+                "is"
+                if "share_of_aggregate_loss_offset"
+                in admission(p)["default_rule_does_not_maximise"]
+                else "is not"
+            ),
+            source=DIAG,
+        )
+        emit(
+            f"gen{policy_tag}AdmissionUniversalUnderEveryRule",
+            lambda p=policy_key: (
+                "does"
+                if all(
+                    float(v["eligible_share"]) >= 0.999
+                    for v in admission(p)["by_rule"].values()
+                )
+                else "does not"
+            ),
+            source=DIAG,
+        )
+
+    emit(
+        "genSocialTariffAdmissionRandomSeedCount",
+        lambda: number_word(
+            len(admission("social_tariff")["by_rule"]["random"]["random_draws"]["seeds"])
+        ),
+        source=DIAG,
+    )
+    emit(
+        "genSocialTariffAdmissionRandomOffsetMinPct",
+        lambda: 100
+        * admission("social_tariff")["by_rule"]["random"]["random_draws"]["min"],
+        "{:.1f}",
+        DIAG,
+    )
+    emit(
+        "genSocialTariffAdmissionRandomOffsetMaxPct",
+        lambda: 100
+        * admission("social_tariff")["by_rule"]["random"]["random_draws"]["max"],
+        "{:.1f}",
+        DIAG,
     )
 
     # ==================================================================
