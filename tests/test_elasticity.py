@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from uk_iran_conflict import elasticity as ela
 from uk_iran_conflict.elasticity import (
     CARRIERS,
     LABANDEIRA_2017_LONG_RUN,
@@ -364,3 +365,83 @@ def test_welfare_shaving_is_identically_the_consumption_cut():
 def test_cv_bounds_reject_negative_spend():
     with pytest.raises(ValueError, match="non-negative"):
         cv_bounds(-1.0, 1.1, -0.2)
+
+
+# ==========================================================================
+# Round 3, finding 7: diesel was priced with the gasoline elasticity
+# ==========================================================================
+
+
+def test_the_diesel_constant_is_actually_wired_up():
+    """It was defined, documented and never used."""
+    spec = ela.ElasticitySpec.labandeira_road_fuel_split()
+    assert ela.elasticity_for(spec, "diesel") == ela.LABANDEIRA_2017_DIESEL_SHORT_RUN
+    assert ela.elasticity_for(spec, "petrol") == pytest.approx(-0.293)
+    assert ela.elasticity_for(spec, "diesel") != ela.elasticity_for(spec, "petrol")
+    assert ela.resolve_elasticity_spec("labandeira_short_run_road_fuel_split") == spec
+
+
+def test_a_spec_without_a_road_fuel_split_falls_back_to_motor_fuel():
+    """Callers may always ask for the fuel they are actually pricing."""
+    flat = ela.ElasticitySpec.labandeira_flat("short_run")
+    assert ela.elasticity_for(flat, "diesel") == ela.elasticity_for(flat, "motor_fuel")
+    varying = ela.ElasticitySpec.priesmann_income_varying()
+    assert ela.elasticity_for(varying, "diesel", 1) == ela.elasticity_for(
+        varying, "motor_fuel", 1
+    )
+    assert ela.elasticity_for(ela.ElasticitySpec.main(), "petrol") == 0.0
+
+
+def test_an_unknown_carrier_still_raises():
+    with pytest.raises(KeyError):
+        ela.elasticity_for(ela.ElasticitySpec.main(), "heating_oil")
+
+
+def test_pricing_diesel_as_gasoline_understates_the_loss():
+    """Diesel carries the larger price move, so the elasticity choice bites."""
+    split = ela.ElasticitySpec.labandeira_road_fuel_split()
+    flat = ela.ElasticitySpec.labandeira_flat("short_run")
+    spend, ratio = 500.0, 1.36  # the realised 2026 diesel move
+    correct = ela.spend_change(spend, ratio, ela.elasticity_for(split, "diesel"))
+    as_gasoline = ela.spend_change(spend, ratio, ela.elasticity_for(flat, "diesel"))
+    assert correct > as_gasoline
+    # And the money-metric bound moves the same way.
+    assert ela.paasche_cv(spend, ratio, ela.elasticity_for(split, "diesel")) > (
+        ela.paasche_cv(spend, ratio, ela.elasticity_for(flat, "diesel"))
+    )
+
+
+def test_blending_is_a_spend_weighted_average_of_the_two_published_figures():
+    assert ela.blend_motor_fuel(0.0) == pytest.approx(-0.293)
+    assert ela.blend_motor_fuel(1.0) == pytest.approx(-0.153)
+    assert ela.blend_motor_fuel(0.4) == pytest.approx(0.6 * -0.293 + 0.4 * -0.153)
+    with pytest.raises(ValueError):
+        ela.blend_motor_fuel(1.2)
+
+
+def test_the_diesel_share_comes_from_the_data_not_from_a_constant():
+    assert ela.diesel_share_of_spend(600.0, 400.0) == pytest.approx(0.4)
+    with pytest.raises(ValueError):
+        ela.diesel_share_of_spend(0.0, 0.0)
+
+
+def test_a_blended_spec_says_so_in_its_name():
+    blended = ela.ElasticitySpec.labandeira_flat("short_run", diesel_share=0.45)
+    assert "diesel_share" in blended.name
+    assert blended.epsilon("motor_fuel") == pytest.approx(ela.blend_motor_fuel(0.45))
+    assert blended.epsilon("gas") == ela.LABANDEIRA_2017_SHORT_RUN["gas"]
+    with pytest.raises(ValueError, match="long-run diesel"):
+        ela.ElasticitySpec.labandeira_flat("long_run", diesel_share=0.45)
+
+
+def test_a_split_basket_prices_each_road_fuel_at_its_own_ratio():
+    split = ela.ElasticitySpec.labandeira_road_fuel_split()
+    out = ela.basket_spend_change(
+        {"petrol": 400.0, "diesel": 300.0},
+        {"petrol": 1.20, "diesel": 1.36},
+        spec=split,
+    )
+    assert set(out) == {"petrol", "diesel"}
+    assert out["diesel"] == pytest.approx(
+        ela.spend_change(300.0, 1.36, ela.LABANDEIRA_2017_DIESEL_SHORT_RUN)
+    )

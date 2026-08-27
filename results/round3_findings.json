@@ -1,0 +1,249 @@
+{
+  "note": "Round-3 findings, persisted so the paper can be written against measured facts rather than assertions.",
+  "cap_calibration": {
+    "prewar_counterfactual_cap_gbp": 1441.3333333333333,
+    "sustained_fraction": 0.7652831230509421,
+    "phase_in_profile": [
+      0.0,
+      0.0,
+      0.6333333333333333,
+      0.9333333333333333,
+      0.6583333333333333
+    ],
+    "quarter_labels": [
+      "2026Q1",
+      "2026Q2",
+      "2026Q3",
+      "2026Q4",
+      "2027Q1"
+    ],
+    "cap_anchor_pct": 0.2266419981498613,
+    "cap_base_pct": 0.15379278445883449,
+    "validation": {
+      "observed_jul_2026_gbp": 1663.0,
+      "modelled_jul_2026_gbp": 1663.0,
+      "observed_oct_2026_vat_adjusted_gbp": 1768.0,
+      "modelled_oct_2026_gbp": 1768.0,
+      "prewar_counterfactual_gbp": 1441.3333333333333,
+      "sustained_fraction": 0.7652831230509421,
+      "steady_state_dual_fuel_pct": 0.2428307123034227
+    },
+    "bill_level_pass_through": 0.36612500000000003,
+    "electricity_to_gas_pass_through_ratio": 0.6611111111111111,
+    "annual_phase_in_gas": 0.529625,
+    "annual_applied_gas_factor": 1.1580720988778836,
+    "annual_applied_electricity_factor": 1.1019381194435434,
+    "steady_state_gas_factor": 1.2984604179898676,
+    "steady_state_electricity_factor": 1.1973154985599679,
+    "superseded": {
+      "baseline_cap_gbp": 1663.0,
+      "cap_anchor_pct": 0.06313890559230306,
+      "why": "The observed 1 Jul - 30 Sep 2026 cap was used as the un-shocked baseline while 2026Q3 carried a phase-in of 1.0. One quarter cannot be both the unshocked denominator and the fully shocked numerator."
+    }
+  },
+  "decile_concept": {
+    "agreement": {
+      "unequivalised_bhc": 0.3000214976602793,
+      "equivalised_ahc": 0.5612009364024404,
+      "equivalised_bhc": 0.9989633138387786
+    },
+    "best_match": "equivalised_bhc",
+    "burden_denominator": "equivalised_ahc",
+    "matches_burden_denominator": false,
+    "mean_absolute_decile_gap": {
+      "unequivalised_bhc": 1.3293362636191335,
+      "equivalised_ahc": 0.5412256598487973,
+      "equivalised_bhc": 0.0010366861612214583
+    },
+    "documented_truth": "equivalised_bhc",
+    "best_match_is_documented_truth": true,
+    "person_weighted": true,
+    "negative_sentinel_share": 0.008134976029396057,
+    "unavailable": [],
+    "household_weighted_agreement": {
+      "unequivalised_bhc": 0.2934556007385254,
+      "equivalised_ahc": 0.5120549201965332,
+      "equivalised_bhc": 0.9365695118904114
+    }
+  },
+  "motor_fuel_margins": {
+    "raw": {
+      "means_tested_mean_fuel_gbp": 223.6003875732422,
+      "non_means_tested_mean_fuel_gbp": 1395.1932373046875,
+      "means_tested_fuel_ratio": 6.239672714555024,
+      "means_tested_zero_share": 0.8085233569145203,
+      "non_means_tested_zero_share": 0.5253023505210876,
+      "zero_fuel_share_overall": 0.5696579217910767,
+      "zero_fuel_share_by_decile": [
+        0.6204599738121033,
+        0.6265355944633484,
+        0.62545245885849,
+        0.533866286277771,
+        0.5664995908737183,
+        0.549056351184845,
+        0.5516172051429749,
+        0.45732581615448,
+        0.5267549753189087,
+        0.6203031539916992
+      ],
+      "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+      "means_tested_share_of_loss": NaN,
+      "d1_means_tested_mean_fuel_gbp": 252.213623046875,
+      "d1_non_means_tested_mean_fuel_gbp": 1463.9530029296875,
+      "d1_means_tested_zero_share": 0.8427165150642395,
+      "d1_non_means_tested_zero_share": 0.5146772861480713
+    },
+    "ons_fuel_shape": {
+      "means_tested_mean_fuel_gbp": 176.262013529105,
+      "non_means_tested_mean_fuel_gbp": 1403.9837422348141,
+      "means_tested_fuel_ratio": 7.965322272929689,
+      "means_tested_zero_share": 0.8085233569145203,
+      "non_means_tested_zero_share": 0.5253023505210876,
+      "zero_fuel_share_overall": 0.5696579217910767,
+      "zero_fuel_share_by_decile": [
+        0.6204599738121033,
+        0.6265355944633484,
+        0.62545245885849,
+        0.533866286277771,
+        0.5664995908737183,
+        0.549056351184845,
+        0.5516172051429749,
+        0.45732581615448,
+        0.5267549753189087,
+        0.6203031539916992
+      ],
+      "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+      "means_tested_share_of_loss": NaN,
+      "d1_means_tested_mean_fuel_gbp": 122.35641929652076,
+      "d1_non_means_tested_mean_fuel_gbp": 710.2076865495029,
+      "d1_means_tested_zero_share": 0.8427165150642395,
+      "d1_non_means_tested_zero_share": 0.5146772861480713
+    },
+    "ons_both_levels": {
+      "means_tested_mean_fuel_gbp": 139.64703510322204,
+      "non_means_tested_mean_fuel_gbp": 1112.3336390562886,
+      "means_tested_fuel_ratio": 7.965322272929688,
+      "means_tested_zero_share": 0.8085233569145203,
+      "non_means_tested_zero_share": 0.5253023505210876,
+      "zero_fuel_share_overall": 0.5696579217910767,
+      "zero_fuel_share_by_decile": [
+        0.6204599738121033,
+        0.6265355944633484,
+        0.62545245885849,
+        0.533866286277771,
+        0.5664995908737183,
+        0.549056351184845,
+        0.5516172051429749,
+        0.45732581615448,
+        0.5267549753189087,
+        0.6203031539916992
+      ],
+      "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+      "means_tested_share_of_loss": NaN,
+      "d1_means_tested_mean_fuel_gbp": 96.93927147714314,
+      "d1_non_means_tested_mean_fuel_gbp": 562.6759603411648,
+      "d1_means_tested_zero_share": 0.8427165150642395,
+      "d1_non_means_tested_zero_share": 0.5146772861480713
+    },
+    "mt_fuel_parity": {
+      "means_tested_mean_fuel_gbp": 1001.2027741689706,
+      "non_means_tested_mean_fuel_gbp": 1250.798249529168,
+      "means_tested_fuel_ratio": 1.2492956290171784,
+      "means_tested_zero_share": 0.8085233569145203,
+      "non_means_tested_zero_share": 0.5253023505210876,
+      "zero_fuel_share_overall": 0.5696579217910767,
+      "zero_fuel_share_by_decile": [
+        0.6204599738121033,
+        0.6265355944633484,
+        0.62545245885849,
+        0.533866286277771,
+        0.5664995908737183,
+        0.549056351184845,
+        0.5516172051429749,
+        0.45732581615448,
+        0.5267549753189087,
+        0.6203031539916992
+      ],
+      "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+      "means_tested_share_of_loss": NaN,
+      "d1_means_tested_mean_fuel_gbp": 1073.2036810592203,
+      "d1_non_means_tested_mean_fuel_gbp": 1073.2037187063213,
+      "d1_means_tested_zero_share": 0.8427165150642395,
+      "d1_non_means_tested_zero_share": 0.5146772861480713
+    },
+    "nts_participation": {
+      "means_tested_mean_fuel_gbp": 665.0742797851562,
+      "non_means_tested_mean_fuel_gbp": 1313.21484375,
+      "means_tested_fuel_ratio": 1.9745386096936681,
+      "means_tested_zero_share": 0.46222010254859924,
+      "non_means_tested_zero_share": 0.2435980886220932,
+      "zero_fuel_share_overall": 0.27783671021461487,
+      "zero_fuel_share_by_decile": [
+        0.39998069405555725,
+        0.37540626525878906,
+        0.350008487701416,
+        0.3234824240207672,
+        0.2958419620990753,
+        0.26710841059684753,
+        0.23723816871643066,
+        0.2061164528131485,
+        0.17371197044849396,
+        0.13997764885425568
+      ],
+      "zero_share_d1_minus_d10_pp": 26.000304520130157,
+      "means_tested_share_of_loss": NaN,
+      "d1_means_tested_mean_fuel_gbp": 689.4570922851562,
+      "d1_non_means_tested_mean_fuel_gbp": 1255.847412109375,
+      "d1_means_tested_zero_share": 0.5464548468589783,
+      "d1_non_means_tested_zero_share": 0.3302665054798126
+    }
+  },
+  "means_tested_fuel": {
+    "raw": {
+      "means_tested_share_of_loss": 0.05216817698753095,
+      "means_tested_mean_fuel_gbp": 223.6003875732422,
+      "non_means_tested_mean_fuel_gbp": 1395.1932373046875,
+      "aggregate_cost_bn": 11.096174592,
+      "motor_fuel_share_of_loss": 0.5516755646953685,
+      "d1_d10_ratio_pct": 9.2417905802918
+    },
+    "ons_fuel_shape": {
+      "means_tested_share_of_loss": 0.04910799215744525,
+      "means_tested_mean_fuel_gbp": 176.262013529105,
+      "non_means_tested_mean_fuel_gbp": 1403.9837422348141,
+      "aggregate_cost_bn": 11.134441804620133,
+      "motor_fuel_share_of_loss": 0.5532163397775121,
+      "d1_d10_ratio_pct": 4.861101327304357
+    },
+    "ons_both_levels": {
+      "means_tested_share_of_loss": 0.057790125287918555,
+      "means_tested_mean_fuel_gbp": 139.64703510322204,
+      "non_means_tested_mean_fuel_gbp": 1112.3336390562886,
+      "aggregate_cost_bn": 11.531692181385408,
+      "motor_fuel_share_of_loss": 0.42319779871085184,
+      "d1_d10_ratio_pct": 5.6852582913992755
+    },
+    "mt_fuel_parity": {
+      "means_tested_share_of_loss": 0.10076583222936979,
+      "means_tested_mean_fuel_gbp": 1001.2027741689706,
+      "non_means_tested_mean_fuel_gbp": 1250.798249529168,
+      "aggregate_cost_bn": 11.030942288715465,
+      "motor_fuel_share_of_loss": 0.5490243232356026,
+      "d1_d10_ratio_pct": 9.268907619506207
+    },
+    "nts_participation": {
+      "means_tested_share_of_loss": 0.08323503927794002,
+      "means_tested_mean_fuel_gbp": 665.0742797851562,
+      "non_means_tested_mean_fuel_gbp": 1313.21484375,
+      "aggregate_cost_bn": 11.096174592,
+      "motor_fuel_share_of_loss": 0.5516755185533404,
+      "d1_d10_ratio_pct": 9.414235783042066
+    },
+    "implied_targeting_multiple": {
+      "note": "The paper's 'seven times' claim scales inversely with the means-tested share of the loss, so the ratio of these two shares is the factor by which the claim moves under within-decile parity.",
+      "raw_share": 0.05216817698753095,
+      "parity_share": 0.10076583222936979,
+      "factor": 1.9315574752296687
+    }
+  }
+}

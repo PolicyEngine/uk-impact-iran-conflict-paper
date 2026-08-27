@@ -222,9 +222,25 @@ def means_tested_audit(dataset: str, period: int = 2026) -> dict[str, Any]:
 
     _household_children(sim, period)  # populate the child-count cache
 
+    contributing = sorted(k for k, v in resolved.items() if v["households_m"] > 0)
+    empty = sorted(k for k, v in resolved.items() if v["households_m"] <= 0)
+
     return {
         "period": period,
         "resolved_variables": sorted(resolved),
+        # Round-3 referees: resolving and contributing are different things.
+        # Four of the eight listed variables resolve against the tax-benefit
+        # system and then return **exactly zero households** (child tax credit,
+        # working tax credit, income support, JSA-income are wound down in the
+        # modelled year). "All eight resolve correctly" is true and says nothing
+        # about which of them actually put a household into the means-tested
+        # population. The two sets are therefore persisted separately, and the
+        # means test is carried by ``contributing_variables`` alone.
+        "contributing_variables": contributing,
+        "empty_variables": empty,
+        "n_resolved": len(resolved),
+        "n_contributing": len(contributing),
+        "n_empty": len(empty),
         "missing_required": missing_required,
         "missing_legacy": missing_legacy,
         "by_variable": resolved,
@@ -238,7 +254,9 @@ def means_tested_audit(dataset: str, period: int = 2026) -> dict[str, Any]:
             "May 2026. A large shortfall here is a PolicyEngine UK "
             "data-quality finding, not a modelling choice — but it is only a "
             "finding if the variable set actually resolved, which is what "
-            "this file records."
+            "this file records. `resolved_variables` is what the release "
+            "defines; `contributing_variables` is what reaches a household. "
+            "Only the second bears on the modelled means-tested population."
         ),
         "flag": flag,
     }
@@ -330,6 +348,11 @@ class Policy:
     )
     generic_template: str = "generic instrument scaled to {p:.4g}"
     means_tested: bool = False
+    #: Reference quantity the instrument is defined against, where it has one
+    #: (the JRF block's typical consumption). Persisted on every row so the
+    #: quantity being subsidised is never implicit.
+    reference_basis: str = ""
+    reference_quantity: float | Callable[[Baseline], float] | None = None
 
     def feasible_max_parameter(
         self, base: Baseline, cost: ShockCost, mt: np.ndarray
@@ -338,6 +361,45 @@ class Policy:
         if callable(self.feasible_max):
             return float(self.feasible_max(base, cost, mt))
         return float(self.feasible_max)
+
+    def reference_quantity_gbp(self, base: Baseline) -> float:
+        """The instrument's reference quantity, resolved against the data."""
+        if self.reference_quantity is None:
+            return float("nan")
+        if callable(self.reference_quantity):
+            return float(self.reference_quantity(base))
+        return float(self.reference_quantity)
+
+    def stated_cost_simulated_bn(
+        self, base: Baseline, cost: ShockCost, mt: np.ndarray
+    ) -> float:
+        """Simulated exchequer cost at the sponsor's own parameter, £bn."""
+        return wsum(self.gain(base, cost, mt), base.weight) / 1e9
+
+    def max_scale(self, base: Baseline, cost: ShockCost, mt: np.ndarray) -> float:
+        """Ratio of the feasible maximum parameter to the stated one."""
+        ceiling = self.feasible_max_parameter(base, cost, mt)
+        return (
+            ceiling / self.stated_parameter
+            if self.stated_parameter > 0
+            else float("inf")
+        )
+
+    def feasible_max_cost_bn(
+        self, base: Baseline, cost: ShockCost, mt: np.ndarray
+    ) -> float:
+        """Cost of running this instrument **at its feasible maximum**, £bn.
+
+        The true feasible maximum: the instrument is homogeneous of degree one
+        in its parameter, so this is the stated-parameter cost times
+        :meth:`max_scale`. It is *not* capped at any envelope — an envelope is a
+        budget constraint, not a property of the instrument — which is exactly
+        the conflation the round-3 referees found.
+        """
+        scale = self.max_scale(base, cost, mt)
+        if not np.isfinite(scale):
+            return float("inf")
+        return self.stated_cost_simulated_bn(base, cost, mt) * scale
 
     def describe(self, implied_parameter: float, feasible: bool) -> str:
         """Label a row: the real policy name only while it stays feasible."""
@@ -360,6 +422,78 @@ def _social_tariff(
     return np.where(mt, discount * shocked_bill, 0.0)
 
 
+#: Ofgem's typical-consumption annual dual-fuel bill on the cap basis JRF
+#: costed their proposal against (£/yr, April 2026 cap, direct debit, 11,500
+#: kWh gas + 2,700 kWh electricity). **The reference quantity for the JRF
+#: block's "typical consumption", and the default.**
+#:
+#: Round-3 referees: the block was previously pegged to the weighted median of
+#: our own *modelled* domestic bill. That is not JRF's typical consumption and
+#: not anybody's — the modelled domestic imputation is roughly a quarter low
+#: (docs/VALIDATION.md), so the block quantity was understated on a
+#: non-comparable base while the paper read the resulting cost against JRF's
+#: own £5bn and called the difference generosity. The basis is now an explicit
+#: parameter and both bases are reported side by side
+#: (:func:`jrf_reference_quantities`).
+OFGEM_TYPICAL_ANNUAL_BILL_GBP: float = 1_723.0
+
+#: The two admissible reference bases for the JRF block's typical consumption.
+JRF_REFERENCE_BASES: tuple[str, ...] = ("ofgem_typical_consumption", "modelled_median")
+
+JRF_DEFAULT_REFERENCE_BASIS: str = "ofgem_typical_consumption"
+
+
+def jrf_reference_quantity(
+    base: Baseline,
+    basis: str = JRF_DEFAULT_REFERENCE_BASIS,
+    typical_consumption_gbp: float | None = None,
+) -> float:
+    """Resolve the block's reference annual bill, £/yr.
+
+    ``typical_consumption_gbp`` overrides everything (so a sibling module that
+    recalibrates the baseline can pass its own figure and nothing here has to
+    be edited). Otherwise ``basis`` selects between Ofgem's published typical
+    consumption — JRF's own peg, and the default — and the weighted median of
+    the modelled domestic bill, retained so the previous number is reproducible.
+    """
+    if typical_consumption_gbp is not None:
+        return float(typical_consumption_gbp)
+    if basis == "ofgem_typical_consumption":
+        return float(OFGEM_TYPICAL_ANNUAL_BILL_GBP)
+    if basis == "modelled_median":
+        return float(wquantile(base.energy, base.weight, 0.5))
+    raise ValueError(f"unknown JRF reference basis {basis!r}; {JRF_REFERENCE_BASES}")
+
+
+def jrf_reference_quantities(
+    base: Baseline, block_share: float = 0.50
+) -> dict[str, float]:
+    """Both reference bases and the block each implies — reported, not chosen.
+
+    The paper must be able to say what quantity it subsidised and what the
+    alternative basis would have given, without a reader having to rerun
+    anything.
+    """
+    ofgem = jrf_reference_quantity(base, "ofgem_typical_consumption")
+    modelled = jrf_reference_quantity(base, "modelled_median")
+    return {
+        "basis_used": JRF_DEFAULT_REFERENCE_BASIS,
+        "ofgem_typical_consumption_gbp": ofgem,
+        "ofgem_block_gbp": block_share * ofgem,
+        "modelled_median_domestic_bill_gbp": modelled,
+        "modelled_median_block_gbp": block_share * modelled,
+        "modelled_over_ofgem": (modelled / ofgem) if ofgem > 0 else float("nan"),
+        "block_share": block_share,
+        "note": (
+            "JRF peg the discounted block to Ofgem typical consumption. The "
+            "modelled median is the weighted median of this model's own "
+            "domestic bill, which the validation notes is materially below the "
+            "Ofgem basis; a block set on it is not the sponsor's block and its "
+            "cost is not comparable with the sponsor's costing."
+        ),
+    }
+
+
 def _jrf_block(
     base: Baseline,
     cost: ShockCost,
@@ -368,6 +502,8 @@ def _jrf_block(
     discount: float = 0.50,
     per_child: float = 60.0,
     revalue_at_post_shock_prices: bool = False,
+    reference_basis: str = JRF_DEFAULT_REFERENCE_BASIS,
+    typical_consumption_gbp: float | None = None,
 ) -> np.ndarray:
     """JRF universal discounted block: a cheaper first tranche for everyone.
 
@@ -392,9 +528,17 @@ def _jrf_block(
     paper attributed that gap to JRF being more generous. It was a
     mis-specification, not a calibration difference.
 
-    Typical consumption is the weighted median domestic bill, so the block is a
-    fixed quantity rather than a proportion of each household's own bill (a
-    proportional discount would mechanically pay most to the biggest users).
+    ``reference_basis`` / ``typical_consumption_gbp`` (round-3 referees)
+    ------------------------------------------------------------------
+    Typical consumption is a **fixed quantity**, not a proportion of each
+    household's own bill (a proportional discount would mechanically pay most
+    to the biggest users). Which fixed quantity is now explicit and defaults to
+    JRF's own peg, Ofgem typical consumption
+    (:data:`OFGEM_TYPICAL_ANNUAL_BILL_GBP`), rather than to the weighted median
+    of this model's domestic bill — an imputation the validation puts about a
+    quarter low, on which the block was understated and its cost not comparable
+    with the sponsor's £5bn. Both bases are reported by
+    :func:`jrf_reference_quantities`.
     Households whose whole bill is smaller than the block get their whole bill
     discounted and no more.
 
@@ -426,9 +570,7 @@ def _jrf_block(
     documented, so the previous number can be reproduced and the £-difference
     reported rather than merely asserted.
     """
-    from uk_iran_conflict.incidence import wquantile  # noqa: PLC0415
-
-    typical = wquantile(base.energy, base.weight, 0.5)
+    typical = jrf_reference_quantity(base, reference_basis, typical_consumption_gbp)
     block_value = block_share * typical
     covered = np.minimum(base.energy, block_value)
     if revalue_at_post_shock_prices:
@@ -532,6 +674,8 @@ POLICIES: dict[str, Policy] = {
             "discounted first block at {p:.1f} per cent off 50 per cent of "
             "typical use, universal"
         ),
+        reference_basis=JRF_DEFAULT_REFERENCE_BASIS,
+        reference_quantity=(lambda base: jrf_reference_quantity(base)),
     ),
     "whd_expansion": Policy(
         "whd_expansion",
@@ -657,10 +801,104 @@ class PolicyScore:
     #: What this row should be called. The real policy name only while the row
     #: is feasible; otherwise a description of what it actually does.
     label_used: str = ""
-    #: Share of households eligible, for the eligibility-widening rows.
+    #: Share of households eligible. Persisted on **every** row, not only the
+    #: eligibility-widening ones: a means-tested instrument whose widened
+    #: eligibility has reached 1.0 has stopped being means-tested, and that fact
+    #: must be visible in the row rather than inferable from its cost.
     eligible_share: float = float("nan")
+    #: Eligible households, millions, on the same definition.
+    eligible_households_m: float = float("nan")
+    #: True when eligibility has reached (within tolerance) every household.
+    eligibility_is_universal: bool = False
+    #: Plain-language warning attached to a row whose means test has vanished.
+    eligibility_note: str = ""
     #: Units string for :attr:`cost_per_pound_decile_one`.
     cost_per_pound_decile_one_units: str = ""
+    # --- what kind of row this is (round-3 finding 1) ---------------------
+    #: Machine-readable row type; equal to :attr:`envelope`. Kept beside
+    #: :attr:`row_semantics` so a table builder never has to guess what a
+    #: column means.
+    row_kind: str = ""
+    #: One sentence saying what operation produced this row. The "feasible
+    #: maximum" column previously mixed three of them — raising an instrument
+    #: to its ceiling, leaving it alone, and scaling it *down* to fit an
+    #: envelope — under one label.
+    row_semantics: str = ""
+    #: Cost of the instrument at its own feasible maximum, £bn, **uncapped by
+    #: any envelope**. The same value on every row of a given policy, because
+    #: it is a property of the instrument.
+    feasible_max_cost_bn: float = float("nan")
+    #: Envelope minus what this row actually spends. The two arms of the
+    #: comparison do not spend the same money, and the prose may not claim they
+    #: do; this is the number that settles it.
+    envelope_shortfall_bn: float = float("nan")
+    #: Whether this row spends the full envelope (within 0.5%).
+    spends_full_envelope: bool = False
+    # --- overcompensation (round-3 finding 2) ----------------------------
+    #: Households paid **more than they lost**, millions and as shares. The
+    #: claim that no household is overcompensated is testable on our own
+    #: numbers, and at the feasible maximum it is false; these fields let the
+    #: paper state it instead of denying it.
+    overcompensated_households_m: float = float("nan")
+    overcompensated_share_of_households: float = float("nan")
+    overcompensated_share_of_recipients: float = float("nan")
+    #: Total spend going to those households, £bn, and the part of it above
+    #: their own loss (the pounds that compensate nothing).
+    overcompensated_spend_bn: float = float("nan")
+    overcompensated_excess_bn: float = float("nan")
+    overcompensated_share_of_spend: float = float("nan")
+    #: Mean gain and mean loss among recipients, £/yr — the pair the referees
+    #: compared (£760 paid against a £275 mean loss).
+    mean_gain_if_recipient_gbp: float = float("nan")
+    mean_loss_if_recipient_gbp: float = float("nan")
+    mean_loss_gbp: float = float("nan")
+    #: Ratio of the two. Above 1 means the average recipient is paid more than
+    #: it lost.
+    gain_to_loss_ratio_recipients: float = float("nan")
+    # --- reference quantity (round-3 finding 5) ---------------------------
+    reference_basis: str = ""
+    reference_quantity_gbp: float = float("nan")
+
+
+#: What each row type actually is, in one sentence. Emitted with every row.
+#:
+#: Round-3 referees: the pre-revision scorecard had a column labelled "feasible
+#: maximum" that was ``min(envelope_scale, max_scale)`` — three different
+#: operations depending on the instrument. It raised the social tariff (35 ->
+#: 100%) and the Warm Home Discount (£150 -> £758) to their ceilings, left VAT
+#: alone, and scaled the JRF block (50 -> 35.8%) and the flat rebate (£183 ->
+#: £170) *down* to fit £5bn. Reading down that column compared a ceiling with a
+#: budget constraint. The two questions are now two row types:
+#: ``feasible_max`` answers "how far can this instrument go?" and
+#: ``common_capped`` answers "how much of the envelope can it absorb?".
+ROW_SEMANTICS: dict[str, str] = {
+    "stated": ("the sponsor's own parameter, at whatever it costs"),
+    "feasible_max": (
+        "the instrument at its OWN feasible maximum parameter, uncapped by any "
+        "envelope: the true feasible maximum, and the only row down which "
+        "feasible maxima are comparable"
+    ),
+    "common_capped": (
+        "what the instrument can absorb WITHIN the envelope: scaled toward it "
+        "and stopped at the feasible maximum, so an instrument that saturates "
+        "reports the smaller sum it can actually spend. Not a feasible maximum "
+        "— for an instrument that already costs more than the envelope this "
+        "scales generosity DOWN"
+    ),
+    "common_scaled": (
+        "pure scalar rescaling to the envelope, retained only for "
+        "auditability; the implied parameter may be outside the instrument's "
+        "parameter space, in which case the row is renamed generically"
+    ),
+    "common_eligibility": (
+        "the sponsor's own generosity, with eligibility widened down the income "
+        "ranking until the envelope is spent or everyone is in"
+    ),
+}
+
+#: A row is treated as universal — no longer means-tested in anything but name
+#: — at or above this eligible share.
+UNIVERSAL_ELIGIBILITY_TOLERANCE: float = 0.999
 
 
 def _residual_loss(loss: np.ndarray, gain: np.ndarray) -> np.ndarray:
@@ -689,7 +927,8 @@ def score_policy(
     is_feasible: bool = True,
     absorbable_envelope_bn: float = float("nan"),
     label_used: str | None = None,
-    eligible_share: float = float("nan"),
+    eligible_share: float | None = None,
+    feasible_max_cost_bn: float = float("nan"),
 ) -> tuple[PolicyScore, np.ndarray]:
     """Score ``policy`` against the shock, returning the gain array too.
 
@@ -712,6 +951,40 @@ def score_policy(
     net = loss - gain
     residual = _residual_loss(loss, gain)
     losers = loss > 0
+
+    # --- who is eligible, on every row -----------------------------------
+    recipients = gain > 0
+    w_total = w.sum()
+    if eligible_share is None:
+        eligible_share = (
+            float(w[recipients].sum() / w_total) if w_total > 0 else (float("nan"))
+        )
+    eligible_households_m = (
+        float(eligible_share * w_total / 1e6)
+        if np.isfinite(eligible_share)
+        else (float("nan"))
+    )
+    is_universal = bool(
+        np.isfinite(eligible_share)
+        and eligible_share >= UNIVERSAL_ELIGIBILITY_TOLERANCE
+    )
+    eligibility_note = ""
+    if is_universal and policy.means_tested:
+        eligibility_note = (
+            f"eligibility has reached {eligible_share:.4f} of households: this "
+            "row is universal, not means-tested, and is arithmetically a flat "
+            "payment to everyone. Its targeting statistics are those of a "
+            "universal rebate and must not be read as a means test."
+        )
+    elif is_universal:
+        eligibility_note = "universal by design; every household is eligible."
+
+    # --- overcompensation --------------------------------------------------
+    over = recipients & (gain > loss)
+    w_over = w[over].sum()
+    over_spend = wsum(gain[over], w[over])
+    over_excess = wsum((gain - loss)[over], w[over])
+    w_recipients = w[recipients].sum()
 
     total_gain = wsum(gain, w)
     total_loss = wsum(loss, w)
@@ -820,6 +1093,55 @@ def score_policy(
             absorbable_envelope_bn=absorbable_envelope_bn,
             label_used=label_used,
             eligible_share=eligible_share,
+            eligible_households_m=eligible_households_m,
+            eligibility_is_universal=is_universal,
+            eligibility_note=eligibility_note,
+            row_kind=envelope,
+            row_semantics=ROW_SEMANTICS.get(envelope, ""),
+            feasible_max_cost_bn=feasible_max_cost_bn,
+            envelope_shortfall_bn=(
+                envelope_bn - total_gain / 1e9
+                if np.isfinite(envelope_bn)
+                else float("nan")
+            ),
+            spends_full_envelope=bool(
+                np.isfinite(envelope_bn)
+                and envelope_bn > 0
+                and abs(total_gain / 1e9 - envelope_bn) <= 0.005 * envelope_bn
+            ),
+            overcompensated_households_m=float(w_over / 1e6),
+            overcompensated_share_of_households=(
+                float(w_over / w_total) if w_total > 0 else float("nan")
+            ),
+            overcompensated_share_of_recipients=(
+                float(w_over / w_recipients) if w_recipients > 0 else float("nan")
+            ),
+            overcompensated_spend_bn=float(over_spend / 1e9),
+            overcompensated_excess_bn=float(over_excess / 1e9),
+            overcompensated_share_of_spend=(
+                float(over_spend / total_gain) if total_gain > 0 else float("nan")
+            ),
+            mean_gain_if_recipient_gbp=(
+                wmean(gain[recipients], w[recipients])
+                if w_recipients > 0
+                else float("nan")
+            ),
+            mean_loss_if_recipient_gbp=(
+                wmean(loss[recipients], w[recipients])
+                if w_recipients > 0
+                else float("nan")
+            ),
+            mean_loss_gbp=wmean(loss, w),
+            gain_to_loss_ratio_recipients=(
+                float(
+                    wmean(gain[recipients], w[recipients])
+                    / wmean(loss[recipients], w[recipients])
+                )
+                if w_recipients > 0 and wmean(loss[recipients], w[recipients]) > 0
+                else float("nan")
+            ),
+            reference_basis=policy.reference_basis,
+            reference_quantity_gbp=policy.reference_quantity_gbp(base),
         ),
         gain,
     )
@@ -880,7 +1202,13 @@ def score_policy_at_envelope(
     ceiling = policy.feasible_max_parameter(base, cost, mt)
     stated = policy.stated_parameter
     max_scale = ceiling / stated if stated > 0 else float("inf")
-    absorbable_bn = envelope_bn * (min(1.0, max_scale / scale) if scale > 0 else 1.0)
+    stated_cost_bn = wsum(gain, base.weight) / 1e9
+    feasible_cost_bn = (
+        stated_cost_bn * max_scale if np.isfinite(max_scale) else float("inf")
+    )
+    # What the instrument can absorb inside the envelope: the smaller of the
+    # envelope and its own feasible-maximum cost. NOT its feasible maximum.
+    absorbable_bn = min(envelope_bn, feasible_cost_bn)
 
     if cap_at_feasible_max:
         scale = min(scale, max_scale)
@@ -900,6 +1228,55 @@ def score_policy_at_envelope(
         feasible_max_parameter=ceiling,
         is_feasible=feasible,
         absorbable_envelope_bn=absorbable_bn,
+        feasible_max_cost_bn=feasible_cost_bn,
+    )
+
+
+def score_policy_at_feasible_max(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    policy: Policy,
+    envelope_bn: float = COMMON_ENVELOPE_BN,
+) -> tuple[PolicyScore, np.ndarray]:
+    """Score the instrument at its **own** feasible maximum parameter.
+
+    The row the pre-revision "feasible maximum" column claimed to be and was
+    not. No envelope enters: the parameter goes to
+    :meth:`Policy.feasible_max_parameter` and the cost is whatever that costs —
+    a 100% JRF block is roughly £14bn, and saying so is the point. ``envelope_bn``
+    is carried only so the row can report how far past (or short of) the common
+    envelope the instrument's own ceiling lies.
+
+    Read this row for "how far can this instrument go?" and the
+    ``common_capped`` row for "how much of £5bn can it absorb?". They are
+    different questions and were previously the same column.
+    """
+    gain = policy.gain(base, cost, mt)
+    ceiling = policy.feasible_max_parameter(base, cost, mt)
+    stated = policy.stated_parameter
+    scale = ceiling / stated if stated > 0 else float("inf")
+    if not np.isfinite(scale):
+        raise ValueError(
+            f"policy {policy.key!r} has no finite feasible maximum; it cannot "
+            "be scored at one"
+        )
+    stated_cost_bn = wsum(gain, base.weight) / 1e9
+    feasible_cost_bn = stated_cost_bn * scale
+    return score_policy(
+        base,
+        cost,
+        mt,
+        policy,
+        gain=gain * scale,
+        envelope="feasible_max",
+        envelope_bn=envelope_bn,
+        envelope_scale=scale,
+        implied_parameter=ceiling,
+        feasible_max_parameter=ceiling,
+        is_feasible=True,
+        absorbable_envelope_bn=min(envelope_bn, feasible_cost_bn),
+        feasible_max_cost_bn=feasible_cost_bn,
     )
 
 
@@ -909,6 +1286,7 @@ def widen_eligibility(
     mt: np.ndarray,
     policy: Policy,
     envelope_bn: float,
+    max_eligible_share: float = 1.0,
 ) -> np.ndarray:
     """Extend eligibility down the income ranking until the envelope is spent.
 
@@ -925,6 +1303,13 @@ def widen_eligibility(
     Households outside the modelled means-tested population are added in
     ascending order of equivalised AHC income until the next household would
     take the total past ``envelope_bn``. Returns a new eligibility mask.
+
+    ``max_eligible_share`` caps how far the widening may go, as a share of
+    weighted households. It defaults to 1.0 — no cap — because the finding is
+    that a £150 payment run to a £5bn envelope reaches *everyone*, and
+    suppressing that would hide it. Callers that want a means test to remain a
+    means test can pass e.g. 0.5; either way the resulting share is persisted on
+    the row and flagged when it reaches universality (round-3 finding 3).
     """
     already = np.asarray(mt, dtype=bool)
     everyone = np.ones_like(already, dtype=bool)
@@ -939,6 +1324,11 @@ def widen_eligibility(
     order = candidates[np.argsort(base.equiv_income_ahc[candidates], kind="stable")]
     running = np.cumsum(gain_if_eligible[order] * w[order])
     take = order[running <= remaining]
+    if max_eligible_share < 1.0:
+        w_total = w.sum()
+        allowed = max_eligible_share * w_total - w[already].sum()
+        cum_w = np.cumsum(w[take])
+        take = take[cum_w <= max(allowed, 0.0)]
     out[take] = True
     return out
 
@@ -949,6 +1339,7 @@ def score_policy_by_eligibility(
     mt: np.ndarray,
     policy: Policy,
     envelope_bn: float = COMMON_ENVELOPE_BN,
+    max_eligible_share: float = 1.0,
 ) -> tuple[PolicyScore, np.ndarray]:
     """Reach the common envelope by widening eligibility, not by scaling generosity.
 
@@ -961,9 +1352,25 @@ def score_policy_by_eligibility(
         raise ValueError(
             f"policy {policy.key!r} is universal; it has no eligibility margin"
         )
-    widened = widen_eligibility(base, cost, mt, policy, envelope_bn)
+    widened = widen_eligibility(
+        base, cost, mt, policy, envelope_bn, max_eligible_share=max_eligible_share
+    )
     gain = policy.gain(base, cost, widened)
     w = base.weight
+    share = float(w[widened].sum() / w.sum())
+    # Round-3 finding 3: widening a £150 flat payment to a £5bn envelope puts
+    # every household in. At that point the row is not the Warm Home Discount
+    # and not a means-tested instrument; it is arithmetically the flat rebate,
+    # with the same share-to-D1-3 and the same cost per pound. It is renamed
+    # accordingly rather than left carrying a means-tested policy's name.
+    label_used = policy.label
+    if share >= UNIVERSAL_ELIGIBILITY_TOLERANCE:
+        label_used = (
+            f"{policy.label}, widened to universal eligibility: "
+            f"{policy.parameter} held at {policy.stated_parameter:g} "
+            f"({policy.parameter_units}) and paid to every household — "
+            "no means test remains at this envelope"
+        )
     return score_policy(
         base,
         cost,
@@ -977,7 +1384,9 @@ def score_policy_by_eligibility(
         feasible_max_parameter=policy.feasible_max_parameter(base, cost, mt),
         is_feasible=True,
         absorbable_envelope_bn=wsum(gain, w) / 1e9,
-        eligible_share=float(w[widened].sum() / w.sum()),
+        eligible_share=share,
+        label_used=label_used,
+        feasible_max_cost_bn=policy.feasible_max_cost_bn(base, cost, mt),
     )
 
 
@@ -994,6 +1403,10 @@ def scorecard(
 
     ``stated``
         The sponsor's own parameters.
+    ``feasible_max``
+        The instrument at its **own** feasible maximum, uncapped by any
+        envelope: the true feasible maximum, and the only row down which
+        feasible maxima are comparable.
     ``common_capped``
         Scaled toward ``envelope_bn`` but stopped at the instrument's feasible
         maximum, reporting the envelope it can actually absorb.
@@ -1005,6 +1418,11 @@ def scorecard(
         The envelope reached by widening *who* is eligible at the sponsor's own
         generosity.
 
+    ``feasible_max`` and ``common_capped`` answer different questions and the
+    pre-revision scorecard ran them together in a single column labelled
+    "feasible maximum" (:data:`ROW_SEMANTICS`). Every row carries
+    ``row_semantics`` saying which it is.
+
     Consumers should read ``envelope``, ``is_feasible`` and ``label_used``
     together: a conclusion about targeting drawn from a ``common_scaled`` row
     with ``is_feasible == False`` is a conclusion about a policy that cannot
@@ -1014,6 +1432,7 @@ def scorecard(
     out: list[PolicyScore] = []
     for policy in chosen.values():
         ceiling = policy.feasible_max_parameter(base, cost, mt)
+        feasible_cost_bn = policy.feasible_max_cost_bn(base, cost, mt)
         out.append(
             score_policy(
                 base,
@@ -1023,8 +1442,10 @@ def scorecard(
                 implied_parameter=policy.stated_parameter,
                 feasible_max_parameter=ceiling,
                 is_feasible=policy.stated_parameter <= ceiling * (1 + 1e-12),
+                feasible_max_cost_bn=feasible_cost_bn,
             )[0]
         )
+        out.append(score_policy_at_feasible_max(base, cost, mt, policy, envelope_bn)[0])
         out.append(
             score_policy_at_envelope(
                 base, cost, mt, policy, envelope_bn, cap_at_feasible_max=True
@@ -1040,3 +1461,162 @@ def scorecard(
                 score_policy_by_eligibility(base, cost, mt, policy, envelope_bn)[0]
             )
     return out
+
+
+# --------------------------------------------------------------------------
+# Diagnostics the emitter needs and previously carried as literals
+# --------------------------------------------------------------------------
+
+
+def large_loser_outside_means_test(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    threshold_pct: float = 5.0,
+) -> dict[str, float]:
+    """Share of *large losers* sitting outside the modelled means-tested system.
+
+    ``genLargeLoserOutsideMeansTest`` in the emitter was the last hardcoded
+    literal in a paper whose reproduction appendix promises that every number is
+    emitted mechanically from ``results/``. It is computed here, off the same
+    arrays the scorecard uses, so it can be persisted like everything else.
+
+    A large loser is a household with positive net income losing more than
+    ``threshold_pct`` per cent of it to the shock. The statistic is the weighted
+    share of those households not on any *modelled* means-tested benefit.
+
+    **Its ceiling is reported beside it.** A referee's objection is that with a
+    modelled means-tested population of only ~15.7% of households the statistic
+    can be no lower than ``100 - 15.7`` even if the means test hit every single
+    large loser, so a value near that ceiling carries little information beyond
+    the coverage shortfall the paper already reports as a finding. That is a
+    fair reading, and ``ceiling_pct`` / ``headroom_pct`` make it checkable
+    rather than something a reader has to reconstruct: ``headroom_pct`` is the
+    only part of the statistic that is about targeting rather than about
+    coverage.
+    """
+    w = base.weight
+    income = np.asarray(base.net_income, dtype=float)
+    loss = np.asarray(cost.total, dtype=float)
+    mt = np.asarray(mt, dtype=bool)
+    pos = income > 0
+    burden = np.zeros_like(loss)
+    np.divide(100.0 * loss, income, out=burden, where=pos)
+    heavy = pos & (burden > threshold_pct)
+    w_heavy = w[heavy].sum()
+    w_total = w.sum()
+    mt_share = float(w[mt].sum() / w_total) if w_total > 0 else float("nan")
+    share_out = float(w[heavy & ~mt].sum() / w_heavy) if w_heavy > 0 else float("nan")
+    ceiling = 100.0 * (1.0 - mt_share)
+    return {
+        "threshold_pct": float(threshold_pct),
+        "large_losers_m": float(w_heavy / 1e6),
+        "large_loser_share_of_households": (
+            float(w_heavy / w_total) if w_total > 0 else float("nan")
+        ),
+        "share_outside_means_test_pct": 100.0 * share_out,
+        "means_tested_share_of_households_pct": 100.0 * mt_share,
+        "ceiling_pct": ceiling,
+        "headroom_pct": 100.0 * share_out - ceiling,
+        "note": (
+            "Modelled means-tested population only. The statistic cannot fall "
+            "below its ceiling of 100 minus the means-tested share of "
+            "households, so it is near-tautological when it sits close to that "
+            "ceiling; `headroom_pct` is the part that is about targeting. "
+            "Persisted so the emitter carries no literal, but a referee argues "
+            "it would be better dropped from the paper than qualified."
+        ),
+    }
+
+
+def policy_diagnostics(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    envelope_bn: float = COMMON_ENVELOPE_BN,
+    policies: dict[str, Policy] | None = None,
+) -> dict[str, Any]:
+    """Everything about the policy block that is not a per-row scorecard field.
+
+    Written to ``results/`` so the paper can state, mechanically:
+
+    * the true feasible maximum cost of each instrument, beside what it can
+      absorb inside the envelope (round-3 finding 1);
+    * what each arm of the common-envelope comparison **actually spends**, so
+      the prose can stop claiming the arms spend the same £5bn (finding 4);
+    * the JRF block's reference quantity on both bases (finding 5);
+    * the large-loser statistic and its ceiling (finding 8).
+
+    No headline number is embedded: every figure is computed from the baseline
+    and shock passed in.
+    """
+    chosen = POLICIES if policies is None else policies
+    per_policy: dict[str, Any] = {}
+    for key, policy in chosen.items():
+        stated_bn = policy.stated_cost_simulated_bn(base, cost, mt)
+        feasible_bn = policy.feasible_max_cost_bn(base, cost, mt)
+        entry: dict[str, Any] = {
+            "label": policy.label,
+            "parameter": policy.parameter,
+            "parameter_units": policy.parameter_units,
+            "stated_parameter": policy.stated_parameter,
+            "feasible_max_parameter": policy.feasible_max_parameter(base, cost, mt),
+            "stated_cost_simulated_bn": stated_bn,
+            "feasible_max_cost_bn": feasible_bn,
+            "absorbable_within_envelope_bn": min(envelope_bn, feasible_bn),
+            "saturates_below_envelope": bool(feasible_bn < envelope_bn),
+            "means_tested": policy.means_tested,
+        }
+        arms: dict[str, float] = {
+            "generosity_arm_spend_bn": min(envelope_bn, feasible_bn),
+        }
+        if policy.means_tested:
+            elig = score_policy_by_eligibility(base, cost, mt, policy, envelope_bn)[0]
+            arms["eligibility_arm_spend_bn"] = elig.cost_bn
+            arms["eligibility_arm_eligible_share"] = elig.eligible_share
+            arms["eligibility_arm_is_universal"] = elig.eligibility_is_universal
+        arms["envelope_bn"] = envelope_bn
+        arms["arms_spend_the_same"] = bool(
+            all(
+                abs(v - envelope_bn) <= 0.005 * envelope_bn
+                for k, v in arms.items()
+                if k.endswith("_spend_bn")
+            )
+        )
+        entry["envelope_arms"] = arms
+        per_policy[key] = entry
+
+    return {
+        "envelope_bn": envelope_bn,
+        "row_semantics": ROW_SEMANTICS,
+        "by_policy": per_policy,
+        "jrf_reference_quantities": jrf_reference_quantities(base),
+        "large_loser_outside_means_test": large_loser_outside_means_test(
+            base, cost, mt
+        ),
+        "note": (
+            "`feasible_max_cost_bn` is a property of the instrument and ignores "
+            "the envelope; `absorbable_within_envelope_bn` is the budget "
+            "constraint. A column that mixes them is not a feasible-maximum "
+            "column."
+        ),
+    }
+
+
+def write_policy_diagnostics(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    envelope_bn: float = COMMON_ENVELOPE_BN,
+    path: str | Path | None = None,
+    policies: dict[str, Policy] | None = None,
+) -> Path:
+    """Persist :func:`policy_diagnostics` as JSON."""
+    payload = policy_diagnostics(base, cost, mt, envelope_bn, policies)
+    if path is None:
+        root = Path(__file__).resolve().parents[1]
+        path = root / "results" / "policy_diagnostics.json"
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2))
+    return path

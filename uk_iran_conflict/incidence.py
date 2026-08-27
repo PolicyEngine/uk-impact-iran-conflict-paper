@@ -57,6 +57,11 @@ BASELINE_VARIABLES: tuple[str, ...] = (
     "diesel_spending",
     "household_income_decile",
     "equiv_hbai_household_net_income_ahc",
+    # Round-3: the concept ``household_income_decile`` actually ranks on. Read
+    # from the installed package rather than inferred — see
+    # :func:`decile_concept_audit`. Without it the audit could not put the true
+    # concept among its own candidates.
+    "equiv_hbai_household_net_income",
     "household_equivalisation_ahc",
     "in_relative_poverty_ahc",
     "in_relative_poverty_bhc",
@@ -131,6 +136,17 @@ class Baseline:
     #: :data:`INCOME_BASES` for the scale). Optional so a synthetic baseline can
     #: be built without it; ``None`` is read as an unequivalised 1.0 everywhere.
     equivalisation_ahc: np.ndarray | None = None
+    #: Equivalised HBAI net income **before** housing costs — the variable
+    #: ``household_income_decile`` actually ranks on. Optional so a synthetic
+    #: baseline can be built without it; :func:`decile_concept_audit` reports it
+    #: as unavailable rather than substituting a proxy.
+    equiv_income_bhc: np.ndarray | None = None
+    #: Household-level means-tested benefit receipt indicator, from
+    #: :func:`uk_iran_conflict.policies.means_tested_flag`. Optional: it needs a
+    #: second pass over the microdata, so the run scripts attach it with
+    #: ``dataclasses.replace`` rather than :func:`load_baseline` loading it.
+    #: Required by the ``"mt_fuel_parity"`` calibration, which raises without it.
+    means_tested: np.ndarray | None = None
 
     @property
     def equivalisation(self) -> np.ndarray:
@@ -176,6 +192,7 @@ def load_baseline(dataset: str, period: int = 2026) -> Baseline:
         diesel=got["diesel_spending"],
         decile=got["household_income_decile"],
         equiv_income_ahc=got["equiv_hbai_household_net_income_ahc"],
+        equiv_income_bhc=got["equiv_hbai_household_net_income"],
         in_poverty_bhc=got["in_relative_poverty_bhc"],
         in_poverty_ahc=got["in_relative_poverty_ahc"],
         region=got["region"],
@@ -371,6 +388,307 @@ def rescale_to_ons_levels(base: Baseline) -> Baseline:
     )
 
 
+# --------------------------------------------------------------------------
+# The means-tested motor-fuel margin, and the participation margin
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MotorFuelMargins:
+    """Diagnostics on the two motor-fuel margins the imputation cannot support.
+
+    Both are computed on the microdata and persisted, because both bear directly
+    on the paper's central policy finding and neither is visible in a decile
+    mean.
+
+    The means-tested margin
+    -----------------------
+    Means-tested households are imputed **£224** of annual motor fuel against
+    **£1,395** for non-means-tested households — a ratio of 6.2 — with a
+    zero-fuel rate of 80.9% against 52.5%. Inside decile one the same split is
+    £252 (84.3% zero) against £1,464 (51.5% zero). Because motor fuel carries
+    most of the modelled loss, this single margin is what puts the means-tested
+    share of the aggregate loss at 3.96% and drives the paper's "seven times"
+    claim about untargeted support.
+
+    :func:`rescale_motor_fuel_to_ons` cannot test it. It applies **one factor per
+    decile**, so it scales means-tested and non-means-tested households
+    identically and leaves the 6.2x ratio exactly where it found it. Testing it
+    needs a specification acting *within* decile:
+    :func:`equalise_means_tested_fuel`.
+
+    The participation margin
+    ------------------------
+    The zero-fuel share is **62.0% in decile one and 62.0% in decile ten**,
+    identical to a tenth of a percentage point, against DfT National Travel
+    Survey car *availability* of 40% without a car in the bottom income quintile
+    and 14% in the top. A fuel-purchasing rate that does not vary across the
+    income distribution at all is not a plausible feature of the world; it is a
+    feature of the imputation. That identity is the whole of the verified
+    evidence and it is enough on its own.
+
+    What is deliberately **not** asserted here: any particular account of *why*
+    the imputation behaves this way. A two-week-diary explanation is a hypothesis
+    and is recorded as one in the paper, not as a finding in this module.
+
+    The DfT comparator carries its own caveat: NTS car availability is measured
+    for **England only**, on gross-income quintiles, while the model is UK-wide
+    on net-income deciles. It is a gradient comparator, not a level target, and
+    :func:`correct_fuel_participation` treats it as one.
+    """
+
+    means_tested_mean_fuel_gbp: float
+    non_means_tested_mean_fuel_gbp: float
+    means_tested_fuel_ratio: float
+    means_tested_zero_share: float
+    non_means_tested_zero_share: float
+    zero_fuel_share_overall: float
+    zero_fuel_share_by_decile: list[float]
+    zero_share_d1_minus_d10_pp: float
+    means_tested_share_of_loss: float = float("nan")
+    #: Decile-1 detail, where the margin does most of its work.
+    d1_means_tested_mean_fuel_gbp: float = float("nan")
+    d1_non_means_tested_mean_fuel_gbp: float = float("nan")
+    d1_means_tested_zero_share: float = float("nan")
+    d1_non_means_tested_zero_share: float = float("nan")
+
+
+def motor_fuel_margins(
+    base: Baseline, cost: np.ndarray | None = None
+) -> MotorFuelMargins:
+    """Compute :class:`MotorFuelMargins` on a baseline. Requires ``means_tested``."""
+    if base.means_tested is None:
+        raise ValueError(
+            "motor_fuel_margins needs base.means_tested; attach it with "
+            "dataclasses.replace(base, means_tested=policies.means_tested_flag(...))"
+        )
+    mt = np.asarray(base.means_tested).astype(bool)
+    fuel, w = base.motor_fuel, base.weight
+
+    def stats(sel: np.ndarray) -> tuple[float, float]:
+        return wmean(fuel[sel], w[sel]), (
+            float(w[sel][fuel[sel] <= 0].sum() / w[sel].sum())
+            if w[sel].sum() > 0
+            else float("nan")
+        )
+
+    mt_mean, mt_zero = stats(mt)
+    nmt_mean, nmt_zero = stats(~mt)
+    d1 = base.decile == 1
+    d1_mt_mean, d1_mt_zero = stats(d1 & mt)
+    d1_nmt_mean, d1_nmt_zero = stats(d1 & ~mt)
+    by_decile = []
+    for d in range(1, 11):
+        sel = base.decile == d
+        by_decile.append(
+            float(w[sel][fuel[sel] <= 0].sum() / w[sel].sum())
+            if w[sel].sum() > 0
+            else float("nan")
+        )
+    return MotorFuelMargins(
+        means_tested_mean_fuel_gbp=mt_mean,
+        non_means_tested_mean_fuel_gbp=nmt_mean,
+        means_tested_fuel_ratio=(nmt_mean / mt_mean if mt_mean else float("nan")),
+        means_tested_zero_share=mt_zero,
+        non_means_tested_zero_share=nmt_zero,
+        zero_fuel_share_overall=float(w[fuel <= 0].sum() / w.sum()),
+        zero_fuel_share_by_decile=by_decile,
+        zero_share_d1_minus_d10_pp=100 * (by_decile[0] - by_decile[-1]),
+        means_tested_share_of_loss=(
+            float(wsum(cost[mt], w[mt]) / wsum(cost, w))
+            if cost is not None and wsum(cost, w)
+            else float("nan")
+        ),
+        d1_means_tested_mean_fuel_gbp=d1_mt_mean,
+        d1_non_means_tested_mean_fuel_gbp=d1_nmt_mean,
+        d1_means_tested_zero_share=d1_mt_zero,
+        d1_non_means_tested_zero_share=d1_nmt_zero,
+    )
+
+
+def equalise_means_tested_fuel(base: Baseline) -> Baseline:
+    """Equalise means-tested motor-fuel spend to non-means-tested, within decile.
+
+    **The specification that tests the paper's central policy finding.** The
+    paper reports that untargeted support costs roughly seven times what
+    targeted support costs per pound reaching the bottom, and that rests on
+    means-tested households bearing only 3.96% of the aggregate loss. That share
+    is a direct consequence of their imputed motor-fuel spend being one sixth of
+    everyone else's (:class:`MotorFuelMargins`), which no existing specification
+    can move: :func:`rescale_motor_fuel_to_ons` applies one factor per decile and
+    so scales both groups identically.
+
+    What it does
+    ------------
+    Within each decile, means-tested and non-means-tested households' petrol and
+    diesel are each scaled to the decile's own weighted mean motor-fuel spend.
+    Parity and a preserved decile **total** together pin the common level
+    exactly: it is the decile mean. As in :func:`rescale_motor_fuel_to_ons` this
+    transplants a *margin* and does not change the level, so the aggregate loss
+    stays comparable with the main specification and only the distribution of it
+    moves.
+
+    Within-group relative variation is untouched (one factor per group per
+    decile), so a means-tested household imputed zero fuel stays at zero: this
+    corrects the *level* margin, not the participation margin. The two are
+    separate specifications on purpose, because they have separate evidence.
+
+    What it assumes, and what a referee should do with it
+    ----------------------------------------------------
+    Equality within decile is an **upper bound on the correction**, not an
+    estimate. Means-tested households at a given income are on average smaller,
+    older and more urban than non-means-tested ones, all of which genuinely
+    reduce motoring, so the true ratio is above 1.0 and below the imputed 6.2.
+    This specification and the main one bracket it. The honest reading is that
+    the paper's headline multiple is bounded by the two, and the paper should
+    report the bracket rather than the endpoint that flatters the finding.
+
+    Requires ``base.means_tested``; raises without it rather than silently
+    returning the baseline unchanged.
+    """
+    if base.means_tested is None:
+        raise ValueError(
+            "equalise_means_tested_fuel needs base.means_tested; attach it with "
+            "dataclasses.replace(base, means_tested=policies.means_tested_flag(...))"
+        )
+    mt = np.asarray(base.means_tested).astype(bool)
+    w = base.weight
+    factor = np.ones(base.n)
+    for d in range(1, 11):
+        sel = base.decile == d
+        a, b = sel & mt, sel & ~mt
+        wa, wb = float(w[a].sum()), float(w[b].sum())
+        if wa <= 0 or wb <= 0:
+            continue
+        mean_a = wmean(base.motor_fuel[a], w[a])
+        mean_b = wmean(base.motor_fuel[b], w[b])
+        if mean_a <= 0 or mean_b <= 0:
+            continue
+        # Parity *and* a preserved decile total means both groups go to the
+        # decile's own mean: wa*m + wb*m = wa*mean_a + wb*mean_b.
+        common = (wa * mean_a + wb * mean_b) / (wa + wb)
+        if common <= 0:
+            continue
+        factor[a] = common / mean_a
+        factor[b] = common / mean_b
+    return dataclasses.replace(
+        base, petrol=base.petrol * factor, diesel=base.diesel * factor
+    )
+
+
+#: DfT National Travel Survey car-availability gradient, **England only**.
+#:
+#: 40% of households in the lowest income quintile have no car available against
+#: 14% in the highest, i.e. availability of 60% and 86%. Used by
+#: :func:`correct_fuel_participation` as a *gradient*, log-linearly interpolated
+#: across deciles, never as a level target: NTS is England-only, measured on
+#: gross-income quintiles, and asks about vehicle availability rather than
+#: whether fuel was bought in a year, while the model is UK-wide on net-income
+#: deciles. Every one of those mismatches is a reason to read the resulting
+#: specification as an illustration of what the participation margin is worth,
+#: not as a correction that has been validated.
+NTS_CAR_AVAILABILITY_D1: float = 0.60
+NTS_CAR_AVAILABILITY_D10: float = 0.86
+
+
+def nts_participation_targets() -> np.ndarray:
+    """Target fuel-participation rate by decile, log-linear between the NTS ends."""
+    ratio = (NTS_CAR_AVAILABILITY_D10 / NTS_CAR_AVAILABILITY_D1) ** (1.0 / 9.0)
+    return np.clip(NTS_CAR_AVAILABILITY_D1 * ratio ** np.arange(10.0), 0.0, 1.0)
+
+
+def correct_fuel_participation(base: Baseline) -> Baseline:
+    """Impose the DfT car-availability **gradient** on the fuel participation rate.
+
+    The margin this addresses
+    -------------------------
+    The zero-fuel share in the microdata is 62.0% in decile one and 62.0% in
+    decile ten — the same to a tenth of a point — against an NTS car-availability
+    gradient running from 60% to 86%. Whatever the imputation is measuring, it is
+    not annual motoring status, because annual motoring status is one of the more
+    strongly income-graded household characteristics there is. No specification
+    in the paper tested this, so the paper could neither use the margin nor
+    disclaim it.
+
+    What it does
+    ------------
+    Within each decile, households currently imputed **zero** fuel are promoted
+    to participation, in a stable deterministic order, until the decile's
+    participation rate reaches :func:`nts_participation_targets`. A promoted
+    household receives the decile's conditional (positive-spend) mean. The whole
+    decile is then rescaled so its weighted **total** motor-fuel spend is exactly
+    preserved, which necessarily lowers the conditional level — the two move
+    together, and preserving the total is what keeps the aggregate loss
+    comparable with the main specification.
+
+    Ordering is by household index, which is arbitrary but stable and
+    independent of income, spend and weight. It has to be arbitrary: nothing in
+    the data identifies *which* zero-spend households are the artefactual ones.
+
+    Why this is a bound and not a correction
+    ----------------------------------------
+    The NTS gradient is England-only, quintile-based, gross-income-ranked and
+    about vehicle availability rather than fuel purchase; the model is UK-wide,
+    decile-based and net-income-ranked. Imposing it is an illustration of what
+    the participation margin is worth, not a validated repair, and the paper must
+    say so. If a referee rejects the NTS transplant, the fallback position is the
+    one the diagnostic supports on its own: the identical 62% in deciles one and
+    ten means the participation margin is **untestable** on this microdata, and
+    every fuel-channel result is conditional on an imputation that cannot
+    reproduce a car-ownership gradient.
+    """
+    targets = nts_participation_targets()
+    petrol, diesel = base.petrol.copy(), base.diesel.copy()
+    fuel = base.motor_fuel
+    w = base.weight
+    for d in range(1, 11):
+        sel = np.flatnonzero(base.decile == d)
+        if sel.size == 0:
+            continue
+        total_w = float(w[sel].sum())
+        if total_w <= 0:
+            continue
+        positive = sel[fuel[sel] > 0]
+        zeros = sel[fuel[sel] <= 0]
+        if positive.size == 0 or zeros.size == 0:
+            continue
+        conditional_mean = wmean(fuel[positive], w[positive])
+        current = float(w[positive].sum()) / total_w
+        target = float(targets[d - 1])
+        if target <= current or conditional_mean <= 0:
+            continue
+        needed = (target - current) * total_w
+        # Split petrol/diesel in the decile's own conditional proportions.
+        positive_fuel = wsum(fuel[positive], w[positive])
+        p_share = (
+            wsum(base.petrol[positive], w[positive]) / positive_fuel
+            if positive_fuel
+            else 0.5
+        )
+        # Stable, income-independent promotion order, taken vectorised: each
+        # promoted household is full-weight except the marginal one, which is
+        # scaled so the decile hits its target participation exactly.
+        order = np.sort(zeros, kind="stable")
+        cum = np.cumsum(w[order])
+        full = cum <= needed
+        share = np.zeros(order.size)
+        share[full] = 1.0
+        marginal = int(full.sum())
+        if marginal < order.size and w[order][marginal] > 0:
+            before = cum[marginal - 1] if marginal else 0.0
+            share[marginal] = min(1.0, (needed - before) / w[order][marginal])
+        petrol[order] = share * conditional_mean * p_share
+        diesel[order] = share * conditional_mean * (1.0 - p_share)
+        # Restore the decile total.
+        new_total = wsum(petrol[sel] + diesel[sel], w[sel])
+        old_total = wsum(fuel[sel], w[sel])
+        if new_total > 0 and old_total > 0:
+            scale = old_total / new_total
+            petrol[sel] *= scale
+            diesel[sel] *= scale
+    return dataclasses.replace(base, petrol=petrol, diesel=diesel)
+
+
 #: Baseline calibrations selectable by :func:`run_scenario`.
 #:
 #: ``"raw"``
@@ -380,7 +698,20 @@ def rescale_to_ons_levels(base: Baseline) -> Baseline:
 #:     microdata's national fuel total preserved.
 #: ``"ons_both_levels"``
 #:     :func:`rescale_to_ons_levels` — ONS *levels* on both legs.
-CALIBRATIONS: tuple[str, ...] = ("raw", "ons_fuel_shape", "ons_both_levels")
+#: ``"mt_fuel_parity"``
+#:     :func:`equalise_means_tested_fuel` — means-tested motor-fuel spend raised
+#:     to non-means-tested parity within decile, decile totals preserved. Needs
+#:     ``base.means_tested``.
+#: ``"nts_participation"``
+#:     :func:`correct_fuel_participation` — the DfT car-availability gradient
+#:     imposed on the fuel participation rate, decile totals preserved.
+CALIBRATIONS: tuple[str, ...] = (
+    "raw",
+    "ons_fuel_shape",
+    "ons_both_levels",
+    "mt_fuel_parity",
+    "nts_participation",
+)
 
 
 def apply_calibration(base: Baseline, calibration: str) -> Baseline:
@@ -391,6 +722,10 @@ def apply_calibration(base: Baseline, calibration: str) -> Baseline:
         return rescale_motor_fuel_to_ons(base)
     if calibration == "ons_both_levels":
         return rescale_to_ons_levels(base)
+    if calibration == "mt_fuel_parity":
+        return equalise_means_tested_fuel(base)
+    if calibration == "nts_participation":
+        return correct_fuel_participation(base)
     raise ValueError(
         f"unknown calibration {calibration!r}; expected one of {CALIBRATIONS}"
     )
@@ -452,11 +787,24 @@ def sustained_pump_factors(scenario: Any) -> tuple[float, float]:
     realised path are observed *peaks*. Charging a household the peak pump price
     for twelve months while damping the gas peak to its cap-relevant fraction is
     the inconsistency ``docs/VALIDATION.md`` Check 2b identifies, so the
-    scenario's ``pass_through.pump_sustained_fraction`` is applied here. It
-    defaults to 1.0, so any scenario that does not set it is unchanged.
+    scenario's ``pass_through.pump_sustained_fraction`` is applied.
 
-    Raises on a scenario carrying no pump path rather than returning a silently
-    unshocked 1.0 (``docs/FIXES.md`` E33).
+    Two round-3 defects are fixed here.
+
+    **The silent default.** This function raised on a scenario carrying no
+    ``pump`` path, and then read the damping fraction with
+    ``getattr(pass_through, "pump_sustained_fraction", 1.0)`` — on a scenario
+    carrying no ``pass_through`` at all, ``getattr(None, ..., 1.0)`` returns
+    1.0, silently. 1.0 is the *peak-fuel upper bound*: precisely the fallback the
+    docstring says it refuses, reached by precisely the mechanism it refuses it
+    for. A missing pass-through block is now an error like a missing pump path.
+
+    **The dead path.** :meth:`Scenario.sustained_pump_changes` computed exactly
+    this damping and was referenced only by the test suite, while the pipeline
+    used this function — so the tests exercised code the paper does not run, and
+    the two could drift apart without anything failing. This function now
+    *delegates* to the scenario's own method when it exposes one, so there is one
+    implementation and the tests exercise it.
     """
     pump = getattr(scenario, "pump", None)
     if pump is None:
@@ -464,7 +812,17 @@ def sustained_pump_factors(scenario: Any) -> tuple[float, float]:
             f"scenario {getattr(scenario, 'key', scenario)!r} exposes no pump "
             "path; refusing to fall back to an unshocked 1.0"
         )
+    changes = getattr(scenario, "sustained_pump_changes", None)
+    if changes is not None:
+        petrol, diesel = changes
+        return 1.0 + float(petrol), 1.0 + float(diesel)
     pass_through = getattr(scenario, "pass_through", None)
+    if pass_through is None:
+        raise AttributeError(
+            f"scenario {getattr(scenario, 'key', scenario)!r} exposes neither "
+            "sustained_pump_changes nor a pass_through block; refusing to fall "
+            "back to the undamped peak, which is the peak-fuel upper bound"
+        )
     fraction = float(getattr(pass_through, "pump_sustained_fraction", 1.0))
     return (
         1.0 + fraction * float(pump.petrol_pct_change),
@@ -544,6 +902,47 @@ def income_for_ratio(base: Baseline, basis: str = DEFAULT_INCOME_BASIS) -> np.nd
     if basis == "unequivalised":
         return base.net_income
     raise ValueError(f"unknown income basis {basis!r}; expected one of {INCOME_BASES}")
+
+
+#: How the non-positive-income tail is handled in the "% of income" statistics.
+#:
+#: ``"drop"``
+#:     The paper's specification: households with income <= 0 are excluded from
+#:     both the numerator and the denominator (:func:`pct_of_income`). Standard,
+#:     but on the equivalised AHC basis it drops about **20% of decile one**.
+#: ``"winsorise_p1"``
+#:     Non-positive incomes are replaced by the first percentile of the positive
+#:     income distribution and **kept in**. Those households then carry a large
+#:     but finite burden ratio instead of vanishing.
+#:
+#: Round-3 finding 9: decile one's 2.29% against decile two's 1.03% is the whole
+#: of the paper's gradient story, and a 20.05% drop inside decile one is a
+#: plausible cause of it. The paper never showed the sensitivity. Both
+#: treatments, and the gradient with decile one excluded altogether, are now
+#: computed on every run.
+NON_POSITIVE_INCOME_TREATMENTS: tuple[str, ...] = ("drop", "winsorise_p1")
+
+DEFAULT_INCOME_TREATMENT: str = "drop"
+
+
+def treat_non_positive_income(
+    income: np.ndarray, weight: np.ndarray, treatment: str = DEFAULT_INCOME_TREATMENT
+) -> np.ndarray:
+    """Apply one of :data:`NON_POSITIVE_INCOME_TREATMENTS` to an income array."""
+    if treatment == "drop":
+        return income
+    if treatment == "winsorise_p1":
+        ok = income > 0
+        if not ok.any():
+            return income
+        floor = wquantile(income[ok], weight[ok], 0.01)
+        if not np.isfinite(floor) or floor <= 0:
+            return income
+        return np.where(income > 0, income, floor)
+    raise ValueError(
+        f"unknown income treatment {treatment!r}; expected one of "
+        f"{NON_POSITIVE_INCOME_TREATMENTS}"
+    )
 
 
 def pct_of_income(cost: np.ndarray, income: np.ndarray, weight: np.ndarray) -> float:
@@ -724,7 +1123,10 @@ def decile_coverage(
 
 
 def decile_table(
-    base: Baseline, cost: np.ndarray, income_basis: str = DEFAULT_INCOME_BASIS
+    base: Baseline,
+    cost: np.ndarray,
+    income_basis: str = DEFAULT_INCOME_BASIS,
+    income_treatment: str = DEFAULT_INCOME_TREATMENT,
 ) -> list[DecileRow]:
     """Loss by income decile, in **both** £ and % of income.
 
@@ -741,7 +1143,9 @@ def decile_table(
     rather than asserted in prose (C12).
     """
     rows: list[DecileRow] = []
-    income = income_for_ratio(base, income_basis)
+    income = treat_non_positive_income(
+        income_for_ratio(base, income_basis), base.weight, income_treatment
+    )
     inside = (base.decile >= 1) & (base.decile <= 10)
     covered_total = wsum(cost[inside], base.weight[inside])
     for d in range(1, 11):
@@ -781,7 +1185,10 @@ class IntraDecileRow:
 
 
 def intra_decile_table(
-    base: Baseline, cost: np.ndarray, income_basis: str = DEFAULT_INCOME_BASIS
+    base: Baseline,
+    cost: np.ndarray,
+    income_basis: str = DEFAULT_INCOME_BASIS,
+    income_treatment: str = DEFAULT_INCOME_TREATMENT,
 ) -> list[IntraDecileRow]:
     """Dispersion of the loss *within* each decile.
 
@@ -791,7 +1198,9 @@ def intra_decile_table(
     against equivalised AHC income by default (D1).
     """
     rows: list[IntraDecileRow] = []
-    income = income_for_ratio(base, income_basis)
+    income = treat_non_positive_income(
+        income_for_ratio(base, income_basis), base.weight, income_treatment
+    )
     for d in range(1, 11):
         sel = base.decile == d
         w = base.weight[sel]
@@ -915,32 +1324,84 @@ def dispersion_summary(
     )
 
 
-#: Income concepts the decile ranking variable is checked against (round 2).
+#: Income concepts the decile ranking variable is checked against.
+#:
+#: Round-3: the previous list built its "BHC" candidate as
+#: ``household_net_income / household_equivalisation_ahc`` — the wrong numerator
+#: *and* an AHC denominator — so the true concept was never a candidate at all,
+#: and equivalised AHC "won" at 53% against 52% entirely inside that construction
+#: error. ``equivalised_bhc`` is now the real variable,
+#: ``equiv_hbai_household_net_income``, read from the microdata.
 DECILE_CONCEPT_CANDIDATES: tuple[str, ...] = (
     "unequivalised_bhc",
     "equivalised_ahc",
     "equivalised_bhc",
 )
 
+#: The concept ``policyengine_uk.household_income_decile`` ranks on, read from
+#: the installed package's source rather than inferred:
+#:
+#: .. code-block:: python
+#:
+#:     income = household("equiv_hbai_household_net_income", period)
+#:     weighted = MicroSeries(income, weights=household_weight * count_people)
+#:     decile = weighted.decile_rank().values
+#:     return where(income < 0, -1, decile)
+#:
+#: Three facts follow, and all three matter to the paper:
+#:
+#: 1. the concept is equivalised **BHC**, not AHC;
+#: 2. the ranking is **person-weighted** (``household_weight * count_people``),
+#:    not household-weighted;
+#: 3. negative incomes are set to the sentinel **-1**, which is what puts
+#:    households outside deciles 1-10 — the "out-of-range" households the paper
+#:    already discusses are not a data defect, they are this line.
+DECILE_RANKING_TRUTH: str = "equivalised_bhc"
+DECILE_RANKING_IS_PERSON_WEIGHTED: bool = True
+DECILE_RANKING_NEGATIVE_SENTINEL: int = -1
+
 
 @dataclass
 class DecileConceptAudit:
     """Which income concept ``household_income_decile`` actually ranks on.
 
-    Round-2 referee 3: the code took PolicyEngine UK's ``household_income_decile``
-    unexamined while every burden in the paper is measured against equivalised
-    **AHC** income. If the ranking variable is a **BHC** (or unequivalised)
-    concept then the decile a household is placed in and the income it is
-    divided by are two different objects, and the gradient is a cross-concept
-    statistic — which is a thing the paper has to state, not something a referee
-    should have to discover.
+    The paper measures every burden against equivalised **AHC** income,
+    household-weighted. The ranking variable is equivalised **BHC**,
+    person-weighted (:data:`DECILE_RANKING_TRUTH`). The decile a household is
+    placed in and the income it is divided by are therefore two different
+    objects, and the gradient is a **cross-concept statistic**. That is a thing
+    the paper has to state, not something a referee should have to discover, so
+    it is measured here and persisted rather than assumed.
 
-    This audit reports, for each candidate concept, the weighted share of
-    households whose own decile of that concept matches the decile they are
-    placed in, so the answer is a measured fact in ``results/`` rather than an
-    assumption. ``best_match`` is the concept with the highest agreement, and
-    ``matches_burden_denominator`` says whether that is the concept the
-    percentages divide by.
+    The audit reconstructs each candidate concept's own deciles and reports the
+    weighted share of households placed in the matching decile. Under
+    ``person_weighted=True`` the reconstruction uses the package's own weighting
+    (``household_weight x count_people``) and applies the ``-1`` sentinel, so
+    ``equivalised_bhc`` should agree essentially perfectly — and if it does not,
+    something about the microdata or the package has changed and the audit says
+    so instead of quietly ranking a wrong answer first.
+
+    Attributes
+    ----------
+    agreement:
+        Weighted share of households whose own decile of each candidate matches
+        the decile they are placed in.
+    best_match:
+        Highest-agreement candidate. Compared against
+        :data:`DECILE_RANKING_TRUTH` by :attr:`best_match_is_documented_truth`.
+    documented_truth:
+        What the installed package's source says, independent of this data.
+    burden_denominator:
+        The income concept the paper's percentages divide by.
+    matches_burden_denominator:
+        Whether the ranking concept and the burden denominator are the same
+        object. **On the paper's specification this is False**, and that is the
+        finding.
+    person_weighted:
+        Whether the reconstruction used the package's person weights.
+    negative_sentinel_share:
+        Weighted share of households carrying the ``-1`` sentinel, i.e. with
+        negative equivalised BHC income. These are the out-of-range households.
     """
 
     agreement: dict[str, float]
@@ -948,6 +1409,11 @@ class DecileConceptAudit:
     burden_denominator: str
     matches_burden_denominator: bool
     mean_absolute_decile_gap: dict[str, float]
+    documented_truth: str = DECILE_RANKING_TRUTH
+    best_match_is_documented_truth: bool = False
+    person_weighted: bool = DECILE_RANKING_IS_PERSON_WEIGHTED
+    negative_sentinel_share: float = float("nan")
+    unavailable: tuple[str, ...] = ()
 
 
 def _weighted_deciles(values: np.ndarray, weight: np.ndarray) -> np.ndarray:
@@ -965,23 +1431,35 @@ def _weighted_deciles(values: np.ndarray, weight: np.ndarray) -> np.ndarray:
 
 
 def decile_concept_audit(
-    base: Baseline, income_basis: str = DEFAULT_INCOME_BASIS
+    base: Baseline,
+    income_basis: str = DEFAULT_INCOME_BASIS,
+    *,
+    person_weighted: bool = DECILE_RANKING_IS_PERSON_WEIGHTED,
 ) -> DecileConceptAudit:
     """Identify the income concept behind ``household_income_decile``. See above."""
     inside = (base.decile >= 1) & (base.decile <= 10)
-    w = base.weight[inside]
+    ranking_weight = base.weight * base.people if person_weighted else base.weight
+    w = ranking_weight[inside]
     placed = np.asarray(base.decile[inside], dtype=int)
-    equivalisation = np.clip(base.equivalisation, 1e-9, None)
-    candidates = {
+    candidates: dict[str, np.ndarray] = {
         "unequivalised_bhc": base.net_income,
         "equivalised_ahc": base.equiv_income_ahc,
-        "equivalised_bhc": base.net_income / equivalisation,
     }
+    unavailable: list[str] = []
+    if base.equiv_income_bhc is None:
+        unavailable.append("equivalised_bhc")
+    else:
+        candidates["equivalised_bhc"] = base.equiv_income_bhc
     agreement: dict[str, float] = {}
     gaps: dict[str, float] = {}
     total = float(w.sum())
-    for name, values in candidates.items():
-        own = _weighted_deciles(np.asarray(values, dtype=float), base.weight)[inside]
+    for name, raw in candidates.items():
+        values = np.asarray(raw, dtype=float)
+        own = _weighted_deciles(values, ranking_weight)
+        # The package sets negatives to the -1 sentinel *before* they can match
+        # any decile; reproduce that so a candidate is not credited for
+        # households the real variable never placed.
+        own = np.where(values < 0, DECILE_RANKING_NEGATIVE_SENTINEL, own)[inside]
         agreement[name] = (
             float(w[own == placed].sum() / total) if total else float("nan")
         )
@@ -989,12 +1467,20 @@ def decile_concept_audit(
             float((np.abs(own - placed) * w).sum() / total) if total else float("nan")
         )
     best = max(agreement, key=lambda k: agreement[k])
+    sentinel = base.decile == DECILE_RANKING_NEGATIVE_SENTINEL
+    all_w = float(base.weight.sum())
     return DecileConceptAudit(
         agreement=agreement,
         best_match=best,
         burden_denominator=income_basis,
         matches_burden_denominator=(best == income_basis),
         mean_absolute_decile_gap=gaps,
+        best_match_is_documented_truth=(best == DECILE_RANKING_TRUTH),
+        person_weighted=person_weighted,
+        negative_sentinel_share=(
+            float(base.weight[sentinel].sum() / all_w) if all_w else float("nan")
+        ),
+        unavailable=tuple(unavailable),
     )
 
 
@@ -1114,19 +1600,45 @@ class ScenarioResult:
     domestic_only_d1_d10_ratio_pct: float = float("nan")
     domestic_only_d1_d10_ratio_gbp: float = float("nan")
     all_channel_d1_d10_ratio_pct: float = float("nan")
+    # --- round-3 finding 9: the gradient without decile one, and without the
+    # --- "drop the non-positive tail" convention that shapes decile one.
+    #: The gradient measured from decile **two** instead of decile one. Decile
+    #: one is where 20% of equivalised AHC incomes are non-positive and are
+    #: dropped; decile two is the steepest point of the distribution that does
+    #: not depend on that treatment.
+    d2_d10_ratio_pct: float = float("nan")
+    d2_d10_ratio_gbp: float = float("nan")
+    #: The same statistics under ``"winsorise_p1"``: the non-positive tail kept
+    #: in at the first percentile of positive income rather than dropped. If the
+    #: gradient is a statement about incidence it should survive this; if it is a
+    #: statement about the denominator convention, it will not.
+    income_treatment: str = DEFAULT_INCOME_TREATMENT
+    decile1_loss_pct_winsorised: float = float("nan")
+    decile2_loss_pct_winsorised: float = float("nan")
+    decile10_loss_pct_winsorised: float = float("nan")
+    d1_d10_ratio_pct_winsorised: float = float("nan")
+    d2_d10_ratio_pct_winsorised: float = float("nan")
+    mean_loss_pct_winsorised: float = float("nan")
+    #: Motor-fuel margin diagnostics, when the baseline carries ``means_tested``.
+    motor_fuel_margins: MotorFuelMargins | None = None
 
 
-def _ratio(rows: list[DecileRow], field_name: str) -> float:
-    """Decile-one over decile-ten value of ``field_name``, or NaN."""
+def _ratio(rows: list[DecileRow], field_name: str, bottom: int = 1) -> float:
+    """``bottom``-over-decile-ten value of ``field_name``, or NaN.
+
+    ``bottom=2`` gives the gradient measured from decile two, which is the
+    round-3 robustness ask: decile one is the decile in which a fifth of
+    equivalised AHC incomes are non-positive and dropped from the denominator.
+    """
     if not rows:
         return float("nan")
     top = next((r for r in rows if r.decile == 10), None)
-    bottom = next((r for r in rows if r.decile == 1), None)
-    if top is None or bottom is None:
+    bottom_row = next((r for r in rows if r.decile == bottom), None)
+    if top is None or bottom_row is None:
         return float("nan")
     denominator = getattr(top, field_name)
     return (
-        float(getattr(bottom, field_name) / denominator)
+        float(getattr(bottom_row, field_name) / denominator)
         if denominator
         else float("nan")
     )
@@ -1149,6 +1661,7 @@ def run_scenario(
     income_basis: str = DEFAULT_INCOME_BASIS,
     domestic_basis: str = DEFAULT_DOMESTIC_BASIS,
     calibration: str | None = None,
+    income_treatment: str = DEFAULT_INCOME_TREATMENT,
 ) -> tuple[ScenarioResult, ShockCost]:
     """Score one scenario against the baseline.
 
@@ -1166,7 +1679,14 @@ def run_scenario(
         ``"steady_state"`` charges full pass-through for twelve months.
     calibration:
         One of :data:`CALIBRATIONS`. ``"ons_both_levels"`` is the specification
-        that corrects *both* imputation levels against ONS (C11).
+        that corrects *both* imputation levels against ONS (C11);
+        ``"mt_fuel_parity"`` and ``"nts_participation"`` are the two round-3
+        margin specifications and both need ``base.means_tested`` / a decile.
+    income_treatment:
+        One of :data:`NON_POSITIVE_INCOME_TREATMENTS`, applied to the
+        denominator. The ``"winsorise_p1"`` statistics are computed and reported
+        on **every** run regardless, so the sensitivity of the gradient to this
+        convention is always in the results (round-3 finding 9).
 
     Returns the result and the :class:`ShockCost`; note that under any
     non-``"raw"`` calibration the cost is computed on the recalibrated baseline,
@@ -1182,13 +1702,32 @@ def run_scenario(
     total = cost.total
     w = base.weight
     agg = wsum(total, w)
-    income = income_for_ratio(base, income_basis)
+    income = treat_non_positive_income(
+        income_for_ratio(base, income_basis), base.weight, income_treatment
+    )
     equivalisation = np.clip(base.equivalisation, 1e-9, None)
     after = np.clip(income - total, 0, None)
     pass_through = getattr(scenario, "pass_through", None)
-    decile_rows = decile_table(base, total, income_basis)
-    intra_rows = intra_decile_table(base, total, income_basis)
-    domestic_rows = decile_table(base, cost.domestic, income_basis)
+    decile_rows = decile_table(base, total, income_basis, income_treatment)
+    intra_rows = intra_decile_table(base, total, income_basis, income_treatment)
+    domestic_rows = decile_table(base, cost.domestic, income_basis, income_treatment)
+
+    # Round-3 finding 9. The gradient is recomputed two further ways on every
+    # run: from decile two (so it does not rest on the decile where a fifth of
+    # equivalised AHC incomes are non-positive) and with that tail winsorised
+    # back in rather than dropped.
+    winsorised = treat_non_positive_income(income, w, "winsorise_p1")
+
+    def _decile_pct(values: np.ndarray, d: int) -> float:
+        sel = base.decile == d
+        return (
+            pct_of_income(total[sel], values[sel], w[sel])
+            if w[sel].sum() > 0
+            else float("nan")
+        )
+
+    d1_win, d2_win, d10_win = (_decile_pct(winsorised, d) for d in (1, 2, 10))
+    margins = motor_fuel_margins(base, total) if base.means_tested is not None else None
     return (
         ScenarioResult(
             scenario=cost.scenario,
@@ -1244,6 +1783,16 @@ def run_scenario(
             domestic_only_d1_d10_ratio_pct=_ratio(domestic_rows, "mean_loss_pct"),
             domestic_only_d1_d10_ratio_gbp=_ratio(domestic_rows, "mean_loss_gbp"),
             all_channel_d1_d10_ratio_pct=_ratio(decile_rows, "mean_loss_pct"),
+            d2_d10_ratio_pct=_ratio(decile_rows, "mean_loss_pct", bottom=2),
+            d2_d10_ratio_gbp=_ratio(decile_rows, "mean_loss_gbp", bottom=2),
+            income_treatment=income_treatment,
+            decile1_loss_pct_winsorised=d1_win,
+            decile2_loss_pct_winsorised=d2_win,
+            decile10_loss_pct_winsorised=d10_win,
+            d1_d10_ratio_pct_winsorised=(d1_win / d10_win if d10_win else float("nan")),
+            d2_d10_ratio_pct_winsorised=(d2_win / d10_win if d10_win else float("nan")),
+            mean_loss_pct_winsorised=pct_of_income(total, winsorised, w),
+            motor_fuel_margins=margins,
         ),
         cost,
     )

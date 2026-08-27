@@ -1,5 +1,27 @@
 # Referee-response fix list
 
+> **STABLE REFERENCE — DO NOT RENUMBER.** Docstrings throughout
+> `uk_iran_conflict/` and `analysis/` cite this file by label (`docs/FIXES.md
+> D1`, `docs/FIXES.md A5`, `docs/FIXES.md C14`, ...) to explain why a piece of
+> code does what it does. Those labels are part of the replication package's
+> interface. Rules:
+>
+> - **Never renumber an item.** Numbering is continuous 1–35 across sections;
+>   the letter is the section it sits in (A = items 1–6, B = 7–9, C = 10–15,
+>   D = 16–29, E = 30–35), so `C14` means "item 14, in section C".
+> - **The two decisions are `D1` and `D2` and are *not* section-D items.**
+>   Section D begins at item 16, so there is no collision, but a citation of
+>   `FIXES.md D1` or `FIXES.md D2` always means a **decision**, while `D16`
+>   and above mean a section-D item. Preserved as-is for the code that already
+>   cites them.
+> - **Never delete an item.** Mark it withdrawn or superseded in place.
+> - **Never change what an item asserts.** Append a dated note instead; the
+>   code that cites it was written against the original wording.
+> - New items append at the end of their section with the next free number.
+>
+> This file is a normative reference for the code, so it ships **inside** the
+> replication package. It is not a to-do list to be tidied.
+
 Three independent referees (public economics, energy/macro, data/replication) all
 returned **major revision** and all answered "no" to submission. Their reports are
 in `docs/REFEREE_REPORTS.md`. This file is the authoritative work list and records

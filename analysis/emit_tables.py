@@ -16,13 +16,20 @@ Tables
 ``tab_scenario.tex``      the three scenarios side by side
 ``tab_scorecard.tex``     the five policies on the paper's scoring metrics
 ``tab_region.tex``        the 12 regions: mean loss £, % of income, households
-``tab_variants.tex``      three realised-2026 specifications side by side
-                          (main, peak-fuel upper bound, ONS motor-fuel shape),
-                          from ``results/robustness/comparison.csv``
-``tab_specifications.tex`` all seven specifications, one per row: the full
-                          post-referee comparison
+``tab_variants.tex``      four realised-2026 specifications side by side
+                          (main, peak-fuel upper bound, ONS motor-fuel shape,
+                          calendar 2026), from
+                          ``results/robustness/comparison.csv``, with the
+                          gradient's three companions as rows
+``tab_specifications.tex`` all eleven specifications, one per row, ruled off
+                          between the accounting choices and the two window
+                          changes: the full post-referee comparison
 ``tab_envelope.tex``     the five instruments at a common exchequer envelope,
-                          with the continuous compensation measures
+                          across the five row types, with the continuous
+                          compensation measures. ``feasible_max`` (the
+                          instrument's own ceiling) and ``common_capped``
+                          (envelope absorption) are separate rows and are
+                          labelled as the different questions they are
 ``tab_domestic_leg.tex`` the domestic-leg parameter sweep: what the Cornwall
                           anchor pins and what it does not
 
@@ -75,6 +82,11 @@ NUMBER_WORD = (
     "eight",
     "nine",
     "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
 )
 
 
@@ -278,13 +290,17 @@ def tab_scorecard(shock: dict) -> None:
         + " & "
         + mc(r"Share to", r"deciles 1--3 (\%)")
         + " & "
-        + mc(r"Cost per \pounds 1", r"to decile 1 ($\times$)")
-        + " & "
         + mc(r"Loss", r"offset (\%)")
         + " & "
         + mc(r"Mean res-", r"idual (\pounds)")
         + " & "
         + mc(r"Losers un-", r"compensated (\%)")
+        + " & "
+        # The other tail of the same distribution. The saturation result the
+        # referees called a scaling artefact is, at bottom, about paying
+        # households more than they lost, and an instrument can be scored as
+        # generous while overshooting most of the people it reaches.
+        + mc(r"Recipients over-", r"compensated (\%)")
         + r" \\",
         r"\midrule",
     ]
@@ -293,13 +309,15 @@ def tab_scorecard(shock: dict) -> None:
         body.append(
             f"{label} & {p['cost_bn']:.2f} & "
             f"{100 * p['share_to_bottom_three']:.1f} & "
-            f"{cost_per_pound_decile_one(p, shock):.2f} & "
             f"{100 * p['share_of_aggregate_loss_offset']:.1f} & "
             f"{p['mean_residual_loss_gbp']:,.0f} & "
-            f"{100 * p['uncompensated_share_overall']:.1f} \\\\"
+            f"{100 * p['uncompensated_share_overall']:.1f} & "
+            f"{100 * p['overcompensated_share_of_recipients']:.1f} \\\\"
         )
     body += [r"\bottomrule", r"\end{tabular}"]
-    write("tab_scorecard.tex", small(body))
+    # Seven numeric columns: tight() rather than small(), which is what the
+    # 6.3in text block takes at this width.
+    write("tab_scorecard.tex", tight(body))
 
 
 def tab_region(shock: dict) -> None:
@@ -338,7 +356,34 @@ SPEC_ORDER = (
     ("ons_shape", ("ONS", "shape")),
     ("ons_both_levels", ("ONS both", "levels")),
     ("unequivalised", ("Unequiv-", "alised")),
+    # Round-3 additions. Rows, deliberately, rather than columns: the table is
+    # already at nine numeric columns and 2.6pt column separation, which is what
+    # fits the 6.3in text block. Rows are free.
+    ("mt_fuel_parity", ("Means-tested", "fuel parity")),
+    ("nts_participation", ("NTS partici-", "pation margin")),
+    ("calendar_2026", ("Calendar", "2026")),
+    ("peak_fuel_calendar_2026", ("Calendar 2026,", "peak fuel")),
 )
+
+#: Row label per variant, for the specifications table.
+SPEC_ROW_LABELS = {
+    "main": "Main specification",
+    "steady_state": "Steady state",
+    "symmetric_damping": "Symmetric damping",
+    "peak_fuel": "Peak fuel (upper bound)",
+    "ons_shape": "ONS shape",
+    "ons_both_levels": "ONS both levels",
+    "unequivalised": "Unequivalised",
+    "mt_fuel_parity": "Means-tested fuel parity",
+    "nts_participation": "NTS participation margin",
+    "calendar_2026": "Calendar 2026",
+    "peak_fuel_calendar_2026": "Calendar 2026, peak fuel",
+}
+
+#: Variants that change the *annualising window* rather than an accounting
+#: choice, and so are not members of the range the paper quotes across
+#: specifications. Separated by a rule in the table.
+WINDOW_VARIANTS = ("calendar_2026", "peak_fuel_calendar_2026")
 
 
 def comparison() -> dict[str, dict]:
@@ -362,6 +407,10 @@ def tab_variants() -> None:
         ("main", ("Main", "specification")),
         ("peak_fuel", ("Peak-fuel", "upper bound")),
         ("ons_shape", ("ONS-calibrated", "motor fuel")),
+        # The calendar-2026 run, so the Resolution Foundation comparison is on
+        # the page beside the specification it is being compared with rather
+        # than only in the prose.
+        ("calendar_2026", ("Calendar 2026", "(RF window)")),
     )
     cols = [rows[key] for key, _ in order if key in rows]
     if not cols:
@@ -394,6 +443,14 @@ def tab_variants() -> None:
         line(r"Decile 10 loss (\pounds)", num("decile10_loss_gbp"), "{:,.0f}"),
         line(r"Decile 10 loss (\% of income)", num("decile10_loss_pct")),
         line(r"Decile 1/10 ratio (\% of income)", num("d1_d10_ratio_pct")),
+        # The gradient's three companions. Decile one is where a fifth of
+        # households have non-positive equivalised income, so a headline ratio
+        # anchored there needs the ratio that is not, and both need a tail
+        # treatment. Rows rather than a separate table: the point is that they
+        # are read together.
+        line(r"\quad from decile 2 (D2/D10)", num("d2_d10_ratio_pct")),
+        line(r"\quad D1/D10, winsorised", num("d1_d10_ratio_pct_winsorised")),
+        line(r"\quad D2/D10, winsorised", num("d2_d10_ratio_pct_winsorised")),
         r"\midrule",
         line(r"Gas share of loss (\%)", pct("gas_share_of_loss"), "{:.1f}"),
         line(
@@ -403,6 +460,15 @@ def tab_variants() -> None:
         ),
         line(
             r"Motor fuel share of loss (\%)", pct("motor_fuel_share_of_loss"), "{:.1f}"
+        ),
+        r"\midrule",
+        # What the means-tested system actually reaches. The targeting claim in
+        # the policy section scales inversely with this, so it belongs beside
+        # the specifications rather than buried in an appendix.
+        line(
+            r"Means-tested share of loss (\%)",
+            pct("means_tested_share_of_loss"),
+            "{:.2f}",
         ),
         r"\bottomrule",
         r"\end{tabular}",
@@ -444,19 +510,19 @@ def tab_specifications() -> None:
         + r" \\",
         r"\midrule",
     ]
+    ruled = False
     for key, _head in SPEC_ORDER:
         r = rows.get(key)
         if r is None:
             continue
-        label = {
-            "main": "Main specification",
-            "steady_state": "Steady state",
-            "symmetric_damping": "Symmetric damping",
-            "peak_fuel": "Peak fuel (upper bound)",
-            "ons_shape": "ONS shape",
-            "ons_both_levels": "ONS both levels",
-            "unequivalised": "Unequivalised",
-        }[key]
+        if key in WINDOW_VARIANTS and not ruled:
+            # The window changes are a different axis from the accounting
+            # choices above them, and the paper's headline range is quoted over
+            # the block above this rule only. A reader who takes a min and a max
+            # down the whole column gets a number the paper does not claim.
+            body.append(r"\midrule")
+            ruled = True
+        label = SPEC_ROW_LABELS[key]
         body.append(
             f"{label} & {float(r['aggregate_cost_bn']):.2f} & "
             f"{float(r['mean_loss_gbp']):,.0f} & "
@@ -473,35 +539,60 @@ def tab_specifications() -> None:
 
 
 #: Common-envelope scorecard: the five instruments scored against one exchequer
-#: envelope, now with the row types the rebuild made load-bearing.
+#: envelope, with the five row types the rebuild made load-bearing.
+#:
+#: The round-3 referees' objection was to the second label. ``common_capped``
+#: was printed as "at feasible max", and it is not one: it is
+#: ``min(envelope, feasible-max cost)``, which for an instrument costing more
+#: than the envelope scales generosity *down*. The genuine feasible maximum —
+#: the instrument's own ceiling with no envelope applied — is now its own row,
+#: and the two are labelled so a reader can see they are different questions.
+#:
+#: ``stated`` is omitted from this table; it is ``tab_scorecard``.
 ENVELOPE_ROWS = (
-    ("common_capped", "at feasible max"),
+    ("feasible_max", "own ceiling"),
+    ("common_capped", "absorbs envelope"),
     ("common_scaled", "scaled"),
     ("common_eligibility", "wider eligibility"),
 )
+
+#: A row is treated as universal — means-tested in name only — at or above this
+#: eligible share. Mirrors ``policies.UNIVERSAL_ELIGIBILITY_TOLERANCE``, written
+#: literally so this emitter stays importable without the package.
+UNIVERSAL_ELIGIBILITY_TOLERANCE = 0.999
 
 
 def tab_envelope() -> None:
     r"""The five instruments against a common exchequer envelope.
 
-    ``results/sensitivity/policy_envelope.csv`` now carries up to four rows per
-    policy. Three of them appear here, one row each, grouped under the
+    ``results/sensitivity/policy_envelope.csv`` carries up to five rows per
+    policy. Four of them appear here, one row each, grouped under the
     instrument's name:
 
-    ``common_capped``       the instrument turned up to its feasible maximum.
-                            This is the honest common-envelope comparison, and
-                            it does **not** hold spend fixed: VAT zero-rating
-                            tops out at £1.96bn because there is no sixth VAT
-                            point to remove.
+    ``feasible_max``        the instrument at its OWN ceiling, uncapped by any
+                            envelope. This is the true feasible maximum and the
+                            only row down which feasible maxima are comparable:
+                            the JRF block reaches £21.9bn here, more than four
+                            times the envelope.
+    ``common_capped``       envelope **absorption**: ``min(envelope,
+                            feasible-max cost)``. It answers how much of the
+                            £5bn the instrument can take, which for an
+                            instrument that already costs more than the
+                            envelope scales generosity *down*. Round-3 referees
+                            flagged this row being printed as "at feasible
+                            max", which it is not.
     ``common_scaled``       the old proportional scaling to the full envelope,
                             kept because it is what the withdrawn claim rested
                             on, and flagged with a dagger where the implied
                             parameter is not a thing that can exist.
     ``common_eligibility``  the envelope spent on widening eligibility at the
                             sponsor's own generosity, where that is defined.
+                            Marked with a double dagger where widening takes
+                            the scheme all the way to universal, at which point
+                            it is no longer a targeted instrument at all.
 
     The withdrawn claim is "VAT zero-rating wins at a common envelope". It won
-    only on the scaled row, by removing 12.7 points of a five-point tax.
+    only on the scaled row, by removing more VAT points than the tax has.
     """
     with (SENS / "policy_envelope.csv").open(newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -532,6 +623,22 @@ def tab_envelope() -> None:
             cell += r"$^\dagger$"
         return cell
 
+    def is_universal(row: dict) -> bool:
+        """True where eligibility has widened to (almost) every household.
+
+        A "means-tested" instrument whose eligibility arm ends up covering
+        everyone is not a targeted instrument any more, and a table that lets
+        that row sit unmarked beside the sponsor's own targeted design invites
+        exactly the comparison it should be blocking.
+        """
+        share = row.get("eligible_share", "").strip()
+        if not share:
+            return False
+        try:
+            return float(share) >= UNIVERSAL_ELIGIBILITY_TOLERANCE
+        except ValueError:
+            return False
+
     body = [
         r"\begin{tabular}{llrrrrrr}",
         r"\toprule",
@@ -551,6 +658,7 @@ def tab_envelope() -> None:
         r"\midrule",
     ]
     infeasible = 0
+    universal = 0
     for key, label in POLICY_LABELS:
         first = True
         for envelope_key, variant in ENVELOPE_ROWS:
@@ -559,8 +667,12 @@ def tab_envelope() -> None:
                 continue
             if r["is_feasible"].strip().lower() != "true":
                 infeasible += 1
+            variant_cell = variant
+            if is_universal(r):
+                universal += 1
+                variant_cell += r"$^\ddagger$"
             body.append(
-                f"{label if first else ''} & {variant} & "
+                f"{label if first else ''} & {variant_cell} & "
                 f"{float(r['cost_bn']):.2f} & "
                 f"{param_cell(r)} & "
                 f"{100 * float(r['share_to_bottom_three']):.1f} & "
@@ -574,27 +686,44 @@ def tab_envelope() -> None:
     if body[-1] == r"\addlinespace":
         body.pop()
     body += [r"\bottomrule", r"\end{tabular}"]
+    # Caption inputs, read off the same rows the body was built from rather
+    # than written into the sentence by hand.
+    feasible_max_costs = [
+        float(r["cost_bn"])
+        for (policy, kind), r in by_key.items()
+        if kind == "feasible_max" and r["cost_bn"]
+    ]
+    feasible_max_bn = max(feasible_max_costs) if feasible_max_costs else float("nan")
+    saturating = sum(1 for c in feasible_max_costs if c < envelope)
     write(
         "tab_envelope.tex",
         float_wrap(
             tight(body),
             "The five instruments against a common exchequer envelope of "
-            f"\\pounds {envelope:.0f}bn, realised 2026 scenario. "
-            "``At feasible max'' turns each instrument up as far as it will go, "
-            "which for three of the five is short of the envelope --- VAT "
-            "zero-rating absorbs only \\pounds 1.96bn, because there is no "
-            "sixth VAT point to remove --- so the rows compare targeting at "
-            "the spend each design can actually reach, not at a common spend. "
-            "``Scaled'' is proportional scaling to the full envelope regardless "
-            "of feasibility; $\\dagger$ marks the "
-            f"{NUMBER_WORD[infeasible]} rows whose implied setting does not "
-            f"exist (a bill "
-            "discount above 100 per cent, more VAT points than the tax has). "
-            "``Wider eligibility'' spends the envelope on who is in the scheme "
-            "rather than on how generous it is, at the sponsor's own rate, and "
-            "is defined only for the two means-tested schemes. Any claim that "
-            "one instrument ``wins at a common envelope'' rests on the scaled "
-            "rows and is withdrawn.",
+            f"\\pounds {envelope:.0f}bn, realised 2026 scenario. The first two "
+            "rows for each instrument answer different questions and the "
+            "pre-revision table conflated them. ``Own ceiling'' is the "
+            "instrument at its own feasible maximum with no envelope applied "
+            "at all: the JRF block reaches "
+            f"\\pounds {feasible_max_bn:.1f}bn there, more than "
+            f"{feasible_max_bn / envelope:.0f} times the envelope. ``Absorbs "
+            "envelope'' is the budget constraint --- the smaller of the "
+            "envelope and that ceiling --- so for an instrument that already "
+            "costs more than \\pounds "
+            f"{envelope:.0f}bn it scales generosity \\emph{{down}}, and for "
+            f"the {NUMBER_WORD[saturating]} that saturate below the envelope it "
+            "reports the smaller sum they can actually spend. Neither row holds "
+            "spend fixed across instruments. ``Scaled'' is proportional scaling "
+            "to the full envelope regardless of feasibility; $\\dagger$ marks "
+            f"the {NUMBER_WORD[infeasible]} rows whose implied setting does not "
+            "exist (a bill discount above 100 per cent, more VAT points than "
+            "the tax has). ``Wider eligibility'' spends the envelope on who is "
+            "in the scheme rather than on how generous it is, at the sponsor's "
+            "own rate, and is defined only for the two means-tested schemes; "
+            f"$\\ddagger$ marks the {NUMBER_WORD[universal]} such rows where "
+            "widening reaches every household, at which point the instrument is "
+            "means-tested in name only. Any claim that one instrument ``wins at "
+            "a common envelope'' rests on the scaled rows and is withdrawn.",
             "tab:envelope",
         ),
         standalone=False,
@@ -607,7 +736,42 @@ LEG_LABELS = {
     "prewar_nbp_pence_per_therm": "Pre-war NBP",
     "wholesale_share_gas_bill": "Wholesale share, gas",
     "wholesale_share_electricity_bill": "Wholesale share, elec.",
+    # Added in round 3, and the block that matters: the monthly shape of the
+    # wholesale gas peak was never swept, and it turns out to carry the whole
+    # domestic leg.
+    "gas_peak_monthly_profile": "Gas peak profile",
 }
+
+
+def leg_is_identified(row: dict) -> bool:
+    """True if this sweep cell solved at all.
+
+    Two cells of the gas-profile block do not: the two published caps fail to
+    pin a pre-war counterfactual, either because the later observation window
+    prices no more of the shock than the earlier one, or because the implied
+    sustained fraction leaves ``(0, 1]``. Those rows are written with every
+    numeric column empty. They are printed, because a sweep cell that cannot be
+    solved is a result about identification and not a gap in the table, but
+    they cannot be formatted as numbers.
+    """
+    flag = str(row.get("identified", "")).strip().lower()
+    if flag in {"false", "0", "no"}:
+        return False
+    return str(row.get("aggregate_cost_bn", "")).strip() != ""
+
+
+def leg_value_text(row: dict) -> str:
+    """Render the swept value, which is numeric in four blocks and a tag in one.
+
+    The gas-profile block sweeps a *shape*, not a scalar, so its values are
+    labels like ``shift-1m`` and ``flatten0.8``. ``float()`` on those is what
+    took this table down.
+    """
+    raw = str(row["value"]).strip()
+    try:
+        return f"{float(raw):g}"
+    except ValueError:
+        return raw.replace("_", " ")
 
 
 def tab_domestic_leg() -> None:
@@ -640,16 +804,32 @@ def tab_domestic_leg() -> None:
         + r" \\",
         r"\midrule",
     ]
+    # The paper's own cell, matched against the central aggregate as it stands
+    # rather than against a literal. The old code compared to a hardcoded
+    # 8.957518848, which the rebuild moved: every row silently stopped being
+    # marked "(paper)" and the table lost its anchor with no error anywhere.
+    paper_agg = float(jload(f"{CENTRAL_SCENARIO}/shock.json")["aggregate_cost_bn"])
+
     last = None
+    unidentified = 0
     for r in rows:
         parameter = r["parameter"].strip()
         if last is not None and parameter != last:
             body.append(r"\midrule")
         label = LEG_LABELS.get(parameter, parameter) if parameter != last else ""
         last = parameter
-        value = float(r["value"])
-        is_paper = abs(float(r["aggregate_cost_bn"]) - 8.957518848) < 1e-6
-        shown = f"{value:g}" + (" (paper)" if is_paper else "")
+        shown = leg_value_text(r)
+        if not leg_is_identified(r):
+            unidentified += 1
+            # One spanning cell rather than six repetitions of an em-dash: the
+            # row failed as a whole, not column by column.
+            body.append(
+                f"{label} & {shown}$^\\dagger$ & "
+                r"\multicolumn{6}{c}{\emph{not identified}} \\"
+            )
+            continue
+        if abs(float(r["aggregate_cost_bn"]) - paper_agg) < 1e-6:
+            shown += " (paper)"
         body.append(
             f"{label} & {shown} & "
             f"{float(r['aggregate_cost_bn']):.2f} & "
@@ -660,17 +840,47 @@ def tab_domestic_leg() -> None:
             f"{100 * float(r['motor_fuel_share_of_loss']):.1f} \\\\"
         )
     body += [r"\bottomrule", r"\end{tabular}"]
+    # Caption inputs from the gas-profile block itself, so the sentence and the
+    # table cannot disagree.
+    profile = [
+        r
+        for r in rows
+        if r["parameter"].strip() == "gas_peak_monthly_profile" and leg_is_identified(r)
+    ]
+
+    def span(column: str, select, scale: float = 1.0) -> float:
+        return scale * select(float(r[column]) for r in profile)
+
+    cap_spread = span("prewar_counterfactual_cap_gbp", max) - span(
+        "prewar_counterfactual_cap_gbp", min
+    )
+    agg_min = span("aggregate_cost_bn", min)
+    agg_max = span("aggregate_cost_bn", max)
+    fuel_min = span("motor_fuel_share_of_loss", min, 100)
+    fuel_max = span("motor_fuel_share_of_loss", max, 100)
     write(
         "tab_domestic_leg.tex",
         float_wrap(
             tight(body),
-            "Domestic-leg parameter sweep, realised 2026 scenario. The Cornwall "
-            "Insight anchor identifies only the product of the sustained "
-            "fraction and the first phase-in quarter, so the first block varies "
-            "the split at a constant product; the remaining blocks vary the "
-            "three parameters that scale the domestic channel one for one. The "
-            "aggregate, and with it the motor-fuel share, is materially "
-            "sensitive to this calibration.",
+            "Domestic-leg parameter sweep, realised 2026 scenario. The two "
+            "published caps identify only the product of the sustained "
+            "fraction and the phase-in at the anchor quarter, so the first "
+            "block varies the split at a constant product; the next three vary "
+            "the parameters that scale the domestic channel one for one. The "
+            "last block is the one that matters and was previously unswept: "
+            "the monthly shape of the wholesale gas peak, which the "
+            "observation-window phase-in reads directly. Shifting that shape by "
+            "a month either way, or flattening it, moves the solved pre-war "
+            f"counterfactual cap over a \\pounds {cap_spread:,.0f} range, the "
+            f"aggregate from \\pounds {agg_min:.1f}bn to \\pounds {agg_max:.1f}bn, "
+            f"and motor fuel's share of the loss from {fuel_min:.0f} to "
+            f"{fuel_max:.0f} per cent --- from a bare majority to four fifths. "
+            f"$\\dagger$ marks the {NUMBER_WORD[unidentified]} cells in which "
+            "the two cap observations do not identify a counterfactual at all, "
+            "because the later observation window prices no more of the shock "
+            "than the earlier one or the implied sustained fraction leaves "
+            "$(0, 1]$. This block, not the elasticity sweep, is the paper's "
+            "real identification fragility.",
             "tab:domesticleg",
         ),
         standalone=False,
@@ -832,11 +1042,31 @@ def tab_caplag() -> None:
         + r" \\",
         r"\midrule",
     ]
+    unidentified = 0
     for lag in lags:
         first = True
         for anchor in ("anchored", "unanchored"):
             r = by_key.get((lag, anchor))
             if r is None:
+                continue
+            # Three of the five anchored lags do not solve: re-anchoring at a
+            # one-quarter lag leaves the two observation windows unable to
+            # separate the published caps, and at three and four quarters the
+            # implied pre-war counterfactual is not strictly below the observed
+            # July cap. Their rows are blank, and printing the failure is more
+            # informative than dropping the lag.
+            if not leg_is_identified(
+                {
+                    "identified": r.get("identified", ""),
+                    "aggregate_cost_bn": r["mean_loss_gbp"],
+                }
+            ):
+                unidentified += 1
+                body.append(
+                    f"{fmt_lag(lag) if first else ''} & {anchor} & "
+                    r"\multicolumn{5}{c}{\emph{not identified}} \\"
+                )
+                first = False
                 continue
             body.append(
                 f"{fmt_lag(lag) if first else ''} & {anchor} & "
@@ -856,12 +1086,19 @@ def tab_caplag() -> None:
             "anchoring rules. ``Anchored'' re-solves the sustained fraction at "
             "each lag so the Cornwall cap anchor still binds; ``unanchored'' "
             "holds it at the central value and so varies the timing alone. The "
-            "cumulative burden is invariant along the unanchored series --- an "
-            "identity, since the phase-in weights only move the burden between "
-            "calendar years --- so what moves in the columns below is the "
-            "attribution to the modelled year, not the size of the shock. The "
+            "cumulative burden is very nearly invariant along the unanchored "
+            "series --- the phase-in weights mostly move the burden between "
+            "calendar years rather than changing its size --- so what moves in "
+            "the columns below is the attribution to the modelled year. The "
             "two rules agree to two quarters and separate after, which is where "
-            "the anchoring rule rather than the lag is doing the work.",
+            "the anchoring rule rather than the lag is doing the work. Anchoring "
+            f"is not always possible: {NUMBER_WORD[unidentified]} of the "
+            "anchored rows do not solve at all, because at those lags the two "
+            "published caps' observation windows either fail to separate them "
+            "or imply a pre-war counterfactual that is not strictly below the "
+            "observed July cap. That the paper's own 1.5-quarter lag is one of "
+            "the few that does solve is a constraint on the calibration, not a "
+            "coincidence in its favour.",
             "tab:caplag",
         ),
         standalone=False,

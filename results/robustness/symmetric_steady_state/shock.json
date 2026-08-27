@@ -275,8 +275,8 @@
   "mean_income_gbp": 43928.57421875,
   "median_income_gbp": 35570.34765625,
   "mean_loss_pct_equivalised_both": 1.0580743057029263,
-  "annual_phase_in_gas": 0.7972222222221778,
-  "annual_phase_in_electricity": 0.8027777777777313,
+  "annual_phase_in_gas": 0.529625,
+  "annual_phase_in_electricity": 0.516625,
   "coverage": {
     "households_m": 0.2397425,
     "share_of_households": 0.008134976218998578,
@@ -315,18 +315,23 @@
   },
   "decile_concept": {
     "agreement": {
-      "unequivalised_bhc": 0.2940009832382202,
-      "equivalised_ahc": 0.5312585830688477,
-      "equivalised_bhc": 0.5229005813598633
+      "unequivalised_bhc": 0.3000214976602793,
+      "equivalised_ahc": 0.5612009364024404,
+      "equivalised_bhc": 0.9989633138387786
     },
-    "best_match": "equivalised_ahc",
+    "best_match": "equivalised_bhc",
     "burden_denominator": "equivalised_ahc",
-    "matches_burden_denominator": true,
+    "matches_burden_denominator": false,
     "mean_absolute_decile_gap": {
-      "unequivalised_bhc": 1.2993505396109886,
-      "equivalised_ahc": 0.5745190853346931,
-      "equivalised_bhc": 0.6119699932495448
-    }
+      "unequivalised_bhc": 1.3293362636191335,
+      "equivalised_ahc": 0.5412256598487973,
+      "equivalised_bhc": 0.0010366861612214583
+    },
+    "documented_truth": "equivalised_bhc",
+    "best_match_is_documented_truth": true,
+    "person_weighted": true,
+    "negative_sentinel_share": 0.008134976029396057,
+    "unavailable": []
   },
   "decile_domestic_only": [
     {
@@ -433,5 +438,40 @@
   "domestic_only_d1_d10_ratio_pct": 9.311398759939866,
   "domestic_only_d1_d10_ratio_gbp": 0.6996394650806008,
   "all_channel_d1_d10_ratio_pct": 9.257299717864562,
+  "d2_d10_ratio_pct": 4.639415199509827,
+  "d2_d10_ratio_gbp": 0.5979180137189062,
+  "income_treatment": "drop",
+  "decile1_loss_pct_winsorised": 4.961655226262795,
+  "decile2_loss_pct_winsorised": 2.0587538041062245,
+  "decile10_loss_pct_winsorised": 0.4381380263642797,
+  "d1_d10_ratio_pct_winsorised": 11.32441132178183,
+  "d2_d10_ratio_pct_winsorised": 4.698870402073984,
+  "mean_loss_pct_winsorised": 1.0862153645038208,
+  "motor_fuel_margins": {
+    "means_tested_mean_fuel_gbp": 223.6003875732422,
+    "non_means_tested_mean_fuel_gbp": 1395.1932373046875,
+    "means_tested_fuel_ratio": 6.239672714555024,
+    "means_tested_zero_share": 0.8085233569145203,
+    "non_means_tested_zero_share": 0.5253023505210876,
+    "zero_fuel_share_overall": 0.5696579217910767,
+    "zero_fuel_share_by_decile": [
+      0.6204599738121033,
+      0.6265355944633484,
+      0.62545245885849,
+      0.533866286277771,
+      0.5664995908737183,
+      0.549056351184845,
+      0.5516172051429749,
+      0.45732581615448,
+      0.5267549753189087,
+      0.6203031539916992
+    ],
+    "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+    "means_tested_share_of_loss": 0.05951670042640615,
+    "d1_means_tested_mean_fuel_gbp": 252.213623046875,
+    "d1_non_means_tested_mean_fuel_gbp": 1463.9530029296875,
+    "d1_means_tested_zero_share": 0.8427165150642395,
+    "d1_non_means_tested_zero_share": 0.5146772861480713
+  },
   "label": "Symmetric damping on the steady-state basis (phase-in not applied)"
 }

@@ -26,6 +26,7 @@ import json
 import sys
 from pathlib import Path
 
+from uk_iran_conflict import policies as pol
 from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.incidence import load_baseline, run_scenario
 
@@ -60,6 +61,27 @@ COMBINATIONS = (
         {"calibration": "ons_both_levels"},
         "Symmetric damping with both imputation levels corrected against ONS",
     ),
+    # Round-3: the two fuel-margin specifications, combined with the symmetric
+    # damping ratio. If the motor-fuel majority survives the baseline fix at
+    # all, these are where it fails.
+    (
+        "symmetric_mt_fuel_parity",
+        "realised_2026_symmetric",
+        {"calibration": "mt_fuel_parity"},
+        (
+            "Symmetric damping with means-tested motor-fuel spend equalised to "
+            "non-means-tested within decile"
+        ),
+    ),
+    (
+        "symmetric_nts_participation",
+        "realised_2026_symmetric",
+        {"calibration": "nts_participation"},
+        (
+            "Symmetric damping with the DfT car-availability gradient imposed on "
+            "the fuel participation rate"
+        ),
+    ),
 )
 
 
@@ -67,6 +89,7 @@ def main() -> None:
     _load_env()
     path = dataset_path()
     base = load_baseline(path)
+    base = dataclasses.replace(base, means_tested=pol.means_tested_flag(path))
     print(f"baseline: {base.n:,} households\n")
 
     summary = {}
@@ -86,6 +109,11 @@ def main() -> None:
         (out / "shock.json").write_text(json.dumps(payload, indent=2))
         summary[name] = {
             "label": label,
+            "means_tested_share_of_loss": (
+                result.motor_fuel_margins.means_tested_share_of_loss
+                if result.motor_fuel_margins
+                else float("nan")
+            ),
             "aggregate_cost_bn": result.aggregate_cost_bn,
             "mean_loss_gbp": result.mean_loss_gbp,
             "mean_loss_pct": result.mean_loss_pct,

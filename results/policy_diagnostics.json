@@ -1,0 +1,124 @@
+{
+  "envelope_bn": 5.0,
+  "row_semantics": {
+    "stated": "the sponsor's own parameter, at whatever it costs",
+    "feasible_max": "the instrument at its OWN feasible maximum parameter, uncapped by any envelope: the true feasible maximum, and the only row down which feasible maxima are comparable",
+    "common_capped": "what the instrument can absorb WITHIN the envelope: scaled toward it and stopped at the feasible maximum, so an instrument that saturates reports the smaller sum it can actually spend. Not a feasible maximum \u2014 for an instrument that already costs more than the envelope this scales generosity DOWN",
+    "common_scaled": "pure scalar rescaling to the envelope, retained only for auditability; the implied parameter may be outside the instrument's parameter space, in which case the row is renamed generically",
+    "common_eligibility": "the sponsor's own generosity, with eligibility widened down the income ranking until the envelope is spent or everyone is in"
+  },
+  "by_policy": {
+    "social_tariff": {
+      "label": "Means-tested social tariff (35% bill discount)",
+      "parameter": "bill discount",
+      "parameter_units": "per cent of the shocked domestic bill",
+      "stated_parameter": 35.0,
+      "feasible_max_parameter": 100.0,
+      "stated_cost_simulated_bn": 1.3154368,
+      "feasible_max_cost_bn": 3.7583908571428575,
+      "absorbable_within_envelope_bn": 3.7583908571428575,
+      "saturates_below_envelope": true,
+      "means_tested": true,
+      "envelope_arms": {
+        "generosity_arm_spend_bn": 3.7583908571428575,
+        "eligibility_arm_spend_bn": 4.999798272,
+        "eligibility_arm_eligible_share": 0.4019555151462555,
+        "eligibility_arm_is_universal": false,
+        "envelope_bn": 5.0,
+        "arms_spend_the_same": false
+      }
+    },
+    "jrf_block": {
+      "label": "JRF universal discounted block (50% of typical use, + per-child)",
+      "parameter": "block discount",
+      "parameter_units": "per cent off the first 50% of typical use",
+      "stated_parameter": 50.0,
+      "feasible_max_parameter": 100.0,
+      "stated_cost_simulated_bn": 10.931528488483707,
+      "feasible_max_cost_bn": 21.863056976967414,
+      "absorbable_within_envelope_bn": 5.0,
+      "saturates_below_envelope": false,
+      "means_tested": false,
+      "envelope_arms": {
+        "generosity_arm_spend_bn": 5.0,
+        "envelope_bn": 5.0,
+        "arms_spend_the_same": true
+      }
+    },
+    "whd_expansion": {
+      "label": "Warm Home Discount expansion (\u00a3150)",
+      "parameter": "payment",
+      "parameter_units": "\u00a3 per eligible household per year",
+      "stated_parameter": 150.0,
+      "feasible_max_parameter": 814.3114013671875,
+      "stated_cost_simulated_bn": 0.6923133572888732,
+      "feasible_max_cost_bn": 3.7583910677274983,
+      "absorbable_within_envelope_bn": 3.7583910677274983,
+      "saturates_below_envelope": true,
+      "means_tested": true,
+      "envelope_arms": {
+        "generosity_arm_spend_bn": 3.7583910677274983,
+        "eligibility_arm_spend_bn": 4.4205874773722,
+        "eligibility_arm_eligible_share": 1.0,
+        "eligibility_arm_is_universal": true,
+        "envelope_bn": 5.0,
+        "arms_spend_the_same": false
+      }
+    },
+    "vat_zero": {
+      "label": "Zero-rate VAT on domestic fuel (5% -> 0%)",
+      "parameter": "VAT points removed",
+      "parameter_units": "percentage points of VAT on domestic fuel and power",
+      "stated_parameter": 5.0,
+      "feasible_max_parameter": 5.0,
+      "stated_cost_simulated_bn": 2.10514112,
+      "feasible_max_cost_bn": 2.10514112,
+      "absorbable_within_envelope_bn": 2.10514112,
+      "saturates_below_envelope": true,
+      "means_tested": false,
+      "envelope_arms": {
+        "generosity_arm_spend_bn": 2.10514112,
+        "envelope_bn": 5.0,
+        "arms_spend_the_same": false
+      }
+    },
+    "ippr_rebate": {
+      "label": "IPPR network-windfall rebate (\u00a3183 flat)",
+      "parameter": "rebate",
+      "parameter_units": "\u00a3 per household per year",
+      "stated_parameter": 183.0,
+      "feasible_max_parameter": 183.0,
+      "stated_cost_simulated_bn": 5.393116722394083,
+      "feasible_max_cost_bn": 5.393116722394083,
+      "absorbable_within_envelope_bn": 5.0,
+      "saturates_below_envelope": false,
+      "means_tested": false,
+      "envelope_arms": {
+        "generosity_arm_spend_bn": 5.0,
+        "envelope_bn": 5.0,
+        "arms_spend_the_same": true
+      }
+    }
+  },
+  "jrf_reference_quantities": {
+    "basis_used": "ofgem_typical_consumption",
+    "ofgem_typical_consumption_gbp": 1723.0,
+    "ofgem_block_gbp": 861.5,
+    "modelled_median_domestic_bill_gbp": 903.7837524414062,
+    "modelled_median_block_gbp": 451.8918762207031,
+    "modelled_over_ofgem": 0.524540773326411,
+    "block_share": 0.5,
+    "note": "JRF peg the discounted block to Ofgem typical consumption. The modelled median is the weighted median of this model's own domestic bill, which the validation notes is materially below the Ofgem basis; a block set on it is not the sponsor's block and its cost is not comparable with the sponsor's costing."
+  },
+  "large_loser_outside_means_test": {
+    "threshold_pct": 5.0,
+    "large_losers_m": 1.138079285621643,
+    "large_loser_share_of_households": 0.038617465645074844,
+    "share_outside_means_test_pct": 97.93329238891602,
+    "means_tested_share_of_households_pct": 15.661115944385529,
+    "ceiling_pct": 84.33888405561447,
+    "headroom_pct": 13.594408333301544,
+    "note": "Modelled means-tested population only. The statistic cannot fall below its ceiling of 100 minus the means-tested share of households, so it is near-tautological when it sits close to that ceiling; `headroom_pct` is the part that is about targeting. Persisted so the emitter carries no literal, but a referee argues it would be better dropped from the paper than qualified."
+  },
+  "note": "`feasible_max_cost_bn` is a property of the instrument and ignores the envelope; `absorbable_within_envelope_bn` is the budget constraint. A column that mixes them is not a feasible-maximum column."
+}

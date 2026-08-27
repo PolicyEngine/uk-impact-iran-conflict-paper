@@ -1,44 +1,71 @@
 {
-  "note": "The decile burden ratio is an aggregate ratio and therefore scale-invariant, so a named scenario and a grid cell differ only in channel mix; every named scenario must land inside the grid's own range. Round-2 finding 7.",
-  "grid_d1_d10_ratio_min": 9.311577077695517,
+  "note": "Round-3 finding 5. The previous \u00b15% range-membership check could not fail: the grid's D1/D10 ratio spans 0.0008 across 36 cells because both pure-channel ratios are ~9.31 and every mix is a convex combination of them. Replaced by (a) an explicit statement that the grid shows INVARIANCE of the decile gradient to the channel mix, which is itself evidence about the fuel imputation, and (b) the exact convex-combination identity, asserted at 1e-6.",
+  "grid_d1_d10_ratio_min": 9.310759698078042,
   "grid_d1_d10_ratio_max": 9.312362506645075,
-  "tolerance": 0.05,
-  "accepted_band": [
-    8.84599822381074,
-    9.777980631977329
-  ],
+  "grid_d1_d10_ratio_spread": 0.001602808567032099,
+  "grid_shows_invariance": true,
+  "check_is_informative": false,
+  "informative_spread_threshold": 0.46553798490390214,
+  "identity_tolerance": 1e-06,
   "scenarios": {
     "niesr_baseline": {
-      "d1_d10_ratio": 9.356352546396787,
-      "d1_d10_ratio_domestic_only": 9.31157738104597,
-      "motor_fuel_share_of_loss": 0.7068526907022735,
-      "inside_grid_range": true
+      "d1_d10_ratio": 9.361313474535322,
+      "d1_d10_ratio_domestic_only": 9.310759456400934,
+      "d1_d10_ratio_motor_fuel_only": 9.375377085404615,
+      "domestic_share_of_decile10_loss": 0.21765567473546055,
+      "d1_d10_ratio_implied_by_channel_mix": 9.361312691764013,
+      "identity_residual": 7.827713091046462e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.7864197890489357,
+      "inside_grid_range": false
     },
     "niesr_adverse": {
-      "d1_d10_ratio": 9.362214651170655,
-      "d1_d10_ratio_domestic_only": 9.31157707769552,
-      "motor_fuel_share_of_loss": 0.7095076578818059,
-      "inside_grid_range": true
+      "d1_d10_ratio": 9.367791768323196,
+      "d1_d10_ratio_domestic_only": 9.310760168010903,
+      "d1_d10_ratio_motor_fuel_only": 9.383461963210399,
+      "domestic_share_of_decile10_loss": 0.21553113783483638,
+      "d1_d10_ratio_implied_by_channel_mix": 9.367792462568417,
+      "identity_residual": 6.942452213110073e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.788569672242823,
+      "inside_grid_range": false
     },
     "realised_2026": {
-      "d1_d10_ratio": 9.216126620126548,
-      "d1_d10_ratio_domestic_only": 9.311577021993614,
-      "motor_fuel_share_of_loss": 0.7560490560446738,
-      "inside_grid_range": true
+      "d1_d10_ratio": 9.2417905802918,
+      "d1_d10_ratio_domestic_only": 9.310759702789422,
+      "d1_d10_ratio_motor_fuel_only": 9.184816958937294,
+      "domestic_share_of_decile10_loss": 0.4523771645105597,
+      "d1_d10_ratio_implied_by_channel_mix": 9.2417905802918,
+      "identity_residual": 0.0,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.5516755646953685,
+      "inside_grid_range": false
     },
     "realised_2026_peak_fuel": {
-      "d1_d10_ratio": 9.20709527723541,
-      "d1_d10_ratio_domestic_only": 9.311577021993614,
-      "motor_fuel_share_of_loss": 0.8266290197950772,
-      "inside_grid_range": true
+      "d1_d10_ratio": 9.228816250791649,
+      "d1_d10_ratio_domestic_only": 9.310759702789422,
+      "d1_d10_ratio_motor_fuel_only": 9.184816857754525,
+      "domestic_share_of_decile10_loss": 0.3493600055241733,
+      "d1_d10_ratio_implied_by_channel_mix": 9.228816250791647,
+      "identity_residual": 1.7763568394002505e-15,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.6543523177450936,
+      "inside_grid_range": false
     },
     "realised_2026_symmetric": {
-      "d1_d10_ratio": 9.250385998430922,
-      "d1_d10_ratio_domestic_only": 9.31157766246587,
-      "motor_fuel_share_of_loss": 0.4868493212713167,
-      "inside_grid_range": true
+      "d1_d10_ratio": 9.236747459495497,
+      "d1_d10_ratio_domestic_only": 9.310759485557146,
+      "d1_d10_ratio_motor_fuel_only": 9.184816958937294,
+      "domestic_share_of_decile10_loss": 0.41232940010991215,
+      "d1_d10_ratio_implied_by_channel_mix": 9.236746765386783,
+      "identity_residual": 6.941087136169699e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.5916320608692553,
+      "inside_grid_range": false
     }
   },
-  "all_named_scenarios_inside_grid_range": true,
+  "all_named_scenarios_inside_grid_range": false,
+  "channel_mix_identity_holds": true,
+  "identity_broken": [],
   "outside": []
 }

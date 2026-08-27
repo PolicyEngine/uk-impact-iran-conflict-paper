@@ -61,6 +61,7 @@ from uk_iran_conflict import reforms
 from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.incidence import (
     Baseline,
+    domestic_retail_factors,
     load_baseline,
     run_scenario,
     sustained_pump_factors,
@@ -180,13 +181,26 @@ def _headline(base: Baseline, cost: np.ndarray) -> dict[str, float]:
 
 
 def _price_ratios(scenario) -> dict[str, float]:
-    """Carrier price ratios (p1/p0) implied by a scenario."""
-    gas_factor, elec_factor = reforms.retail_factors(scenario)
-    # Must use the damped pump factors, not the raw peaks: ``reforms`` returns
-    # the quoted peak moves, and the peak-to-year damping lives in ``incidence``
-    # alongside the gas damping. Reading the raw peaks here silently ran the
-    # elasticity and cap-lag sweeps on the peak-fuel upper bound rather than the
-    # main specification.
+    """Carrier price ratios (p1/p0) implied by a scenario, **as charged**.
+
+    Round-3 finding 8. This read ``reforms.retail_factors``, which returns the
+    *steady-state* domestic factors (1.0776 / 1.0513 on the pre-round-3
+    calibration) while the headline charges the annual, phase-in-averaged
+    factors (1.0619 / 1.0412). The elasticity was therefore evaluated at a price
+    ratio about 25% larger than the price the modelled household actually faces.
+    That is not a conservative choice in a known direction: the demand response
+    is convex in the ratio, so the sweep overstated the correction it was
+    reporting as a robustness check on the headline.
+
+    It now reads :func:`~uk_iran_conflict.incidence.domestic_retail_factors` on
+    the same ``"annual"`` basis :func:`shock_cost` uses, so the elasticity is
+    evaluated at the modelled household price by construction. The steady-state
+    factors remain available and are emitted alongside for comparison.
+
+    The pump factors were already correct — damped, not the raw peaks — and are
+    unchanged.
+    """
+    gas_factor, elec_factor = domestic_retail_factors(scenario)
     petrol_factor, diesel_factor = sustained_pump_factors(scenario)
     return {
         "gas": gas_factor,
@@ -494,9 +508,11 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
     Two columns per lag, because the cap anchor and the lag are not independent:
 
     ``anchored``
-        The sustained fraction is re-solved at each lag so the modelled
-        October-2026 cap still reproduces Ofgem's confirmed £1,723
-        (:func:`~uk_iran_conflict.scenarios.sustained_fraction_for_cap_anchor`).
+        The pre-war counterfactual cap **and** the sustained fraction are
+        re-solved at each lag, from the two published caps, so the modelled path
+        still reproduces both (``scenarios.solve_cap_calibration``). Round-3:
+        this used to re-solve only the fraction, against a baseline that was
+        itself a shocked observation.
         This is the specification the paper uses. The domestic leg is nearly
         lag-invariant here — and that near-invariance is now a real result about
         an externally anchored cap, not the identity
@@ -519,30 +535,56 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
         f"{'lag':>5} {'anchor':>10} {'phase-in':>9} {'sustained':>10} "
         f"{'gas %':>7} {'mean £':>8} {'£bn':>7} {'fuel %':>7} {'cap Q4 £':>9}"
     )
+    base_index = scen.CAP_QUARTER_LABELS.index(scen.CAP_BASE_QUARTER)
     for lag in CAP_LAG_GRID:
         profile = scen.cap_phase_in_profile(lag)
         for anchored in (True, False):
+            prewar = scenario.baseline_cap_gbp
             if anchored:
-                sustained = scen.sustained_fraction_for_cap_anchor(
-                    scenario.gas.pct_change,
-                    profile[anchor_index],
-                    wholesale_share_gas_bill=(
-                        scenario.pass_through.wholesale_share_gas_bill
-                    ),
-                    wholesale_share_electricity_bill=(
-                        scenario.pass_through.wholesale_share_electricity_bill
-                    ),
-                    marginal_pricing_share=(
-                        scenario.pass_through.marginal_pricing_share
-                    ),
-                    gas_share_of_dual_fuel_bill=(
-                        scenario.pass_through.gas_share_of_dual_fuel_bill
-                    ),
-                )
+                # Round-3: the calibration is now joint. At each lag the
+                # observation windows move, so BOTH the pre-war counterfactual
+                # cap and the sustained fraction are re-solved from the two
+                # published caps. A lag whose windows cannot separate them is
+                # reported as not identified rather than silently anchored.
+                try:
+                    calibration = scen.solve_cap_calibration(
+                        scenario.gas.pct_change,
+                        profile[base_index],
+                        profile[anchor_index],
+                        wholesale_share_gas_bill=(
+                            scenario.pass_through.wholesale_share_gas_bill
+                        ),
+                        wholesale_share_electricity_bill=(
+                            scenario.pass_through.wholesale_share_electricity_bill
+                        ),
+                        marginal_pricing_share=(
+                            scenario.pass_through.marginal_pricing_share
+                        ),
+                        gas_share_of_dual_fuel_bill=(
+                            scenario.pass_through.gas_share_of_dual_fuel_bill
+                        ),
+                    )
+                except ValueError as exc:
+                    rows.append(
+                        {
+                            "lag_quarters": lag,
+                            "anchor": "anchored",
+                            "identified": False,
+                            "is_central_specification": False,
+                            "reconciles_with_headline": None,
+                            "note": str(exc),
+                            "phase_in_profile": ";".join(f"{v:.4f}" for v in profile),
+                        }
+                    )
+                    print(f"{lag:5.1f} {'anchored':>10}   NOT IDENTIFIED")
+                    continue
+                sustained = calibration.sustained_fraction
+                prewar = calibration.prewar_cap_gbp
             else:
                 sustained = scenario.pass_through.sustained_fraction
             variant = dataclasses.replace(
                 scenario,
+                baseline_cap_gbp=prewar,
                 pass_through=dataclasses.replace(
                     scenario.pass_through,
                     lag_quarters=lag,
@@ -557,6 +599,8 @@ def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
             row = {
                 "lag_quarters": lag,
                 "anchor": "anchored" if anchored else "unanchored",
+                "identified": True,
+                "prewar_counterfactual_cap_gbp": prewar,
                 "phase_in_profile": ";".join(f"{v:.4f}" for v in profile),
                 "phase_in_at_anchor_quarter": profile[anchor_index],
                 "annual_phase_in_gas": variant.pass_through.annual_phase_in_gas,
@@ -855,10 +899,14 @@ def main() -> None:
     print(f"baseline: {base.n:,} households, {base.weight.sum() / 1e6:.1f}m weighted")
 
     scenario = scen.SCENARIOS[args.scenario]
-    gas_f, elec_f = reforms.retail_factors(scenario)
+    steady_gas, steady_elec = reforms.retail_factors(scenario)
+    applied = _price_ratios(scenario)
     print(
-        f"scenario: {scenario.label} — retail gas x{gas_f:.4f}, "
-        f"electricity x{elec_f:.4f}"
+        f"scenario: {scenario.label} — retail gas x{applied['gas']:.4f}, "
+        f"electricity x{applied['electricity']:.4f} (as charged); "
+        f"steady state x{steady_gas:.4f} / x{steady_elec:.4f}. "
+        "Round-3 finding 8: the sweeps evaluate the elasticity at the charged "
+        "ratio, not the steady-state one."
     )
 
     # C13: resolve the means-tested variable set loudly and record it, so the

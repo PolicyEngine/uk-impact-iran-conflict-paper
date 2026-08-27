@@ -10,6 +10,21 @@
     "universal_credit",
     "working_tax_credit"
   ],
+  "contributing_variables": [
+    "esa_income",
+    "housing_benefit",
+    "pension_credit",
+    "universal_credit"
+  ],
+  "empty_variables": [
+    "child_tax_credit",
+    "income_support",
+    "jsa_income",
+    "working_tax_credit"
+  ],
+  "n_resolved": 8,
+  "n_contributing": 4,
+  "n_empty": 4,
   "missing_required": [],
   "missing_legacy": [],
   "by_variable": {
@@ -65,5 +80,5 @@
   "any_means_tested_households_m": 4.61542272567749,
   "any_means_tested_share": 0.15661115944385529,
   "total_households_m": 29.470584869384766,
-  "note": "Union over the resolved variables, annual receipt, household level. Compare against DWP administrative caseloads (docs/VALIDATION.md Check 4): UC alone is 7.2m GB households at May 2026. A large shortfall here is a PolicyEngine UK data-quality finding, not a modelling choice \u2014 but it is only a finding if the variable set actually resolved, which is what this file records."
+  "note": "Union over the resolved variables, annual receipt, household level. Compare against DWP administrative caseloads (docs/VALIDATION.md Check 4): UC alone is 7.2m GB households at May 2026. A large shortfall here is a PolicyEngine UK data-quality finding, not a modelling choice \u2014 but it is only a finding if the variable set actually resolved, which is what this file records. `resolved_variables` is what the release defines; `contributing_variables` is what reaches a household. Only the second bears on the modelled means-tested population."
 }

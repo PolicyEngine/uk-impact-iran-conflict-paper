@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from uk_iran_conflict import incidence as inc
+from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.scenarios import get_scenario
 
 
@@ -58,6 +59,10 @@ def make_baseline(
         region=np.array(["London"] * n),
         country=np.array(["ENGLAND"] * n),
         equivalisation_ahc=np.full(n, 1.4),
+        # Equivalised BHC — the concept ``household_income_decile`` really
+        # ranks on. Deliberately distinct from both other income concepts so a
+        # test can tell which one the audit picked (round-3 finding 1).
+        equiv_income_bhc=net_income / 1.25,
     )
 
 
@@ -302,21 +307,35 @@ def test_domestic_basis_is_validated():
 
 def test_run_scenario_reports_the_phase_in_it_applied():
     result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
-    assert result.annual_phase_in_gas == pytest.approx(0.7972, abs=1e-4)
-    assert result.annual_phase_in_electricity == pytest.approx(0.8028, abs=1e-4)
+    assert result.annual_phase_in_gas == pytest.approx(0.5296, abs=1e-4)
+    assert result.annual_phase_in_electricity == pytest.approx(0.5166, abs=1e-4)
 
 
 # --- A3: symmetric damping ------------------------------------------------
 
 
-def test_symmetric_scenario_raises_the_domestic_leg_and_cuts_the_fuel_share():
+def test_symmetric_scenario_moves_only_the_domestic_leg():
+    """Round-3 reversed the sign of this, and that is the point.
+
+    Before the baseline fix the solved gas fraction was 0.199 against the pump
+    leg's 0.650, so imposing a common fraction *raised* the domestic leg by a
+    factor of three and cut the fuel share sharply. With the counterfactual
+    constructed properly the solved fraction is 0.765 — above the pump leg's
+    0.650 — so symmetry now *lowers* the domestic leg slightly. The
+    specification is unchanged; what changed is that the asymmetry it was built
+    to probe was mostly the baseline bug.
+    """
     base = make_baseline()
-    main, _ = inc.run_scenario(base, get_scenario("realised_2026"))
-    sym, _ = inc.run_scenario(base, get_scenario("realised_2026_symmetric"))
-    assert sym.aggregate_cost_bn > main.aggregate_cost_bn
-    assert sym.motor_fuel_share_of_loss < main.motor_fuel_share_of_loss
+    main, main_cost = inc.run_scenario(base, get_scenario("realised_2026"))
+    sym, sym_cost = inc.run_scenario(base, get_scenario("realised_2026_symmetric"))
+    assert sym.aggregate_cost_bn < main.aggregate_cost_bn
+    assert sym.motor_fuel_share_of_loss > main.motor_fuel_share_of_loss
     # The fuel channel itself is identical; only the domestic leg is rescaled.
-    assert sym.decile[0].mean_loss_gbp > main.decile[0].mean_loss_gbp
+    assert sym_cost.motor_fuel == pytest.approx(main_cost.motor_fuel)
+    assert sym_cost.domestic.sum() < main_cost.domestic.sum()
+    # And the two fractions are now close, where they used to differ 3x.
+    ratio = scen.REALISED_PUMP_SUSTAINED_FRACTION / scen.REALISED_SUSTAINED_FRACTION
+    assert 0.5 < ratio < 2.0
 
 
 def test_fuel_share_depends_only_on_the_ratio_of_the_two_fractions():
@@ -336,8 +355,13 @@ def test_fuel_share_depends_only_on_the_ratio_of_the_two_fractions():
         result, _ = inc.run_scenario(base, variant)
         shares.append(result.motor_fuel_share_of_loss)
     assert shares == pytest.approx([shares[0]] * len(shares))
+    # The asymmetric specification differs from every common-fraction one, and
+    # after the round-3 baseline fix it differs *downward*: the solved gas
+    # fraction is now above the pump fraction, so the asymmetry works against
+    # the fuel share instead of for it.
     asym, _ = inc.run_scenario(base, scenario)
-    assert asym.motor_fuel_share_of_loss > shares[0]
+    assert asym.motor_fuel_share_of_loss != pytest.approx(shares[0])
+    assert asym.motor_fuel_share_of_loss < shares[0]
 
 
 # --- A6: decile coverage --------------------------------------------------
@@ -564,6 +588,68 @@ def test_decile_concept_audit_identifies_the_ranking_variable():
     )
     for gap in audit.mean_absolute_decile_gap.values():
         assert gap >= 0.0
+    assert audit.unavailable == ()
+    assert audit.person_weighted is True
+    assert audit.documented_truth == "equivalised_bhc"
+
+
+def test_the_audit_uses_the_real_bhc_variable_not_a_reconstruction():
+    """Round-3 finding 1. The old audit built its BHC candidate as
+    ``household_net_income / household_equivalisation_ahc`` — the wrong
+    numerator and an AHC denominator — so the concept the package actually ranks
+    on was never a candidate, and AHC "won" inside the construction error.
+    """
+    base = make_baseline()
+    # Give BHC its own ordering, so its deciles are genuinely a different
+    # partition rather than a monotone relabelling of the other two.
+    rng = np.random.default_rng(7)
+    base = dataclasses.replace(
+        base, equiv_income_bhc=rng.permutation(base.equiv_income_bhc)
+    )
+    # The real variable is distinct from both the wrong reconstruction and AHC.
+    wrong = base.net_income / base.equivalisation
+    assert not np.allclose(base.equiv_income_bhc, wrong)
+    assert not np.allclose(base.equiv_income_bhc, base.equiv_income_ahc)
+    # Ranking on the real BHC concept must be recovered exactly.
+    ranked = inc._weighted_deciles(
+        np.asarray(base.equiv_income_bhc, dtype=float), base.weight * base.people
+    )
+    ranked_base = dataclasses.replace(base, decile=ranked.astype(float))
+    audit = inc.decile_concept_audit(ranked_base)
+    assert audit.best_match == "equivalised_bhc"
+    assert audit.agreement["equivalised_bhc"] == pytest.approx(1.0)
+    assert audit.best_match_is_documented_truth is True
+    # And on this data that is NOT the burden denominator: the paper's gradient
+    # is a cross-concept statistic.
+    assert audit.matches_burden_denominator is False
+
+
+def test_the_audit_reports_bhc_unavailable_rather_than_substituting_a_proxy():
+    base = dataclasses.replace(make_baseline(), equiv_income_bhc=None)
+    audit = inc.decile_concept_audit(base)
+    assert audit.unavailable == ("equivalised_bhc",)
+    assert "equivalised_bhc" not in audit.agreement
+
+
+def test_the_audit_is_person_weighted_like_the_package():
+    """``household_income_decile`` weights by ``household_weight * count_people``."""
+    base = make_baseline()
+    people = np.where(base.decile <= 5, 1.0, 4.0)
+    base = dataclasses.replace(base, people=people)
+    person = inc.decile_concept_audit(base, person_weighted=True)
+    household = inc.decile_concept_audit(base, person_weighted=False)
+    assert person.person_weighted is True
+    assert household.person_weighted is False
+    # The two weightings give different rankings whenever household size is
+    # correlated with income, which it is.
+    assert person.agreement != household.agreement
+
+
+def test_the_negative_sentinel_explains_the_out_of_range_households():
+    base = make_baseline(unbanded=4)
+    audit = inc.decile_concept_audit(base)
+    assert audit.negative_sentinel_share > 0.0
+    assert inc.DECILE_RANKING_NEGATIVE_SENTINEL == -1
 
 
 def test_decile_concept_audit_detects_a_deliberately_wrong_ranking():
@@ -639,3 +725,396 @@ def test_the_symmetric_specification_is_the_one_with_equal_fractions():
     assert sym.gas_sustained_fraction == pytest.approx(sym.pump_sustained_fraction)
     main, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
     assert main.gas_sustained_fraction != main.pump_sustained_fraction
+
+
+# --------------------------------------------------------------------------
+# Round-3 finding 2: the means-tested motor-fuel margin
+# --------------------------------------------------------------------------
+
+
+def _with_means_tested(base: inc.Baseline, low_fuel_factor: float = 0.2):
+    """Every third household means-tested, with a deliberately thin fuel spend.
+
+    Reproduces the shape of the microdata margin (means-tested households
+    imputed a small fraction of everyone else's motor fuel) so the correction
+    can be tested without microdata.
+    """
+    mt = np.arange(base.n) % 3 == 0
+    return dataclasses.replace(
+        base,
+        means_tested=mt,
+        petrol=np.where(mt, base.petrol * low_fuel_factor, base.petrol),
+        diesel=np.where(mt, base.diesel * low_fuel_factor, base.diesel),
+    )
+
+
+def test_motor_fuel_margins_measure_the_means_tested_split():
+    base = _with_means_tested(make_baseline())
+    margins = inc.motor_fuel_margins(base)
+    assert margins.means_tested_mean_fuel_gbp < margins.non_means_tested_mean_fuel_gbp
+    assert margins.means_tested_fuel_ratio == pytest.approx(5.0, rel=0.05)
+    assert len(margins.zero_fuel_share_by_decile) == 10
+    assert 0.0 <= margins.zero_fuel_share_overall <= 1.0
+
+
+def test_motor_fuel_margins_require_the_means_tested_flag():
+    with pytest.raises(ValueError, match="means_tested"):
+        inc.motor_fuel_margins(make_baseline())
+    with pytest.raises(ValueError, match="means_tested"):
+        inc.equalise_means_tested_fuel(make_baseline())
+
+
+def test_mt_fuel_parity_equalises_within_decile_and_preserves_the_total():
+    base = _with_means_tested(make_baseline())
+    fixed = inc.apply_calibration(base, "mt_fuel_parity")
+    # The national total is preserved, so the aggregate loss stays comparable.
+    assert inc.wsum(fixed.motor_fuel, fixed.weight) == pytest.approx(
+        inc.wsum(base.motor_fuel, base.weight)
+    )
+    # Parity within *every* decile. (The pooled ratio need not be exactly 1.0:
+    # means-tested households are not spread evenly across deciles, and the
+    # specification deliberately acts within decile rather than pooling.)
+    mt = np.asarray(fixed.means_tested).astype(bool)
+    for d in range(1, 11):
+        sel = fixed.decile == d
+        a, b = sel & mt, sel & ~mt
+        assert inc.wmean(fixed.motor_fuel[a], fixed.weight[a]) == pytest.approx(
+            inc.wmean(fixed.motor_fuel[b], fixed.weight[b])
+        )
+
+
+def test_the_ons_shape_calibration_cannot_move_the_means_tested_margin():
+    """Why a new specification was needed: one factor per decile scales both
+    groups identically, so the 6.2x margin survives it untouched.
+    """
+    base = _with_means_tested(make_baseline())
+    shaped = inc.apply_calibration(base, "ons_fuel_shape")
+    parity = inc.apply_calibration(base, "mt_fuel_parity")
+    mt = np.asarray(base.means_tested).astype(bool)
+
+    def within(b, d):
+        sel = b.decile == d
+        a, c = sel & mt, sel & ~mt
+        return inc.wmean(b.motor_fuel[a], b.weight[a]) / inc.wmean(
+            b.motor_fuel[c], b.weight[c]
+        )
+
+    for d in range(1, 11):
+        # One factor per decile scales both groups identically: the margin is
+        # exactly unchanged, decile by decile.
+        assert within(shaped, d) == pytest.approx(within(base, d))
+        # The new specification is the only one that moves it.
+        assert within(parity, d) == pytest.approx(1.0)
+
+
+def test_mt_fuel_parity_raises_the_means_tested_share_of_the_loss():
+    """The paper's central policy finding scales inversely with this share."""
+    base = _with_means_tested(make_baseline())
+    scenario = get_scenario("realised_2026")
+    raw, _ = inc.run_scenario(base, scenario)
+    parity, _ = inc.run_scenario(base, scenario, calibration="mt_fuel_parity")
+    assert raw.motor_fuel_margins is not None
+    assert parity.motor_fuel_margins is not None
+    assert (
+        parity.motor_fuel_margins.means_tested_share_of_loss
+        > raw.motor_fuel_margins.means_tested_share_of_loss
+    )
+
+
+# --------------------------------------------------------------------------
+# Round-3 finding 3: the fuel participation margin
+# --------------------------------------------------------------------------
+
+
+def _with_flat_zero_rate(base: inc.Baseline, zero_share: float = 0.6):
+    """A baseline whose zero-fuel rate is identical in every decile.
+
+    That identity — 62.0% in decile one and 62.0% in decile ten — is the
+    verified evidence for the participation artefact, and it is what the
+    correction has to be able to detect and move.
+    """
+    zero = np.zeros(base.n, dtype=bool)
+    for d in range(1, 11):
+        sel = np.flatnonzero(base.decile == d)
+        zero[sel[: int(round(zero_share * len(sel)))]] = True
+    return dataclasses.replace(
+        base,
+        petrol=np.where(zero, 0.0, base.petrol),
+        diesel=np.where(zero, 0.0, base.diesel),
+    )
+
+
+def test_the_flat_zero_rate_is_the_diagnostic_the_paper_needs():
+    base = _with_flat_zero_rate(make_baseline(n_per_decile=10))
+    margins = inc.motor_fuel_margins(_with_means_tested(base))
+    shares = margins.zero_fuel_share_by_decile
+    assert shares[0] == pytest.approx(shares[-1])
+    assert margins.zero_share_d1_minus_d10_pp == pytest.approx(0.0)
+
+
+def test_nts_targets_are_a_gradient_between_the_published_ends():
+    targets = inc.nts_participation_targets()
+    assert len(targets) == 10
+    assert targets[0] == pytest.approx(inc.NTS_CAR_AVAILABILITY_D1)
+    assert targets[-1] == pytest.approx(inc.NTS_CAR_AVAILABILITY_D10)
+    assert list(targets) == sorted(targets)
+    assert all(0.0 <= t <= 1.0 for t in targets)
+
+
+def test_participation_correction_imposes_a_gradient_and_preserves_the_total():
+    base = _with_flat_zero_rate(make_baseline(n_per_decile=50))
+    fixed = inc.apply_calibration(base, "nts_participation")
+    assert inc.wsum(fixed.motor_fuel, fixed.weight) == pytest.approx(
+        inc.wsum(base.motor_fuel, base.weight)
+    )
+    after = inc.motor_fuel_margins(_with_means_tested(fixed)).zero_fuel_share_by_decile
+    before = inc.motor_fuel_margins(_with_means_tested(base)).zero_fuel_share_by_decile
+    # A gradient where there was none.
+    assert before[0] == pytest.approx(before[-1])
+    assert after[0] > after[-1]
+    # And every decile's participation moved toward its NTS target.
+    targets = inc.nts_participation_targets()
+    for d in range(10):
+        assert 1 - after[d] == pytest.approx(targets[d], abs=0.05)
+
+
+def test_participation_correction_lowers_the_conditional_level():
+    """Participation and the conditional level move together when the decile
+    total is preserved; the paper has to report both.
+    """
+    base = _with_flat_zero_rate(make_baseline(n_per_decile=50))
+    fixed = inc.apply_calibration(base, "nts_participation")
+    positive_before = base.motor_fuel[base.motor_fuel > 0]
+    positive_after = fixed.motor_fuel[fixed.motor_fuel > 0]
+    assert positive_after.mean() < positive_before.mean()
+
+
+# --------------------------------------------------------------------------
+# Round-3 finding 9: the gradient without decile one, and without the drop
+# --------------------------------------------------------------------------
+
+
+def test_the_gradient_is_also_reported_from_decile_two():
+    result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    d1 = next(r for r in result.decile if r.decile == 1)
+    d2 = next(r for r in result.decile if r.decile == 2)
+    d10 = next(r for r in result.decile if r.decile == 10)
+    assert result.all_channel_d1_d10_ratio_pct == pytest.approx(
+        d1.mean_loss_pct / d10.mean_loss_pct
+    )
+    assert result.d2_d10_ratio_pct == pytest.approx(
+        d2.mean_loss_pct / d10.mean_loss_pct
+    )
+    assert result.d2_d10_ratio_gbp == pytest.approx(
+        d2.mean_loss_gbp / d10.mean_loss_gbp
+    )
+
+
+def test_the_non_positive_tail_treatment_is_swept_on_every_run():
+    """A fifth of decile one has non-positive equivalised AHC income and is
+    dropped. Winsorising it back in must be visible, not asserted away.
+    """
+    base = make_baseline(unbanded=4)
+    result, _ = inc.run_scenario(base, get_scenario("realised_2026"))
+    assert result.income_treatment == "drop"
+    assert np.isfinite(result.d1_d10_ratio_pct_winsorised)
+    assert np.isfinite(result.mean_loss_pct_winsorised)
+    # Running with the treatment as the headline convention must reproduce the
+    # winsorised statistics, so the two are the same arithmetic.
+    win, _ = inc.run_scenario(
+        base, get_scenario("realised_2026"), income_treatment="winsorise_p1"
+    )
+    assert win.mean_loss_pct == pytest.approx(result.mean_loss_pct_winsorised)
+    assert win.income_treatment == "winsorise_p1"
+
+
+def test_winsorising_keeps_the_non_positive_tail_in_the_denominator():
+    base = make_baseline()
+    income = base.equiv_income_ahc.copy()
+    income[0] = -100.0
+    treated = inc.treat_non_positive_income(income, base.weight, "winsorise_p1")
+    assert treated[0] > 0
+    assert np.allclose(treated[1:], income[1:])
+    assert inc.treat_non_positive_income(income, base.weight, "drop") is income
+    with pytest.raises(ValueError, match="unknown income treatment"):
+        inc.treat_non_positive_income(income, base.weight, "clip")
+
+
+def test_calibration_names_are_validated():
+    with pytest.raises(ValueError, match="unknown calibration"):
+        inc.apply_calibration(make_baseline(), "no_such_calibration")
+
+
+# --------------------------------------------------------------------------
+# Round-3 finding 6: silent defaults and the dead path
+# --------------------------------------------------------------------------
+
+
+class _NoPassThrough:
+    """A scenario-shaped object with a pump path but no pass-through block."""
+
+    key = "no_pass_through"
+    pump = get_scenario("realised_2026").pump
+
+
+def test_a_missing_pass_through_block_is_an_error_not_the_peak_bound():
+    """``getattr(None, "pump_sustained_fraction", 1.0)`` returned 1.0 silently.
+
+    1.0 is the peak-fuel upper bound — precisely the fallback the docstring says
+    it refuses — reached by precisely the mechanism it refuses it for.
+    """
+    with pytest.raises(AttributeError, match="peak-fuel upper bound"):
+        inc.sustained_pump_factors(_NoPassThrough())
+
+
+def test_sustained_pump_factors_delegates_to_the_scenario_method():
+    """The dead path, made live. ``Scenario.sustained_pump_changes`` was
+    referenced only by the tests while the pipeline used this function.
+    """
+    for key in ("realised_2026", "realised_2026_peak_fuel", "niesr_adverse"):
+        scenario = get_scenario(key)
+        petrol, diesel = inc.sustained_pump_factors(scenario)
+        expected_petrol, expected_diesel = scenario.sustained_pump_changes
+        assert petrol == pytest.approx(1.0 + expected_petrol)
+        assert diesel == pytest.approx(1.0 + expected_diesel)
+
+
+def test_a_missing_pump_path_is_still_an_error():
+    class NoPump:
+        key = "no_pump"
+
+    with pytest.raises(AttributeError, match="no pump"):
+        inc.sustained_pump_factors(NoPump())
+
+
+# --------------------------------------------------------------------------
+# Round-3 finding 5: a grid reconciliation check that can actually fail
+# --------------------------------------------------------------------------
+#
+# These exercise ``analysis/run_grid.py``'s reconciliation, which is part of
+# this revision's surface. They live here rather than in
+# ``tests/test_grid_and_sweeps.py`` only because that file belongs to another
+# workstream in this round.
+
+import sys as _sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "analysis"))
+import run_grid  # noqa: E402
+
+
+@pytest.fixture
+def grid_base() -> inc.Baseline:
+    """A baseline wide enough for the channel ratios to differ from each other."""
+    n = 20
+    return inc.Baseline(
+        net_income=np.linspace(8_000.0, 100_000.0, n),
+        weight=np.full(n, 1e6),
+        people=np.full(n, 2.0),
+        gas=np.linspace(400.0, 900.0, n),
+        electricity=np.linspace(500.0, 1_000.0, n),
+        petrol=np.linspace(200.0, 900.0, n),
+        diesel=np.linspace(100.0, 600.0, n),
+        decile=np.repeat(np.arange(1.0, 11.0), 2),
+        equiv_income_ahc=np.linspace(8_000.0, 100_000.0, n),
+        in_poverty_bhc=np.zeros(n),
+        in_poverty_ahc=np.zeros(n),
+        region=np.zeros(n),
+        country=np.zeros(n),
+    )
+
+
+# --- round-3 finding 5: a reconciliation check that can actually fail -----
+
+
+def test_the_decile_ratio_is_the_convex_combination_of_its_channel_ratios(grid_base):
+    """The identity that replaces the vacuous ±5% range-membership check.
+
+    The old check asserted that every named scenario's D1/D10 ratio lay within
+    5% of a grid range that spanned 0.0008 across all 36 cells, because both
+    pure-channel ratios were ~9.31 and every mix is a convex combination of
+    them. It could not fail. This can: the identity is exact in the pipeline's
+    own arithmetic and breaks the moment the grid and the named scenarios stop
+    being the same code.
+    """
+    import pandas as pd
+
+    live = pd.DataFrame(
+        [run_grid.cell_row(grid_base, g, o) for g, o in ((0.5, 0.4), (0.8, 0.6))]
+    )
+    out = run_grid.reconcile_named_scenarios(grid_base, live)
+    assert out["channel_mix_identity_holds"] is True
+    assert out["identity_broken"] == []
+    for payload in out["scenarios"].values():
+        assert payload["identity_holds"] is True
+        assert payload["identity_residual"] < out["identity_tolerance"]
+        share = payload["domestic_share_of_decile10_loss"]
+        assert 0.0 <= share <= 1.0
+        assert payload["d1_d10_ratio"] == pytest.approx(
+            share * payload["d1_d10_ratio_domestic_only"]
+            + (1 - share) * payload["d1_d10_ratio_motor_fuel_only"]
+        )
+
+
+def test_the_reconciliation_reports_whether_it_is_informative(grid_base):
+    """A degenerate grid must say so rather than pass silently."""
+    import pandas as pd
+
+    degenerate = pd.DataFrame({"d1_d10_ratio": [9.311577, 9.312363]})
+    out = run_grid.reconcile_named_scenarios(grid_base, degenerate)
+    assert out["grid_shows_invariance"] is True
+    assert out["check_is_informative"] is False
+    assert out["grid_d1_d10_ratio_spread"] < 0.01
+    wide = pd.DataFrame({"d1_d10_ratio": [4.0, 12.0]})
+    out_wide = run_grid.reconcile_named_scenarios(grid_base, wide)
+    assert out_wide["check_is_informative"] is True
+
+
+# --- Round-3 finding 7: dataset_path() must read .env itself ------------
+
+import os  # noqa: E402
+
+from analysis import run_incidence  # noqa: E402
+
+
+def test_dataset_path_loads_the_env_itself(monkeypatch, tmp_path):
+    """Only ``main()`` called ``_load_env``, so importing the module and calling
+    ``dataset_path()`` directly — which every other analysis script does —
+    raised "No Hugging Face token" despite a valid ``.env``.
+    """
+    monkeypatch.delenv("HUGGING_FACE_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("HUGGING_FACE_TOKEN=from-the-env-file\n")
+    monkeypatch.setattr(run_incidence, "ROOT", tmp_path)
+
+    seen = {}
+
+    def fake_download(repo, filename, **kwargs):
+        seen.update(kwargs)
+        return "/tmp/fake.h5"
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+    assert run_incidence.dataset_path() == "/tmp/fake.h5"
+    assert seen["token"] == "from-the-env-file"
+    # The dataset pin travels with it.
+    assert seen["revision"] == run_incidence.DATASET_REVISION
+
+
+def test_dataset_path_still_fails_loudly_with_no_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("HUGGING_FACE_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr(run_incidence, "ROOT", tmp_path)
+    with pytest.raises(SystemExit, match="No Hugging Face token"):
+        run_incidence.dataset_path()
+
+
+def test_load_env_never_overrides_an_exported_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("HUGGING_FACE_TOKEN", "exported")
+    env = tmp_path / ".env"
+    env.write_text("HUGGING_FACE_TOKEN=from-file\n")
+    monkeypatch.setattr(run_incidence, "ROOT", tmp_path)
+    run_incidence._load_env()
+    assert os.environ["HUGGING_FACE_TOKEN"] == "exported"

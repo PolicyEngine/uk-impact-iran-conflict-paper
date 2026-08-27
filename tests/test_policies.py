@@ -275,9 +275,10 @@ def test_scorecard_returns_every_envelope_for_every_policy(world):
     base, cost, mt = world
     scores = pol.scorecard(base, cost, mt, envelope_bn=4.0)
     means_tested = sum(1 for p in pol.POLICIES.values() if p.means_tested)
-    assert len(scores) == 3 * len(pol.POLICIES) + means_tested
+    assert len(scores) == 4 * len(pol.POLICIES) + means_tested
     assert {s.envelope for s in scores} == {
         "stated",
+        "feasible_max",
         "common_capped",
         "common_scaled",
         "common_eligibility",
@@ -616,3 +617,311 @@ def test_jrf_revaluation_grows_with_the_shock_which_is_why_it_is_wrong(world):
     assert wsum(pol._jrf_block(base, cost, mt), base.weight) == pytest.approx(
         wsum(pol._jrf_block(base, bigger, mt), base.weight)
     )
+
+
+# ==========================================================================
+# Round 3
+# ==========================================================================
+
+# --- finding 1: "feasible maximum" was three operations under one label ---
+
+
+@pytest.mark.parametrize("key", sorted(pol.POLICIES))
+def test_feasible_max_row_reports_the_instruments_own_ceiling(world, key):
+    """The feasible-maximum row is a property of the instrument, not of a budget."""
+    base, cost, mt = world
+    policy = pol.POLICIES[key]
+    score, _ = pol.score_policy_at_feasible_max(base, cost, mt, policy, envelope_bn=3.0)
+    ceiling = policy.feasible_max_parameter(base, cost, mt)
+    assert score.envelope == "feasible_max"
+    assert score.implied_parameter == pytest.approx(ceiling)
+    assert score.is_feasible
+    assert score.label_used == policy.label
+    # Its cost is whatever the ceiling costs — it is NOT clipped to an envelope.
+    assert score.cost_bn == pytest.approx(score.feasible_max_cost_bn)
+    assert score.row_semantics == pol.ROW_SEMANTICS["feasible_max"]
+
+
+def test_the_feasible_max_row_never_scales_an_instrument_down(world):
+    """The defect: the old column scaled the JRF block and the rebate DOWN.
+
+    A row labelled "feasible maximum" must never report a parameter below the
+    sponsor's own; the envelope-capped row may, and says so.
+    """
+    base, cost, mt = world
+    for key, policy in pol.POLICIES.items():
+        fmax, _ = pol.score_policy_at_feasible_max(
+            base, cost, mt, policy, envelope_bn=1.0
+        )
+        assert fmax.implied_parameter >= policy.stated_parameter - 1e-9, key
+        assert fmax.envelope_scale >= 1.0 - 1e-9, key
+
+
+def test_the_jrf_blocks_feasible_maximum_is_a_hundred_per_cent_block(world):
+    """It is a 100% block and costs roughly twice the 50% one — not 35.8%."""
+    base, cost, mt = world
+    policy = pol.POLICIES["jrf_block"]
+    stated, _ = pol.score_policy(base, cost, mt, policy)
+    fmax, _ = pol.score_policy_at_feasible_max(base, cost, mt, policy, envelope_bn=1.0)
+    capped, _ = pol.score_policy_at_envelope(base, cost, mt, policy, envelope_bn=1.0)
+    assert fmax.implied_parameter == pytest.approx(100.0)
+    assert fmax.cost_bn > stated.cost_bn
+    # The envelope-capped row is the one that scales it down, and it is a
+    # different row with a different meaning.
+    assert capped.implied_parameter < policy.stated_parameter
+    assert capped.cost_bn == pytest.approx(1.0)
+    assert capped.feasible_max_cost_bn == pytest.approx(fmax.cost_bn)
+
+
+@pytest.mark.parametrize("key", sorted(pol.POLICIES))
+def test_absorbable_is_the_budget_and_feasible_max_cost_is_the_instrument(world, key):
+    base, cost, mt = world
+    score, _ = pol.score_policy_at_envelope(
+        base, cost, mt, pol.POLICIES[key], envelope_bn=2.0
+    )
+    assert score.absorbable_envelope_bn == pytest.approx(
+        min(2.0, score.feasible_max_cost_bn)
+    )
+    assert score.row_semantics == pol.ROW_SEMANTICS["common_capped"]
+
+
+# --- finding 2: overcompensation is real and must be counted --------------
+
+
+def test_overcompensation_is_counted_not_denied(world):
+    """At the feasible maximum a flat payment exceeds many households' losses."""
+    base, cost, mt = world
+    policy = pol.POLICIES["whd_expansion"]
+    stated, _ = pol.score_policy(base, cost, mt, policy)
+    fmax, _ = pol.score_policy_at_feasible_max(base, cost, mt, policy, envelope_bn=5.0)
+    assert stated.overcompensated_households_m == 0.0
+    assert fmax.overcompensated_households_m > 0
+    assert fmax.overcompensated_excess_bn > 0
+    assert 0 < fmax.overcompensated_share_of_recipients <= 1.0
+    # The referees' comparison: mean payment against mean loss among recipients.
+    assert fmax.gain_to_loss_ratio_recipients > 1.0
+    assert fmax.mean_gain_if_recipient_gbp > fmax.mean_loss_if_recipient_gbp
+
+
+def test_overcompensated_spend_is_bounded_by_total_spend(world):
+    base, cost, mt = world
+    for score in pol.scorecard(base, cost, mt, envelope_bn=4.0):
+        assert 0.0 <= score.overcompensated_excess_bn <= score.overcompensated_spend_bn
+        assert score.overcompensated_spend_bn <= score.cost_bn + 1e-9
+        if score.cost_bn > 0:
+            assert 0.0 <= score.overcompensated_share_of_spend <= 1.0
+
+
+def test_saturation_shows_up_as_excess_not_as_extra_offset(world):
+    """Raising generosity past the point of saturation buys excess, not offset."""
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    stated, _ = pol.score_policy(base, cost, mt, policy)
+    fmax, _ = pol.score_policy_at_feasible_max(base, cost, mt, policy, envelope_bn=5.0)
+    extra_spend = fmax.cost_bn - stated.cost_bn
+    extra_excess = fmax.overcompensated_excess_bn - stated.overcompensated_excess_bn
+    assert extra_spend > 0
+    # Most of the extra money lands on households that had already been made
+    # whole: that is what "saturated at the sponsor's own parameter" means.
+    assert extra_excess > 0.5 * extra_spend
+
+
+# --- finding 3: a widened means test can become universal -----------------
+
+
+def test_every_row_persists_an_eligible_share(world):
+    base, cost, mt = world
+    for score in pol.scorecard(base, cost, mt, envelope_bn=4.0):
+        assert np.isfinite(score.eligible_share)
+        assert 0.0 <= score.eligible_share <= 1.0
+        assert score.eligible_households_m == pytest.approx(
+            score.eligible_share * base.weight.sum() / 1e6
+        )
+
+
+def test_a_widened_flat_payment_that_reaches_everyone_is_flagged_and_renamed(world):
+    """£150 to everybody is the flat rebate, whatever the row is called."""
+    base, cost, mt = world
+    policy = pol.POLICIES["whd_expansion"]
+    # An envelope larger than a universal £150 payment costs.
+    envelope = 1e-9 * 150.0 * base.weight.sum() * 2
+    widened, _ = pol.score_policy_by_eligibility(base, cost, mt, policy, envelope)
+    assert widened.eligible_share == pytest.approx(1.0)
+    assert widened.eligibility_is_universal
+    assert "no means test remains" in widened.eligibility_note or (
+        "no means test remains" in widened.label_used
+    )
+    assert widened.label_used != policy.label
+    # And it is arithmetically the flat rebate: same shape of spend.
+    rebate = pol.Policy(
+        "rebate_150",
+        "flat £150",
+        "test",
+        stated_cost_bn=float("nan"),
+        gain=lambda b, c, m: np.full_like(b.energy, 150.0, dtype=float),
+    )
+    flat, _ = pol.score_policy(base, cost, mt, rebate)
+    assert widened.share_to_bottom_three == pytest.approx(flat.share_to_bottom_three)
+    assert widened.cost_per_pound_decile_one == pytest.approx(
+        flat.cost_per_pound_decile_one
+    )
+
+
+def test_eligibility_widening_can_be_capped_below_universality(world):
+    base, cost, mt = world
+    policy = pol.POLICIES["whd_expansion"]
+    envelope = 1e-9 * 150.0 * base.weight.sum() * 2
+    widened, _ = pol.score_policy_by_eligibility(
+        base, cost, mt, policy, envelope, max_eligible_share=0.5
+    )
+    assert widened.eligible_share <= 0.5 + 1e-9
+    assert not widened.eligibility_is_universal
+
+
+# --- finding 4: the arms do not spend the same money ----------------------
+
+
+def test_each_row_persists_what_it_actually_spends_against_the_envelope(world):
+    base, cost, mt = world
+    scores = pol.scorecard(base, cost, mt, envelope_bn=4.0)
+    for s in scores:
+        if s.envelope in {"common_capped", "common_scaled", "common_eligibility"}:
+            assert s.envelope_shortfall_bn == pytest.approx(4.0 - s.cost_bn)
+            assert s.spends_full_envelope == (abs(s.cost_bn - 4.0) <= 0.02)
+    arms = [s for s in scores if s.policy == "social_tariff"]
+    gen = next(s for s in arms if s.envelope == "common_capped")
+    elig = next(s for s in arms if s.envelope == "common_eligibility")
+    # The claim "each arm gets the same money" is checkable, and here false.
+    assert gen.cost_bn != pytest.approx(elig.cost_bn)
+
+
+def test_diagnostics_report_the_spend_of_each_arm(world):
+    base, cost, mt = world
+    diag = pol.policy_diagnostics(base, cost, mt, envelope_bn=4.0)
+    arms = diag["by_policy"]["social_tariff"]["envelope_arms"]
+    assert arms["envelope_bn"] == 4.0
+    assert arms["generosity_arm_spend_bn"] > 0
+    assert arms["eligibility_arm_spend_bn"] > 0
+    assert isinstance(arms["arms_spend_the_same"], bool)
+
+
+# --- finding 5: the JRF block's reference quantity ------------------------
+
+
+def test_the_block_is_pegged_to_ofgem_typical_consumption_by_default(world):
+    base, cost, mt = world
+    assert pol.jrf_reference_quantity(base) == pol.OFGEM_TYPICAL_ANNUAL_BILL_GBP
+    ofgem_block = pol._jrf_block(base, cost, mt)
+    modelled_block = pol._jrf_block(base, cost, mt, reference_basis="modelled_median")
+    assert pol.POLICIES["jrf_block"].gain(base, cost, mt) == pytest.approx(ofgem_block)
+    # The two bases differ, and the modelled one is the smaller here.
+    assert wsum(ofgem_block, base.weight) != pytest.approx(
+        wsum(modelled_block, base.weight)
+    )
+
+
+def test_both_reference_bases_are_reported(world):
+    base, _, _ = world
+    ref = pol.jrf_reference_quantities(base)
+    assert ref["basis_used"] == "ofgem_typical_consumption"
+    assert ref["ofgem_block_gbp"] == pytest.approx(
+        0.5 * pol.OFGEM_TYPICAL_ANNUAL_BILL_GBP
+    )
+    assert ref["modelled_median_block_gbp"] == pytest.approx(
+        0.5 * pol.jrf_reference_quantity(base, "modelled_median")
+    )
+
+
+def test_the_reference_quantity_can_be_overridden_without_editing_the_module(world):
+    """The sibling is recalibrating the baseline; nothing here may be a literal."""
+    base, cost, mt = world
+    block = pol._jrf_block(base, cost, mt, typical_consumption_gbp=2_000.0)
+    assert block.max() > pol._jrf_block(base, cost, mt).max()
+    assert pol.jrf_reference_quantity(base, typical_consumption_gbp=2_000.0) == 2_000.0
+    with pytest.raises(ValueError, match="unknown JRF reference basis"):
+        pol.jrf_reference_quantity(base, "nonsense")
+
+
+def test_the_reference_quantity_is_persisted_on_every_row(world):
+    base, cost, mt = world
+    for score in pol.scorecard(base, cost, mt, envelope_bn=4.0):
+        if score.policy == "jrf_block":
+            assert score.reference_basis == "ofgem_typical_consumption"
+            assert score.reference_quantity_gbp == pytest.approx(
+                pol.OFGEM_TYPICAL_ANNUAL_BILL_GBP
+            )
+
+
+# --- finding 8: the last hardcoded literal --------------------------------
+
+
+def test_large_loser_outside_means_test_is_computed_with_its_ceiling(world):
+    base, cost, mt = world
+    big = ShockCost(
+        gas=base.gas * 3.0,
+        electricity=base.electricity * 3.0,
+        motor_fuel=base.motor_fuel * 3.0,
+        scenario="big",
+    )
+    stat = pol.large_loser_outside_means_test(base, big, mt)
+    assert stat["large_losers_m"] > 0
+    assert 0.0 <= stat["share_outside_means_test_pct"] <= 100.0
+    # The referee's point: the statistic cannot go below its ceiling.
+    assert stat["share_outside_means_test_pct"] >= stat["ceiling_pct"] - 1e-9
+    assert stat["headroom_pct"] == pytest.approx(
+        stat["share_outside_means_test_pct"] - stat["ceiling_pct"]
+    )
+    assert stat["ceiling_pct"] == pytest.approx(
+        100.0 * (1 - base.weight[mt].sum() / base.weight.sum())
+    )
+
+
+def test_diagnostics_are_serialisable_and_carry_no_literal(world, tmp_path):
+    import json
+
+    base, cost, mt = world
+    path = pol.write_policy_diagnostics(
+        base, cost, mt, envelope_bn=4.0, path=tmp_path / "policy_diagnostics.json"
+    )
+    payload = json.loads(path.read_text())
+    assert payload["envelope_bn"] == 4.0
+    assert set(payload["by_policy"]) == set(pol.POLICIES)
+    assert payload["large_loser_outside_means_test"]["ceiling_pct"] > 0
+    assert payload["jrf_reference_quantities"]["ofgem_typical_consumption_gbp"] > 0
+    for entry in payload["by_policy"].values():
+        assert entry["feasible_max_cost_bn"] >= entry["stated_cost_simulated_bn"] - 1e-9
+        assert entry["absorbable_within_envelope_bn"] <= 4.0 + 1e-9
+
+
+# --- finding 6: resolving is not contributing -----------------------------
+
+
+def test_the_audit_separates_contributing_from_resolving(monkeypatch):
+    """Four of the eight resolve and return exactly zero households."""
+    n = 4
+    values = {
+        "household_weight": np.array([1e6, 1e6, 2e6, 1e6]),
+        "universal_credit": np.array([500.0, 0, 0, 0]),
+        "pension_credit": np.array([0.0, 100, 0, 0]),
+        "housing_benefit": np.zeros(n),
+        "esa_income": np.zeros(n),
+        # resolves, reaches nobody — the wound-down legacy case
+        "child_tax_credit": np.zeros(n),
+        "household_count_children": np.array([0.0, 1, 2, 0]),
+    }
+    fake = _FakeSim(values)
+    module = type("M", (), {"Microsimulation": lambda dataset: fake})
+    monkeypatch.setitem(__import__("sys").modules, "policyengine_uk", module)
+
+    audit = pol.means_tested_audit("nowhere.h5", 2026)
+    assert "child_tax_credit" in audit["resolved_variables"]
+    assert "child_tax_credit" in audit["empty_variables"]
+    assert "child_tax_credit" not in audit["contributing_variables"]
+    assert set(audit["contributing_variables"]) == {
+        "universal_credit",
+        "pension_credit",
+    }
+    assert audit["n_resolved"] == audit["n_contributing"] + audit["n_empty"]
+    # The two sets are different objects and the audit says so.
+    assert audit["n_contributing"] < audit["n_resolved"]
+    pol._CHILD_COUNTS.pop(n, None)

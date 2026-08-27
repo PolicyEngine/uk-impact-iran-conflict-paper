@@ -1,6 +1,7 @@
 {
   "symmetric_steady_state": {
     "label": "Symmetric damping on the steady-state basis (phase-in not applied)",
+    "means_tested_share_of_loss": 0.05951670042640615,
     "aggregate_cost_bn": 14.189303808,
     "mean_loss_gbp": 481.47344970703125,
     "mean_loss_pct": 1.0577281919731245,
@@ -8,9 +9,26 @@
   },
   "symmetric_ons_levels": {
     "label": "Symmetric damping with both imputation levels corrected against ONS",
-    "aggregate_cost_bn": 13.507222528678337,
-    "mean_loss_gbp": 458.328974026383,
-    "mean_loss_pct": 1.0116999549174994,
-    "motor_fuel_share_pct": 36.13020172142648
+    "means_tested_share_of_loss": 0.05510099367083959,
+    "aggregate_cost_bn": 10.529701734132875,
+    "mean_loss_gbp": 357.29531977150083,
+    "mean_loss_pct": 0.7890931734832817,
+    "motor_fuel_share_pct": 46.34686593974384
+  },
+  "symmetric_mt_fuel_parity": {
+    "label": "Symmetric damping with means-tested motor-fuel spend equalised to non-means-tested within decile",
+    "means_tested_share_of_loss": 0.1018384538539523,
+    "aggregate_cost_bn": 10.281549755564312,
+    "mean_loss_gbp": 348.8749919432988,
+    "mean_loss_pct": 0.7657423752997408,
+    "motor_fuel_share_pct": 58.90411240227077
+  },
+  "symmetric_nts_participation": {
+    "label": "Symmetric damping with the DfT car-availability gradient imposed on the fuel participation rate",
+    "means_tested_share_of_loss": 0.08303117589773838,
+    "aggregate_cost_bn": 10.34678272,
+    "mean_loss_gbp": 351.0885009765625,
+    "mean_loss_pct": 0.7709783466349911,
+    "motor_fuel_share_pct": 59.163201138527434
   }
 }

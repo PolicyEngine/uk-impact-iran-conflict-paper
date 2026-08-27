@@ -3,7 +3,7 @@
 This module is **pure scenario data plus deterministic arithmetic**. It imports
 nothing from PolicyEngine and touches no microdata, so it is importable and
 testable without a Hugging Face token. Everything that requires the
-microsimulation lives downstream in ``uk_iran_conflict.shocks``.
+microsimulation lives downstream in :mod:`uk_iran_conflict.incidence`.
 
 What lives here
 ---------------
@@ -29,14 +29,15 @@ Design rules that this module exists to enforce
    prior repo (``impact-iran-war-living-standards``) applied one common
    percentage to ``electricity_consumption + gas_consumption``; see
    ``docs/PRIOR_WORK_IRAN.md`` §2.
-2. **The cap lags.** Ofgem's default tariff cap is set from an observation
-   window on the forward wholesale curve and reset quarterly, so a wholesale
-   move enters retail bills with a lag. The observation window closes about
-   seven weeks before the charge period and covers roughly the preceding
-   quarter, putting midpoint-to-midpoint at four to five months — about **1.5
-   quarters**, which is :data:`CAP_LAG_QUARTERS`, and half the value used before
-   this revision. The phase-in profile is *derived* from it by
-   :func:`cap_phase_in_profile`, never written down separately.
+2. **The cap lags, through an averaging observation window.** Ofgem's default
+   tariff cap is set from an observation window on the forward wholesale curve
+   and reset quarterly. The window closes about seven weeks before the charge
+   period and covers roughly the preceding quarter, putting midpoint-to-midpoint
+   at four to five months — about **1.5 quarters**, which is
+   :data:`CAP_LAG_QUARTERS`. The phase-in profile is *derived* from it by
+   :func:`cap_phase_in_profile`, which now literally builds each quarter's
+   observation window and averages :data:`GAS_PEAK_MONTHLY_PROFILE` over it,
+   rather than sliding a linear ramp along a calendar.
 3. **Wholesale is only part of a bill.** Wholesale energy costs are roughly
    40-50% of a dual-fuel direct-debit bill (network, policy, operating costs and
    margin make up the rest), so a +X% wholesale move enters as roughly +0.45X on
@@ -96,11 +97,23 @@ Caveats a referee will raise, recorded here rather than hidden
   series when it is loaded.
 * Peak wholesale prices are not the prices the cap sees. The cap responds to an
   averaged forward window, so a peak-to-sustained damping factor is applied. It
-  is not free: :data:`REALISED_SUSTAINED_FRACTION` is *solved* by
-  :func:`sustained_fraction_for_cap_anchor` so that the modelled October-2026
-  cap reproduces Ofgem's confirmed £1,723, and it therefore moves automatically
-  with the lag, the window and the bill-share assumptions instead of silently
-  going stale when they change.
+  is not free: :data:`REALISED_SUSTAINED_FRACTION` is *solved*, jointly with the
+  pre-war counterfactual cap, by :func:`solve_cap_calibration` so that the
+  modelled cap path reproduces **both** observed caps — £1,663 for
+  July-September 2026 and £1,723 (VAT-adjusted) for October-December 2026. It
+  therefore moves automatically with the lag, the window and the bill-share
+  assumptions instead of silently going stale when they change.
+* **There is a pre-war counterfactual cap, and it is not an observed cap.** The
+  round-3 referees found, independently, that the module was using the observed
+  1 Jul - 30 Sep 2026 cap (£1,663) as the *un-shocked* denominator while
+  simultaneously assigning 2026Q3 a phase-in of 1.0 — the same quarter serving
+  as both the unshocked base and the fully-shocked numerator. That is a
+  contradiction, not a calibration choice, and it made the whole
+  conflict-attributable domestic move a Q4-versus-Q3 *step* of 6.31%. The
+  counterfactual is now constructed explicitly as
+  :data:`PREWAR_COUNTERFACTUAL_CAP_GBP`; the two observed caps are retained as
+  what they are, observations used to *validate* the modelled path
+  (:data:`CAP_VALIDATION`).
 * **Both legs are annualised over one window** (:data:`MODELLED_WINDOW_LABEL`).
   Before this revision the domestic leg was averaged over 2026Q4-2027Q3 while
   the pump damping fraction was derived over calendar 2026, and the sum was
@@ -112,6 +125,7 @@ Caveats a referee will raise, recorded here rather than hidden
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -119,6 +133,25 @@ __all__ = [
     "PREWAR_BRENT_USD_PER_BBL",
     "PREWAR_NBP_PENCE_PER_THERM",
     "BASELINE_CAP_GBP",
+    "OFGEM_CAP_JUL_2026_GBP",
+    "PREWAR_COUNTERFACTUAL_CAP_GBP",
+    "CAP_VALIDATION",
+    "CapCalibration",
+    "solve_cap_calibration",
+    "REALISED_CAP_CALIBRATION",
+    "bill_level_pass_through",
+    "electricity_to_gas_pass_through_ratio",
+    "BILL_LEVEL_PASS_THROUGH",
+    "ELECTRICITY_TO_GAS_PASS_THROUGH_RATIO",
+    "GAS_PEAK_MONTHLY_PROFILE",
+    "CAP_OBSERVATION_WINDOW_MONTHS",
+    "observation_window_weights",
+    "linear_ramp_phase_in_profile",
+    "LINEAR_RAMP_PHASE_IN_PROFILE",
+    "CAP_BASE_QUARTER",
+    "CAP_BASE_PCT",
+    "on_window",
+    "gas_profile_variant",
     "WHOLESALE_SHARE_GAS_BILL",
     "WHOLESALE_SHARE_ELECTRICITY_BILL",
     "MARGINAL_PRICING_SHARE",
@@ -188,10 +221,21 @@ number in the module**: the realised scenario's percentage gas move (and hence
 everything derived from it) scales inversely with it.
 """
 
-BASELINE_CAP_GBP: float = 1_663.0
-"""Ofgem default tariff cap, 1 Jul - 30 Sep 2026, typical dual-fuel direct debit,
-on the revised (1 Jul 2026) Typical Domestic Consumption Values. Approximately
-£1,862 on the pre-July TDCV basis; the two are not comparable.
+OFGEM_CAP_JUL_2026_GBP: float = 1_663.0
+"""**Observed** Ofgem default tariff cap, 1 Jul - 30 Sep 2026.
+
+Typical dual-fuel direct debit on the revised (1 Jul 2026) Typical Domestic
+Consumption Values; approximately £1,862 on the pre-July TDCV basis, and the two
+are not comparable.
+
+This is an **observation of a post-shock cap**, and it is used here only to
+*validate* the modelled path (:data:`CAP_VALIDATION`). It is emphatically not
+the un-shocked baseline: 1 Jul - 30 Sep 2026 is the fifth month of a war that
+began on 28 February 2026, and the observation window that priced it closed in
+mid-May 2026, well inside the conflict. Treating it as the counterfactual while
+also assigning 2026Q3 a phase-in of 1.0 — which the module did before this
+revision — makes the same quarter both the unshocked denominator and the fully
+shocked numerator. See :data:`PREWAR_COUNTERFACTUAL_CAP_GBP`.
 """
 
 
@@ -440,61 +484,323 @@ of quarters and rounding it to one was part of the problem.
 """
 
 
+CAP_QUARTER_LABELS: tuple[str, ...] = quarters_of(MODELLED_WINDOW_MONTHS)
+"""The five Ofgem cap periods the modelled year touches.
+
+``2026Q1`` (March only), ``2026Q2``, ``2026Q3`` and ``2026Q4`` — the two whose
+observed caps calibrate the path — and ``2027Q1`` (January and February 2027).
+Five rather than four because a twelve-month window that does not start on a
+quarter boundary straddles five quarters; the consumption weights in
+:data:`QUARTERLY_CONSUMPTION_WEIGHTS_GAS` carry only the months actually inside
+the window, so nothing is double-counted.
+"""
+
+
+GAS_PEAK_MONTHLY_PROFILE: Mapping[str, float] = {
+    # Every month before the shock is exactly zero by construction. Carried
+    # back far enough that even a four-quarter lag's observation window for
+    # 2026Q1 (which opens in January 2025) resolves without a lookup miss.
+    **dict.fromkeys(months_between("2024-06", "2025-12"), 0.00),
+    "2026-01": 0.00,
+    "2026-02": 0.00,
+    "2026-03": 0.55,
+    "2026-04": 0.85,
+    "2026-05": 1.00,
+    "2026-06": 1.00,
+    "2026-07": 0.90,
+    "2026-08": 0.80,
+    "2026-09": 0.70,
+    "2026-10": 0.60,
+    "2026-11": 0.55,
+    "2026-12": 0.50,
+    "2027-01": 0.45,
+    "2027-02": 0.45,
+    "2027-03": 0.45,
+    "2027-04": 0.45,
+    "2027-05": 0.45,
+    "2027-06": 0.45,
+}
+"""Realised NBP wholesale gas uplift each month, as a fraction of the peak.
+
+The gas analogue of :data:`PUMP_PEAK_MONTHLY_PROFILE`, and — like it — a
+**calibration, not an estimate**. It is a piecewise-linear reading of the shape
+the brief describes: pre-war through February 2026 (the war begins on 28
+February, so February is effectively a pre-shock month and is held at exactly
+zero, which also makes this profile identical to the ``shift=0, flatten=1``
+cell of :func:`gas_profile_variant`), a fast ramp through the spring
+as Hormuz risk is priced into the forward curve, a peak across May-June 2026,
+then a slow decay through the second half that flattens out well above pre-war
+rather than returning to it. 1.00 is the +78p/therm peak the brief quotes.
+
+**Why the module needs this.** The cap does not respond to a price, it responds
+to the *average of a forward curve over an observation window*. Without a
+monthly wholesale path there is no way to say how much of the shock any given
+cap period's window contains, and the module was previously forced to assert
+that with a hand-parameterised linear ramp — which is what produced the
+contradiction of a 2026Q3 phase-in of 1.0 sitting next to a 2026Q3 cap used as
+the pre-shock base. With the path written down, each quarter's phase-in is
+derived (:func:`cap_phase_in_profile`) instead of asserted.
+
+**It is the most consequential replaceable number in the module after
+:data:`PREWAR_NBP_PENCE_PER_THERM`.** The pre-war counterfactual cap is
+identified off the *difference* between the 2026Q3 and 2026Q4 observation-window
+averages, so a flatter profile (a smaller difference) implies a larger
+conflict-attributable move and a lower counterfactual cap, and vice versa.
+``analysis/run_variants.py`` sweeps it; the sweep, not this docstring, is the
+honest statement of how much it matters.
+
+Months outside the modelled year are carried so that observation windows which
+open before it (2026Q1's and 2026Q2's, which open in 2025) and close after it
+can be evaluated without a lookup miss.
+"""
+
+
+def gas_profile_variant(
+    shift_months: int = 0,
+    flatten: float = 1.0,
+    profile: Mapping[str, float] | None = None,
+    onset_month: str = SHOCK_ONSET_MONTH,
+) -> dict[str, float]:
+    """A perturbed :data:`GAS_PEAK_MONTHLY_PROFILE`, for the identification sweep.
+
+    :func:`solve_cap_calibration` identifies the pre-war counterfactual cap off
+    the *difference* between what the 2026Q3 and 2026Q4 observation windows
+    price, and that difference is a property of this profile. The profile is a
+    calibration, so the sweep is not optional: it is the honest statement of how
+    much the headline rests on it.
+
+    Two perturbations, each with a plain-English reading:
+
+    ``shift_months``
+        The whole path arrives ``shift_months`` later (negative for earlier).
+        "The market priced Hormuz risk a month sooner than assumed."
+    ``flatten``
+        Post-onset values are pulled toward their own mean by this factor: 1.0
+        is unchanged, 0 is a completely flat post-onset path, above 1 is a
+        sharper spike. "The spike was less/more pronounced than assumed." A
+        flatter path shrinks the window difference and so implies a *lower*
+        counterfactual cap and a larger conflict-attributable move.
+
+    Pre-onset months are held at exactly zero under both, because a pre-war
+    month carrying shock is not a perturbation, it is an error.
+    """
+    table = dict(GAS_PEAK_MONTHLY_PROFILE if profile is None else profile)
+    onset = _month_index(onset_month)
+    if shift_months:
+        shifted: dict[str, float] = {}
+        for month, value in table.items():
+            idx = int(_month_index(month)) + shift_months
+            shifted[f"{idx // 12:04d}-{idx % 12 + 1:02d}"] = value
+        # Keep the original key set; months shifted off either end read as the
+        # nearest retained value so the windows still resolve.
+        table = {
+            m: shifted.get(m, 0.0 if _month_index(m) < onset else max(shifted.values()))
+            for m in table
+        }
+    post = [v for m, v in table.items() if _month_index(m) >= onset]
+    if flatten != 1.0 and post:
+        mean = sum(post) / len(post)
+        table = {
+            m: (
+                0.0
+                if _month_index(m) < onset
+                else max(0.0, mean + flatten * (v - mean))
+            )
+            for m, v in table.items()
+        }
+    else:
+        table = {m: (0.0 if _month_index(m) < onset else v) for m, v in table.items()}
+    return table
+
+
+CAP_OBSERVATION_WINDOW_MONTHS: float = 3.0
+"""Length of Ofgem's forward-curve observation window, in months.
+
+"Covers roughly the preceding quarter" (Ofgem's default-tariff-cap methodology).
+Together with the lead implied by :data:`CAP_LAG_QUARTERS` this fixes each cap
+period's window exactly, so :func:`cap_phase_in_profile` can build it rather
+than approximate it.
+"""
+
+
+def observation_window_weights(
+    quarter: str,
+    lag_quarters: float = CAP_LAG_QUARTERS,
+    window_months: float = CAP_OBSERVATION_WINDOW_MONTHS,
+) -> dict[str, float]:
+    """Calendar-month weights of the observation window pricing ``quarter``.
+
+    The window has length ``window_months`` and **closes** ``lead`` months
+    before the charge period begins, where the lead is implied by the lag::
+
+        lead = 3 * lag_quarters - window_months / 2 - 3 / 2
+
+    That is the identity behind "1.5 quarters": the window's midpoint sits
+    ``lead + window_months / 2`` months before the charge period starts, the
+    charge period's midpoint sits 1.5 months after it starts, and the
+    midpoint-to-midpoint distance is what :data:`CAP_LAG_QUARTERS` measures. At
+    ``lag_quarters = 1.5`` and a three-month window the lead is 1.5 months —
+    within a fortnight of Ofgem's stated "about seven weeks", which is the check
+    that this parameterisation is the institutional one rather than a fit.
+
+    Returns ``{"YYYY-MM": weight}`` with the weights summing to one; a window
+    that straddles a month boundary splits that month proportionally, which is
+    why the weights are not all equal.
+    """
+    if lag_quarters <= 0:
+        raise ValueError(f"lag_quarters must be positive; got {lag_quarters!r}")
+    if window_months <= 0:
+        raise ValueError(f"window_months must be positive; got {window_months!r}")
+    year, _, number = quarter.partition("Q")
+    start = int(year) * 12 + (int(number) - 1) * 3  # month index of quarter start
+    lead = 3.0 * lag_quarters - window_months / 2.0 - 1.5
+    close = start - lead
+    open_ = close - window_months
+    weights: dict[str, float] = {}
+    first = int(open_ // 1)
+    last = int(-((-close) // 1))  # ceil
+    for idx in range(first, last):
+        overlap = min(close, idx + 1.0) - max(open_, float(idx))
+        if overlap <= 0:
+            continue
+        label = f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+        weights[label] = weights.get(label, 0.0) + overlap / window_months
+    return weights
+
+
 def cap_phase_in_profile(
     lag_quarters: float = CAP_LAG_QUARTERS,
     quarters: tuple[str, ...] | None = None,
     onset_month: str = SHOCK_ONSET_MONTH,
+    profile: Mapping[str, float] | None = None,
+    window_months: float = CAP_OBSERVATION_WINDOW_MONTHS,
 ) -> tuple[float, ...]:
-    """Fraction of full steady-state cap pass-through realised in each quarter.
+    """Fraction of the full wholesale peak that each cap quarter's window sees.
 
-    A wholesale move enters the cap through an averaging observation window, so
-    it arrives spread over successive resets rather than in one step. Modelled
-    as a linear ramp from zero at the shock onset to one at ``lag_quarters``
-    after it, evaluated at each **cap quarter's midpoint**:
+    **This is the round-3 fix.** The previous version was a linear ramp from zero
+    at the shock onset to one at ``lag_quarters`` after it, evaluated at each cap
+    quarter's midpoint, and it returned ``(0.0, 0.556, 1.0, 1.0, 1.0)`` — which
+    says the 1 Jul - 30 Sep 2026 cap already carries *full* pass-through of the
+    conflict. The module then used that same quarter's observed cap as the
+    un-shocked baseline. One quarter cannot be both. Three round-3 referees found
+    it independently, and it is why the conflict-attributable domestic move came
+    out as a 6.31% Q4-versus-Q3 step and the domestic leg at £67 a year.
 
-        ``phase_in(q) = clip((midpoint(q) - onset) / lag_quarters, 0, 1)``
+    The construction here is institutional rather than parametric. Each cap
+    period is priced from a forward-curve observation window
+    (:func:`observation_window_weights`); the fraction of the shock that period's
+    cap can possibly contain is the weighted average of
+    :data:`GAS_PEAK_MONTHLY_PROFILE` over that window. Nothing is asserted about
+    "phase-in": it falls out.
 
-    This replaces the hand-written ``(0.35, 0.85, 1.00, 0.90)`` tuple, which
-    carried no relation to :data:`CAP_LAG_QUARTERS` at all. That disconnection is
-    exactly why the paper's headline (which used the tuple) and its cap-lag
-    appendix (which used the lag) reported the same specification as £304 and
-    £205. Here there is one parameter and one function, so they reconcile by
-    construction.
+    Three things change as a result, all of them for the better:
 
-    The ramp is monotone and does not unwind within the window: the old tuple's
-    fourth entry of 0.90 modelled the peak rolling out of the observation window
-    a year later, which is outside :data:`MODELLED_WINDOW_LABEL` and was in any
-    case a different claim from the lag.
+    * **2026Q3 is no longer 1.0.** Its window is mid-February to mid-May 2026, a
+      window that is a quarter pre-war and catches only the ramp, so it prices
+      about 0.63 of the peak. The July cap is a partly-shocked cap, which is what
+      it is.
+    * **The profile is no longer monotone.** 2027Q1's window (mid-August to
+      mid-November 2026) sits on the decay, so it prices less of the peak than
+      2026Q4's does. A cap that comes back down as the spike rolls out of the
+      window is a property of the institution, and the old ramp — which was
+      monotone by construction — could not represent it.
+    * **The lag stays a single swept parameter.** ``lag_quarters`` now moves the
+      window rather than the ramp, so ``results/sensitivity/cap_lag.csv`` is
+      still a sweep of the same object the headline uses.
+
+    ``onset_month`` is retained and used: any quarter whose window closes at or
+    before the shock onset is forced to exactly zero, so a profile calibration
+    that leaks a little pre-war value cannot manufacture a pre-war cap move.
+
+    The linear ramp is kept, fixed, as :func:`linear_ramp_phase_in_profile` and
+    reported as an alternative specification.
+    """
+    if quarters is None:
+        quarters = CAP_QUARTER_LABELS
+    table = GAS_PEAK_MONTHLY_PROFILE if profile is None else profile
+    onset = _month_index(onset_month)
+    out: list[float] = []
+    for quarter in quarters:
+        weights = observation_window_weights(quarter, lag_quarters, window_months)
+        missing = [m for m in weights if m not in table]
+        if missing:
+            raise KeyError(
+                f"gas profile has no entry for {missing} (observation window "
+                f"for {quarter!r}); extend GAS_PEAK_MONTHLY_PROFILE"
+            )
+        value = sum(w * table[m] for m, w in weights.items())
+        if all(_month_index(m) + 1 <= onset for m in weights):
+            value = 0.0
+        out.append(min(1.0, max(0.0, value)))
+    return tuple(out)
+
+
+def linear_ramp_phase_in_profile(
+    lag_quarters: float = CAP_LAG_QUARTERS,
+    quarters: tuple[str, ...] | None = None,
+    onset_month: str = SHOCK_ONSET_MONTH,
+    months: tuple[str, ...] | None = None,
+) -> tuple[float, ...]:
+    """The pre-round-3 linear ramp, with the partial-quarter bug fixed.
+
+    ``phase_in(q) = clip((midpoint(q) - onset) / lag_quarters, 0, 1)``, retained
+    as a labelled alternative specification so the effect of replacing it with
+    the observation-window construction is visible rather than asserted.
+
+    **The partial-quarter fix.** The ramp used to evaluate every quarter at the
+    *full* quarter's midpoint while the consumption weights carried only the
+    months actually inside the modelled window. 2026Q1 contributes March alone,
+    but was evaluated at mid-February — before the shock — and so returned 0.0.
+    Evaluated at the midpoint of its in-window months it returns 0.111, and the
+    annual gas phase-in rises from 0.797 to 0.809. ``months`` supplies the window
+    so each quarter is evaluated at the midpoint of the months of it that are
+    actually charged; it defaults to :data:`MODELLED_WINDOW_MONTHS`.
+
+    This function is *not* the default. It is a ramp in calendar time, and the
+    cap does not respond to calendar time; it responds to an averaging window.
     """
     if lag_quarters <= 0:
         raise ValueError(f"lag_quarters must be positive; got {lag_quarters!r}")
     if quarters is None:
         quarters = CAP_QUARTER_LABELS
+    if months is None:
+        months = MODELLED_WINDOW_MONTHS
     onset = _month_index(onset_month) / 3.0
+    in_window: dict[str, list[str]] = {}
+    for month in months:
+        in_window.setdefault(quarter_of(month), []).append(month)
     out: list[float] = []
     for quarter in quarters:
-        midpoint = _quarter_index(quarter) + 0.5
+        charged = in_window.get(quarter)
+        if charged:
+            # Midpoint of the months of this quarter actually inside the window.
+            midpoint = (
+                sum(_month_index(m) + 0.5 for m in charged) / len(charged)
+            ) / 3.0
+        else:
+            midpoint = _quarter_index(quarter) + 0.5
         out.append(min(1.0, max(0.0, (midpoint - onset) / lag_quarters)))
     return tuple(out)
 
 
-CAP_QUARTER_LABELS: tuple[str, ...] = quarters_of(MODELLED_WINDOW_MONTHS)
-"""The five Ofgem cap periods the modelled year touches.
+CAP_PHASE_IN_PROFILE: tuple[float, ...] = cap_phase_in_profile()
+"""Per-quarter share of the wholesale peak the cap's observation window prices.
 
-``2026Q1`` (March only), ``2026Q2``, ``2026Q3``, ``2026Q4`` (the Ofgem-confirmed
-£1,723 anchor) and ``2027Q1`` (January and February 2027). Five rather than four
-because a twelve-month window that does not start on a quarter boundary
-straddles five quarters; the consumption weights in
-:data:`QUARTERLY_CONSUMPTION_WEIGHTS_GAS` carry only the months actually inside
-the window, so nothing is double-counted.
+``(0.000, 0.000, 0.633, 0.933, 0.658)`` at :data:`CAP_LAG_QUARTERS` = 1.5:
+nothing in 2026Q1 (its window closed in November 2025), nothing in 2026Q2
+(its window closes in mid-February 2026, before the shock), about two thirds
+in 2026Q3, nearly all of it in 2026Q4, and back to two thirds
+in 2027Q1 as the spike rolls out of the window.
+
+The pre-round-3 value was ``(0.0, 0.556, 1.0, 1.0, 1.0)``. The difference
+between those two tuples is the paper's headline.
 """
 
-CAP_PHASE_IN_PROFILE: tuple[float, ...] = cap_phase_in_profile()
-"""Per-quarter realised fraction of full pass-through, derived from the lag.
+LINEAR_RAMP_PHASE_IN_PROFILE: tuple[float, ...] = linear_ramp_phase_in_profile()
+"""The alternative-specification ramp, with the partial-quarter fix applied.
 
-``(0.0, 0.556, 1.0, 1.0, 1.0)`` at :data:`CAP_LAG_QUARTERS` = 1.5: nothing in the
-quarter the shock lands in (the observation window for 2026Q1 closed before the
-war began), a little over half by the 2026Q2 reset, full from 2026Q3 on.
+``(0.111, 0.556, 1.0, 1.0, 1.0)``. The leading 0.111 is the fix: 2026Q1 carries
+March only, and March is post-onset.
 """
 
 QUARTERLY_CONSUMPTION_WEIGHTS_GAS: tuple[float, ...] = quarterly_consumption_weights(
@@ -610,71 +916,367 @@ the price of the external cap anchor, and neither can have both. Both are run.
 # ---------------------------------------------------------------------------
 
 OFGEM_CAP_OCT_2026_GBP: float = 1_723.0
-"""Ofgem default tariff cap for 1 Oct - 31 Dec 2026, **confirmed 26 Aug 2026**.
+"""**Observed** Ofgem default tariff cap, 1 Oct - 31 Dec 2026, confirmed 26 Aug 2026.
 
 Typical dual-fuel direct debit on the revised (1 Jul 2026) TDCV basis, the same
-basis as :data:`BASELINE_CAP_GBP`. This supersedes the Cornwall Insight forecast
-of £1,729 (19 Aug 2026) that the scenario previously calibrated to
-(``docs/FIXES.md`` C15): a confirmed cap is a better anchor than a forecast, and
-the difference is worth £6.
+basis as :data:`OFGEM_CAP_JUL_2026_GBP`. This supersedes the Cornwall Insight
+forecast of £1,729 (19 Aug 2026): a confirmed cap is a better anchor than a
+forecast, and the difference is worth £6.
+
+Like the July cap this is an observation of a *shocked* cap. Together the two
+observations identify the calibration (:func:`solve_cap_calibration`); neither
+is the counterfactual.
 """
 
 OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP: float = 45.0
 """Cap reduction from Ofgem's temporary removal of VAT on electricity, 1 Oct 2026.
 
 The October 2026 cap is held roughly £45 lower by a VAT measure that has nothing
-to do with the conflict, and that breaks comparability with the July-September
-cap the anchor is measured against. The conflict-attributable move is therefore
-``(1723 + 45) / 1663 - 1``, not ``1723 / 1663 - 1``. Omitting it would attribute
-a tax cut to the war and understate the domestic leg by roughly two fifths.
+to do with the conflict, so the conflict-attributable October cap level is
+``1723 + 45 = 1768``. Omitting it would attribute a tax cut to the war.
 
 This also interacts directly with the scored VAT zero-rating instrument, since
 part of that instrument may already be in the baseline; see
-``docs/VALIDATION.md`` and ``docs/FIXES.md`` C15.
+``docs/VALIDATION.md``.
 """
 
 CAP_ANCHOR_QUARTER: str = "2026Q4"
-"""The cap quarter :data:`CAP_ANCHOR_PCT` prices, and the anchor is imposed at."""
+"""The cap quarter :data:`CAP_ANCHOR_PCT` prices."""
 
-CAP_ANCHOR_PCT: float = (
-    OFGEM_CAP_OCT_2026_GBP + OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
-) / BASELINE_CAP_GBP - 1.0
-"""Conflict-attributable October-2026 cap move: +6.31% on the July-September cap."""
+CAP_BASE_QUARTER: str = "2026Q3"
+"""The second observed cap quarter. **Not** the pre-war base — see below."""
 
 
-def sustained_fraction_for_cap_anchor(
-    gas_pct_change: float,
-    phase_in_at_anchor: float,
-    target_cap_pct: float = CAP_ANCHOR_PCT,
+@dataclass(frozen=True, slots=True)
+class CapCalibration:
+    """Pre-war counterfactual cap and sustained fraction, solved jointly.
+
+    Attributes
+    ----------
+    prewar_cap_gbp:
+        The counterfactual cap: what the typical dual-fuel cap would have been,
+        on the revised TDCV basis, had the conflict not happened.
+    sustained_fraction:
+        Fraction of the quoted wholesale gas *peak* that is sustained long
+        enough to be what the observation windows average to. Multiplies
+        :data:`GAS_PEAK_MONTHLY_PROFILE`, which already carries the shape.
+    steady_state_dual_fuel_pct:
+        ``sustained_fraction x gas_pct_change x bill_level_pass_through`` — the
+        proportional dual-fuel cap move at full pass-through.
+    modelled_base_cap_gbp, modelled_anchor_cap_gbp:
+        The modelled caps in the two observed quarters. Equal to the observed
+        caps by construction; carried so the identity can be *asserted* in
+        ``results/`` rather than believed.
+    """
+
+    prewar_cap_gbp: float
+    sustained_fraction: float
+    steady_state_dual_fuel_pct: float
+    modelled_base_cap_gbp: float
+    modelled_anchor_cap_gbp: float
+
+
+def bill_level_pass_through(
     *,
     wholesale_share_gas_bill: float = WHOLESALE_SHARE_GAS_BILL,
     wholesale_share_electricity_bill: float = WHOLESALE_SHARE_ELECTRICITY_BILL,
     marginal_pricing_share: float = MARGINAL_PRICING_SHARE,
     gas_share_of_dual_fuel_bill: float = GAS_SHARE_OF_DUAL_FUEL_BILL,
 ) -> float:
-    """Solve for the sustained fraction that reproduces the cap anchor exactly.
+    """The bill-level pass-through coefficient the code actually implements.
 
-    The cap move in the anchor quarter is linear in the sustained fraction::
+    ``w_g x ws_gas + (1 - w_g) x mps x ws_elec``. On the module defaults
+    ``0.45 x 0.45 + 0.55 x 0.85 x 0.35 = 0.3661``: a +1% wholesale gas move
+    raises the typical dual-fuel cap by 0.366%.
 
-        cap_pct = s x phase_in x gas_pct x [ w_g x ws_gas
-                                             + (1 - w_g) x mps x ws_elec ]
-
-    so the fraction is a division, not a search. Making it a *function* rather
-    than a literal is the point: ``docs/FIXES.md`` A4 records that the anchor
-    identifies only the **product** of the sustained fraction and the phase-in
-    weight at the anchor quarter, and writing 0.36 as a constant while the
-    phase-in profile changed underneath it silently broke the anchor. Here the
-    anchor holds by construction for any lag, any window and any bill-share
-    assumption, and the sweep in ``analysis/run_variants.py`` sweeps the split
-    with the product held.
+    Round-3 finding 4. Equation (1) of the paper states a pass-through of
+    ``phi ~ 0.45``, which is :data:`WHOLESALE_SHARE_GAS_BILL` — the *gas-bill*
+    coefficient, not the bill-level one. They differ by the electricity half of
+    the bill being twice-attenuated. Naming the implemented coefficient here
+    means the prose can quote it instead of quoting a component of it.
     """
-    bracket = (
+    return (
         gas_share_of_dual_fuel_bill * wholesale_share_gas_bill
         + (1.0 - gas_share_of_dual_fuel_bill)
         * marginal_pricing_share
         * wholesale_share_electricity_bill
     )
-    denominator = bracket * gas_pct_change * phase_in_at_anchor
+
+
+def electricity_to_gas_pass_through_ratio(
+    *,
+    wholesale_share_gas_bill: float = WHOLESALE_SHARE_GAS_BILL,
+    wholesale_share_electricity_bill: float = WHOLESALE_SHARE_ELECTRICITY_BILL,
+    marginal_pricing_share: float = MARGINAL_PRICING_SHARE,
+) -> float:
+    """``phi_elec / phi_gas`` as implemented: ``mps x ws_elec / ws_gas``.
+
+    Round-3 finding 4, second half. The paper writes the reduced form as
+    ``phi_elec = psi . phi_gas``, i.e. the electricity retail shock is the gas
+    retail shock attenuated by the marginal-pricing share alone. The code applies
+    **two** independent attenuations — the marginal-pricing share *and*
+    electricity's smaller wholesale cost share — so the implemented ratio is
+    ``0.85 x 0.35 / 0.45 = 0.6611``, not ``psi = 0.85``. That is a deliberate and
+    documented modelling choice (design rule 1); it is simply not the equation
+    the paper prints.
+    """
+    if wholesale_share_gas_bill <= 0:
+        raise ValueError("wholesale_share_gas_bill must be positive")
+    return (
+        marginal_pricing_share
+        * wholesale_share_electricity_bill
+        / wholesale_share_gas_bill
+    )
+
+
+BILL_LEVEL_PASS_THROUGH: float = bill_level_pass_through()
+"""The implemented bill-level pass-through coefficient: 0.3661. See above."""
+
+ELECTRICITY_TO_GAS_PASS_THROUGH_RATIO: float = electricity_to_gas_pass_through_ratio()
+"""The implemented ``phi_elec / phi_gas``: 0.6611, not ``psi`` = 0.85. See above."""
+
+
+def solve_cap_calibration(
+    gas_pct_change: float,
+    phase_in_at_base: float,
+    phase_in_at_anchor: float,
+    *,
+    observed_base_cap_gbp: float = OFGEM_CAP_JUL_2026_GBP,
+    observed_anchor_cap_gbp: float = OFGEM_CAP_OCT_2026_GBP,
+    anchor_vat_relief_gbp: float = OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP,
+    **shares: float,
+) -> CapCalibration:
+    """Solve jointly for the pre-war counterfactual cap and the sustained fraction.
+
+    **The round-3 root-cause fix.** The module used to take the observed
+    July-September 2026 cap as the un-shocked baseline and read the whole
+    conflict-attributable domestic move off the October-versus-July *step*. Both
+    caps are post-shock, so that step is the difference between two partly
+    shocked quarters, not the shock. The counterfactual has to be constructed.
+
+    It is constructed here, and it is exactly identified. Write ``C0`` for the
+    pre-war counterfactual cap and ``y`` for the steady-state proportional
+    dual-fuel cap move at full pass-through. Each observed cap is the
+    counterfactual scaled by the share of that move its own observation window
+    prices::
+
+        1663        = C0 x (1 + w_base   x y)      # 1 Jul - 30 Sep 2026
+        1723 + 45   = C0 x (1 + w_anchor x y)      # 1 Oct - 31 Dec 2026
+
+    Two equations, two unknowns, and ``w_base`` and ``w_anchor`` come from
+    :func:`cap_phase_in_profile` — the observation windows, not a free
+    parameter. Dividing the second by the first eliminates ``C0``::
+
+        y  = (k - 1) / (w_anchor - k x w_base),   k = (1723 + 45) / 1663
+        C0 = 1663 / (1 + w_base x y)
+
+    and the sustained fraction follows as ``y / (gas_pct x phi_bill)`` with
+    ``phi_bill`` from :func:`bill_level_pass_through`.
+
+    On the defaults this gives ``C0 = £1,441`` and a sustained fraction of
+    ``0.765`` — against the pre-revision £1,663 and 0.199. A referee working the
+    same correction by hand on the old profile got £1,564 and a doubling of the
+    domestic leg; this construction, which also replaces the linear ramp,
+    goes further in the same direction. Both say the same thing about the paper:
+    the domestic leg was understated by a factor of two or more and the
+    motor-fuel share correspondingly overstated.
+
+    **What identifies it, and how fragile that is.** ``C0`` is identified off
+    the *difference* ``w_anchor - w_base``, i.e. off how much more of the shock
+    the October window prices than the July one. That difference is a property of
+    :data:`GAS_PEAK_MONTHLY_PROFILE`, which is a calibration. A flatter monthly
+    path shrinks the difference and pushes ``C0`` down; a steeper one pushes it
+    up. This is a real identification weakness, it is not hidden, and
+    ``analysis/run_variants.py`` sweeps the profile so the range is in
+    ``results/`` rather than in a caveat.
+
+    Raises
+    ------
+    ValueError
+        If the windows cannot separate the two observations (``w_anchor`` too
+        close to ``k x w_base``), or if the implied sustained fraction is outside
+        ``(0, 1]``, or if the implied counterfactual is not below both observed
+        caps. Every one of those is a statement that the calibration has failed,
+        and the module refuses to return a number that would silently encode it.
+    """
+    phi = bill_level_pass_through(**shares)
+    k = (observed_anchor_cap_gbp + anchor_vat_relief_gbp) / observed_base_cap_gbp
+    denominator = phase_in_at_anchor - k * phase_in_at_base
+    if abs(denominator) < 1e-6:
+        raise ValueError(
+            "the two cap observations are not separated by their observation "
+            f"windows (w_anchor={phase_in_at_anchor!r}, w_base={phase_in_at_base!r}, "
+            f"ratio={k!r}): the pre-war counterfactual cap is not identified. "
+            "This is exactly the degeneracy the pre-round-3 profile hit by "
+            "assigning both quarters a phase-in of 1.0."
+        )
+    y = (k - 1.0) / denominator
+    if y <= 0:
+        raise ValueError(
+            "the pre-war counterfactual cap is not identified: the observation "
+            f"windows imply a non-positive steady-state cap move ({y!r}). This "
+            "happens when the later window prices no more of the shock than the "
+            "earlier one — the degeneracy the pre-round-3 profile hit by giving "
+            "2026Q3 and 2026Q4 the same phase-in of 1.0."
+        )
+    prewar = observed_base_cap_gbp / (1.0 + phase_in_at_base * y)
+    if not 0 < prewar < observed_base_cap_gbp:
+        raise ValueError(
+            f"implied pre-war counterfactual cap £{prewar:.0f} is not strictly "
+            f"below the observed July cap £{observed_base_cap_gbp:.0f}"
+        )
+    if gas_pct_change <= 0 or phi <= 0:
+        raise ValueError("gas_pct_change and the bill pass-through must be positive")
+    sustained = y / (gas_pct_change * phi)
+    if not 0 < sustained <= 1.0:
+        raise ValueError(
+            f"implied sustained fraction {sustained!r} is outside (0, 1]; the "
+            "cap observations cannot be reproduced by damping the quoted peak"
+        )
+    return CapCalibration(
+        prewar_cap_gbp=prewar,
+        sustained_fraction=sustained,
+        steady_state_dual_fuel_pct=y,
+        modelled_base_cap_gbp=prewar * (1.0 + phase_in_at_base * y),
+        modelled_anchor_cap_gbp=prewar * (1.0 + phase_in_at_anchor * y),
+    )
+
+
+#: Realised 2026 wholesale gas peak, +78p/therm on the 90p pre-war reference.
+REALISED_GAS_PCT_CHANGE: float = 78.0 / PREWAR_NBP_PENCE_PER_THERM
+
+_BASE_INDEX = CAP_QUARTER_LABELS.index(CAP_BASE_QUARTER)
+_ANCHOR_INDEX = CAP_QUARTER_LABELS.index(CAP_ANCHOR_QUARTER)
+
+REALISED_CAP_CALIBRATION: CapCalibration = solve_cap_calibration(
+    REALISED_GAS_PCT_CHANGE,
+    CAP_PHASE_IN_PROFILE[_BASE_INDEX],
+    CAP_PHASE_IN_PROFILE[_ANCHOR_INDEX],
+)
+"""The joint solution: pre-war counterfactual cap and sustained fraction."""
+
+PREWAR_COUNTERFACTUAL_CAP_GBP: float = REALISED_CAP_CALIBRATION.prewar_cap_gbp
+"""**The pre-war counterfactual cap, £1,441/yr.** The paper's domestic baseline.
+
+What it is
+----------
+The typical dual-fuel default-tariff cap, on the revised (1 Jul 2026) TDCV
+basis, that would have prevailed had the February-2026 conflict not happened —
+a cap priced off a *pre-shock* forward curve. It is not observed, because the
+counterfactual is not observed; it is constructed, and the construction is
+:func:`solve_cap_calibration`, one division from two published caps and the two
+observation windows that priced them.
+
+Why it exists
+-------------
+Because the alternative was a contradiction. Before this revision the module
+used the observed 1 Jul - 30 Sep 2026 cap (£1,663) as the un-shocked base while
+:func:`cap_phase_in_profile` assigned that same quarter a phase-in of 1.0. The
+conflict-attributable move was therefore a Q4-versus-Q3 step of +6.31%, the
+domestic leg came out at **£67 per household per year** for a shock that took UK
+wholesale gas 78p/therm above pre-war, and understating the domestic leg
+mechanically inflated motor fuel's share of the total loss to 75.6%.
+
+What it implies
+---------------
+The conflict-attributable October-2026 cap move is ``1768 / 1441 - 1``, about
+**+22.7%**, not +6.31%; the July cap already carried +15.4% of it. The domestic
+leg roughly trebles and motor fuel's share falls below a half.
+
+What would move it
+------------------
+:data:`GAS_PEAK_MONTHLY_PROFILE`, mostly — see :func:`solve_cap_calibration` on
+identification — and then :data:`CAP_LAG_QUARTERS` and the bill shares. All are
+swept.
+"""
+
+BASELINE_CAP_GBP: float = PREWAR_COUNTERFACTUAL_CAP_GBP
+"""Alias for :data:`PREWAR_COUNTERFACTUAL_CAP_GBP`, the cap levels are built from.
+
+Retained under its old name because it is the field name on :class:`CapStep`.
+Its *value* changed with this revision: it used to be the observed £1,663 July
+cap, which is now :data:`OFGEM_CAP_JUL_2026_GBP`.
+"""
+
+REALISED_SUSTAINED_FRACTION: float = REALISED_CAP_CALIBRATION.sustained_fraction
+"""Peak-to-sustained damping for the realised 2026 gas path: 0.765.
+
+The brief's realised gas figure is a **peak**. This is the fraction of it that
+is sustained long enough to be what the cap's observation windows average to,
+solved jointly with :data:`PREWAR_COUNTERFACTUAL_CAP_GBP` so that the modelled
+cap path reproduces *both* published caps.
+
+**It is not comparable to the old 0.199.** That number was doing two jobs: it
+carried the genuine peak-to-sustained damping *and* it absorbed the whole error
+from treating a shocked quarter as the counterfactual, which is why it had to be
+so small. Split properly, the shape of the damping lives in
+:data:`GAS_PEAK_MONTHLY_PROFILE` and the level in this fraction, and the level
+is 0.765 — close to the pump leg's 0.650 rather than a third of it. That the two
+legs' damping fractions turn out to be *similar* once the baseline error is
+removed is itself a result: the paper's motor-fuel majority depended on their
+ratio, and most of that ratio was the bug.
+
+Forward-looking scenarios specified as *sustained* levels (the NIESR pair) use
+1.0 and are not calibrated to the cap.
+"""
+
+CAP_ANCHOR_PCT: float = (
+    OFGEM_CAP_OCT_2026_GBP + OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
+) / PREWAR_COUNTERFACTUAL_CAP_GBP - 1.0
+"""Conflict-attributable October-2026 cap move: **+22.7%** on the counterfactual.
+
+Was +6.31%, measured against the observed July cap. That figure was a
+Q4-versus-Q3 step between two shocked quarters being reported as the whole
+conflict-attributable domestic move.
+"""
+
+CAP_BASE_PCT: float = OFGEM_CAP_JUL_2026_GBP / PREWAR_COUNTERFACTUAL_CAP_GBP - 1.0
+"""Conflict-attributable July-2026 cap move: +15.4% on the counterfactual.
+
+The part of the shock the old specification silently assigned to the baseline.
+"""
+
+CAP_VALIDATION: Mapping[str, float] = {
+    "observed_jul_2026_gbp": OFGEM_CAP_JUL_2026_GBP,
+    "modelled_jul_2026_gbp": REALISED_CAP_CALIBRATION.modelled_base_cap_gbp,
+    "observed_oct_2026_vat_adjusted_gbp": (
+        OFGEM_CAP_OCT_2026_GBP + OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
+    ),
+    "modelled_oct_2026_gbp": REALISED_CAP_CALIBRATION.modelled_anchor_cap_gbp,
+    "prewar_counterfactual_gbp": PREWAR_COUNTERFACTUAL_CAP_GBP,
+    "sustained_fraction": REALISED_SUSTAINED_FRACTION,
+    "steady_state_dual_fuel_pct": (REALISED_CAP_CALIBRATION.steady_state_dual_fuel_pct),
+}
+"""The observed caps and the caps the calibrated path produces, side by side.
+
+The two pairs agree to floating-point, by construction — the calibration is
+exactly identified, so this is an identity check rather than a fit. It is
+persisted anyway: an identity that holds by construction is precisely the thing
+that breaks silently when someone changes a share or a profile, and the tests
+assert it.
+"""
+
+
+def sustained_fraction_for_cap_anchor(
+    gas_pct_change: float,
+    phase_in_at_anchor: float,
+    target_cap_pct: float = CAP_ANCHOR_PCT,
+    **shares: float,
+) -> float:
+    """Sustained fraction reproducing ``target_cap_pct`` at the anchor quarter.
+
+    The single-observation solver, retained because the *symmetric* scenario and
+    the appendix both need to ask "what fraction would reproduce this one cap
+    move, holding the counterfactual fixed?". It is no longer how the central
+    case is calibrated: with a pre-war counterfactual to identify, one
+    observation is not enough, and :func:`solve_cap_calibration` uses both.
+
+    ``target_cap_pct`` defaults to :data:`CAP_ANCHOR_PCT`, which is now measured
+    against :data:`PREWAR_COUNTERFACTUAL_CAP_GBP` rather than against a shocked
+    quarter, so this function and the joint solver agree by construction.
+    """
+    phi = bill_level_pass_through(**shares)
+    denominator = phi * gas_pct_change * phase_in_at_anchor
     if denominator <= 0:
         raise ValueError(
             "cannot calibrate the sustained fraction: the anchor quarter carries "
@@ -682,32 +1284,6 @@ def sustained_fraction_for_cap_anchor(
             f"gas_pct_change={gas_pct_change!r})"
         )
     return target_cap_pct / denominator
-
-
-#: Realised 2026 wholesale gas peak, +78p/therm on the 90p pre-war reference.
-REALISED_GAS_PCT_CHANGE: float = 78.0 / PREWAR_NBP_PENCE_PER_THERM
-
-REALISED_SUSTAINED_FRACTION: float = sustained_fraction_for_cap_anchor(
-    REALISED_GAS_PCT_CHANGE,
-    CAP_PHASE_IN_PROFILE[CAP_QUARTER_LABELS.index(CAP_ANCHOR_QUARTER)],
-)
-"""Peak-to-cap-relevant damping for the realised 2026 path: 0.199.
-
-The brief's realised figures are **peaks**; the cap responds to an averaged
-forward window, not a spike, so only part of a peak reaches retail. This is the
-fraction that makes the modelled 2026Q4 cap step reproduce
-:data:`CAP_ANCHOR_PCT` — Ofgem's confirmed October-2026 cap, adjusted for the
-unrelated electricity VAT relief.
-
-**It is not comparable to the old 0.36.** That number was calibrated against a
-phase-in weight of 0.35 in the anchor quarter, so what the anchor pinned was the
-product 0.126. Under :data:`CAP_LAG_QUARTERS` = 1.5 the cap has reached full
-pass-through by October 2026, so the anchor quarter's phase-in weight is 1.0 and
-the same anchor implies a fraction of 0.199 — a *larger* product (0.199 against
-0.126), because the anchor target also moved from Cornwall's +4.0% to Ofgem's
-VAT-adjusted +6.31%. Forward-looking scenarios specified as *sustained* levels
-(the NIESR pair) use 1.0 and are not anchored.
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1189,13 +1765,17 @@ _REALISED_SOURCE = (
     "NBP forward curve and DESNZ weekly road fuel prices: UK gas peaked "
     "+78p/therm above pre-war (against +300p/therm in 2022); Brent peaked "
     "+$42/bbl (+57%), comparable to 2022's +$35/bbl; petrol +20%, diesel +36%. "
-    "Cap anchors: Ofgem default tariff cap £1,663/yr for 1 Jul-30 Sep 2026 and "
-    "£1,723/yr for 1 Oct-31 Dec 2026 (confirmed 26 Aug 2026), both on the "
+    "Observed caps: Ofgem default tariff cap £1,663/yr for 1 Jul-30 Sep 2026 "
+    "and £1,723/yr for 1 Oct-31 Dec 2026 (confirmed 26 Aug 2026), both on the "
     "revised TDCV basis; the October cap is held about £45 lower by Ofgem's "
-    "temporary removal of VAT on electricity from 1 Oct 2026, so the "
-    "conflict-attributable move is +6.31%, not +3.61%. This supersedes the "
-    "Cornwall Insight forecast of £1,729 (19 Aug 2026) the scenario previously "
-    "calibrated to."
+    "temporary removal of VAT on electricity from 1 Oct 2026, so its "
+    "conflict-comparable level is £1,768. BOTH are post-shock observations and "
+    "neither is the counterfactual: they jointly identify the pre-war "
+    "counterfactual cap of £1,441 (PREWAR_COUNTERFACTUAL_CAP_GBP) and the "
+    "sustained fraction, via solve_cap_calibration. The conflict-attributable "
+    "October move is +22.7% against that counterfactual; the +6.31% this "
+    "scenario previously used was the October-versus-July step between two "
+    "already-shocked quarters."
 )
 
 
@@ -1267,9 +1847,10 @@ SCENARIOS: Mapping[str, Scenario] = {
             "Because every quoted figure is a *peak* rather than a sustained "
             "level, both channels are damped to the part of the peak that "
             "actually reaches households over the modelled year: the gas leg "
-            "by a fraction calibrated to reproduce Ofgem's confirmed £1,723 "
-            "October 2026 cap (+6.31% once its unrelated electricity VAT relief "
-            "is added back), and the pump leg by a peak-to-window-average "
+            "by a fraction solved jointly with the pre-war counterfactual cap "
+            "so that the modelled path reproduces BOTH published caps (£1,663 "
+            "for July-September and £1,768 VAT-adjusted for October-December), "
+            "and the pump leg by a peak-to-window-average "
             "fraction derived over the same twelve months. The undamped-pump "
             "variant is "
             "reported separately as realised_2026_peak_fuel."
@@ -1290,15 +1871,19 @@ SCENARIOS: Mapping[str, Scenario] = {
             "window, MODELLED_WINDOW_LABEL (March 2026 - February 2027): the "
             "cap phase-in weights, the seasonal consumption weights and the "
             "pump damping fraction are all derived from it. "
-            "sustained_fraction = 0.199 is calibrated, not estimated: it is "
-            "solved by sustained_fraction_for_cap_anchor so the 2026Q4 cap step "
-            "reproduces Ofgem's confirmed £1,723 October cap once the unrelated "
-            "electricity VAT relief (about £45) is added back. "
+            "sustained_fraction = 0.765 is calibrated, not estimated: it is "
+            "solved by solve_cap_calibration jointly with the pre-war "
+            "counterfactual cap of £1,441, so that the modelled cap path "
+            "reproduces both published 2026 caps rather than treating one of "
+            "them as the un-shocked base. It replaces 0.199, which was small "
+            "chiefly because it was absorbing that baseline error. "
             "pump_sustained_fraction = 0.650 is likewise a calibration, the mean "
             "of PUMP_PEAK_MONTHLY_PROFILE over the same twelve months. The two "
-            "fractions are still different objects - one is a cap-window share, "
-            "one a peak-to-average - but they are now measured over the same "
-            "year, which the round-2 referees found they were not. The earlier "
+            "fractions are still different objects - one is a peak-to-sustained "
+            "level feeding a forward-curve window, one a peak-to-average - but "
+            "they are now measured over the same year AND are close to one "
+            "another, where before they differed by a factor of three. The "
+            "earlier "
             "specification applied the pump peaks undamped for a full year while "
             "damping gas; that is a claim about lag, not duration, and it is "
             "retained as realised_2026_peak_fuel, an explicit upper bound on the "
@@ -1311,7 +1896,9 @@ SCENARIOS: Mapping[str, Scenario] = {
         description=(
             "Identical to realised_2026 in every respect except that the "
             "observed peak pump moves (petrol +20%, diesel +36%) are applied "
-            "undamped for the full calendar year. This is not a central "
+            "undamped across the whole modelled year (March 2026 - February "
+            "2027, MODELLED_WINDOW_LABEL - not a calendar year). This is not a "
+            "central "
             "estimate: it is an explicit **upper bound** on the motor-fuel "
             "channel, and on motor fuel's share of the total loss. It is "
             "reported so the sensitivity of the paper's headline finding to "
@@ -1328,7 +1915,8 @@ SCENARIOS: Mapping[str, Scenario] = {
         source=_REALISED_SOURCE,
         notes=(
             "Charging households the peak pump price for twelve months while "
-            "damping the gas peak to 0.36 is internally inconsistent, and "
+            "damping the gas peak to REALISED_SUSTAINED_FRACTION is internally "
+            "inconsistent, and "
             "docs/VALIDATION.md Check 2b rejects it as a central case. It is "
             "kept only as a bound. Any number taken from this scenario must be "
             "reported with the undamped-peak assumption stated in the same "
@@ -1342,8 +1930,8 @@ SCENARIOS: Mapping[str, Scenario] = {
             "Identical to realised_2026 except that a single common "
             "peak-to-annual-average damping fraction "
             "(SYMMETRIC_SUSTAINED_FRACTION = 0.650) is applied to both the "
-            "wholesale gas leg and the pump leg, instead of 0.199 for gas and "
-            "0.650 for fuel. This is a first-class specification, not a "
+            "wholesale gas leg and the pump leg, instead of the solved 0.765 for "
+            "gas and 0.650 for fuel. This is a first-class specification, not a "
             "footnote: motor fuel's share of the modelled loss depends only on "
             "the ratio of the two fractions, so the asymmetric split is exactly "
             "what generates the paper's motor-fuel majority. At any common "
@@ -1361,15 +1949,15 @@ SCENARIOS: Mapping[str, Scenario] = {
         source=_REALISED_SOURCE,
         notes=(
             "The two fractions in realised_2026 are calibrated to different "
-            "instruments — 0.199 to Ofgem's confirmed October-2026 cap via the "
-            "cap's forward-observation window, 0.650 to a monthly profile of the "
+            "instruments — 0.765 to the two published 2026 caps jointly with the "
+            "pre-war counterfactual, 0.650 to a monthly profile of the "
             "realised pump path — and the paper's central claim "
             "turns on their ratio rather than on either level. This scenario "
             "removes the ratio by deriving the gas fraction the same way as the "
             "pump one (the twelve-month profile arithmetic in "
             "SYMMETRIC_SUSTAINED_FRACTION), and it therefore **breaks the "
-            "Ofgem October-2026 cap anchor**: the implied 2026Q4 cap step is "
-            "far larger than the confirmed +6.31%. That is the honest "
+            "Ofgem cap calibration**: the implied 2026Q4 cap is "
+            "no longer reproduces the published October cap. That is the honest "
             "trade-off and it is why both "
             "specifications are reported rather than one being chosen. Note the "
             "fuel share here is not literally 44.5%, because the main "
@@ -1384,6 +1972,56 @@ SCENARIOS: Mapping[str, Scenario] = {
 ``niesr_baseline`` and ``niesr_adverse`` are the brief's forward-looking pair;
 ``realised_2026`` is the observed path and is the paper's central case.
 """
+
+
+def on_window(scenario: Scenario, months: tuple[str, ...]) -> Scenario:
+    """Re-annualise ``scenario`` onto a different twelve-month window.
+
+    Round-3 finding 10. ``realised_2026_peak_fuel`` — the explicit upper bound on
+    the motor-fuel channel — was only ever run on
+    :data:`MODELLED_WINDOW_LABEL`, while the Resolution Foundation's £11bn
+    comparator is **calendar 2026**. Only the central case was re-annualised onto
+    the RF window, so the bracket the paper states around £11bn mixed windows: a
+    lower end on one twelve months and an upper end on another. Any scenario can
+    now be moved onto any window, so the bracketing can be stated like-for-like.
+
+    Everything that depends on the window is rebuilt from it and nothing is
+    carried over: the cap quarters, the seasonal consumption weights of each
+    fuel, the observation-window phase-in profile and the pump damping fraction.
+    The calibration (``sustained_fraction``) is *not* re-solved — it is a
+    property of the wholesale path and the cap's observation windows, not of the
+    window a household's year is measured over — so the modelled cap path still
+    reproduces both published caps.
+
+    Note that a window which is not a whole heating cycle no longer has
+    consumption weights summing to one before normalisation;
+    :func:`quarterly_consumption_weights` normalises, which is the right
+    treatment for an *average* price but means the resulting annual figure is a
+    twelve-month-equivalent rather than a total over a partial window.
+    """
+    quarters = quarters_of(months)
+    return dataclasses.replace(
+        scenario,
+        key=f"{scenario.key}_{months[0][:4]}",
+        quarter_labels=quarters,
+        pass_through=dataclasses.replace(
+            scenario.pass_through,
+            phase_in_profile=cap_phase_in_profile(
+                scenario.pass_through.lag_quarters, quarters
+            ),
+            pump_sustained_fraction=(
+                pump_sustained_fraction(months)
+                if scenario.pass_through.pump_sustained_fraction < 1.0
+                else 1.0
+            ),
+            consumption_weights_gas=quarterly_consumption_weights(
+                months, MONTHLY_CONSUMPTION_WEIGHTS_GAS
+            ),
+            consumption_weights_electricity=quarterly_consumption_weights(
+                months, MONTHLY_CONSUMPTION_WEIGHTS_ELECTRICITY
+            ),
+        ),
+    )
 
 
 def scenario_keys() -> tuple[str, ...]:

@@ -69,13 +69,16 @@ from pathlib import Path
 import pandas as pd
 
 from analysis.run_incidence import RESULTS, _asdict, _load_env, dataset_path
+from uk_iran_conflict import incidence as inc
 from uk_iran_conflict import policies as pol
 from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.incidence import (
     Baseline,
     ScenarioResult,
     apply_calibration,
+    decile_concept_audit,
     load_baseline,
+    motor_fuel_margins,
     run_scenario,
     wmean,
     wquantile,
@@ -85,18 +88,86 @@ from uk_iran_conflict.incidence import (
 #: Index of the cap quarter the Ofgem October-2026 anchor prices.
 ANCHOR_INDEX = scen.CAP_QUARTER_LABELS.index(scen.CAP_ANCHOR_QUARTER)
 
-#: The product the cap anchor actually identifies: ``sustained_fraction`` x the
-#: phase-in weight **in the anchor quarter**. Only the product is pinned
-#: (``docs/FIXES.md`` A4), which is why the split is swept below.
+#: The product the October cap identifies **given the counterfactual**:
+#: ``sustained_fraction`` x the phase-in weight in the anchor quarter, 0.714.
 #:
-#: This used to read ``CAP_PHASE_IN_PROFILE[0]`` — the *first* modelled quarter —
-#: which was the anchor quarter only because the modelled window happened to
-#: begin at 2026Q4. On the shock-year window the first quarter is 2026Q1, whose
-#: phase-in weight is zero, and the old expression would have silently pinned
-#: the product at zero.
+#: Round-3 changed what this is. The counterfactual cap is no longer a shocked
+#: observation, so the two published caps jointly identify the counterfactual
+#: *and* the sustained fraction (``scenarios.solve_cap_calibration``); holding
+#: this product fixed and sweeping its split is now the *conditional*
+#: identification question — how much of the cap move is a large sustained
+#: fraction arriving slowly versus a small one arriving fast — with the
+#: counterfactual held at the solved value.
 CAP_ANCHOR_PRODUCT = (
     scen.REALISED_SUSTAINED_FRACTION * scen.CAP_PHASE_IN_PROFILE[ANCHOR_INDEX]
 )
+
+
+def _relinear_ramp() -> scen.Scenario:
+    """``realised_2026`` on the linear-ramp phase-in, re-solved end to end.
+
+    The point of this variant is to *separate* the two things round-3 changed.
+    The baseline fix (a constructed pre-war counterfactual instead of a shocked
+    observation) and the phase-in fix (observation windows instead of a ramp in
+    calendar time) both move the domestic leg, and a reader is entitled to know
+    which did the work. Here the ramp comes back — with its partial-quarter bug
+    fixed — and the counterfactual cap and sustained fraction are re-solved on
+    *its* profile, so the only difference from the main specification is the
+    phase-in construction.
+
+    The ramp puts 2026Q3 and 2026Q4 both at 1.0, which is exactly the degeneracy
+    that made the old specification incoherent: two identical windows cannot
+    separate two different observed caps.
+    :func:`~uk_iran_conflict.scenarios.solve_cap_calibration` raises on it
+    rather than returning a number, so this variant is reported as
+    **not identified** if the ramp is used unmodified. That refusal is the
+    finding, not a failure of the run.
+    """
+    central = scen.get_scenario("realised_2026")
+    profile = scen.LINEAR_RAMP_PHASE_IN_PROFILE
+    calibration = scen.solve_cap_calibration(
+        central.gas.pct_change,
+        profile[scen.CAP_QUARTER_LABELS.index(scen.CAP_BASE_QUARTER)],
+        profile[ANCHOR_INDEX],
+    )
+    return dataclasses.replace(
+        central,
+        key="realised_2026_linear_ramp",
+        baseline_cap_gbp=calibration.prewar_cap_gbp,
+        pass_through=dataclasses.replace(
+            central.pass_through,
+            phase_in_profile=profile,
+            sustained_fraction=calibration.sustained_fraction,
+        ),
+    )
+
+
+def derived_scenarios() -> dict[str, scen.Scenario]:
+    """Scenarios built from the registry rather than registered in it.
+
+    Kept here rather than in ``uk_iran_conflict.scenarios`` because each is a
+    *presentation* of a registered scenario — a different annualisation window
+    or a different phase-in construction — not a different state of the world.
+    """
+    out: dict[str, scen.Scenario] = {}
+    for key in ("realised_2026", "realised_2026_peak_fuel"):
+        name = f"{key}_calendar_2026"
+        out[name] = dataclasses.replace(
+            scen.on_window(scen.get_scenario(key), scen.CALENDAR_2026_MONTHS),
+            key=name,
+        )
+    try:
+        out["realised_2026_linear_ramp"] = _relinear_ramp()
+    except ValueError as exc:  # the ramp cannot identify the counterfactual
+        print(f"linear_ramp variant is NOT IDENTIFIED and is skipped: {exc}")
+    return out
+
+
+def scenario_for(key: str, derived: dict[str, scen.Scenario]) -> scen.Scenario | None:
+    """Registered scenario, derived scenario, or ``None`` if unavailable."""
+    if key in scen.SCENARIOS:
+        return scen.SCENARIOS[key]
+    return derived.get(key)
 
 
 @dataclass(frozen=True)
@@ -138,8 +209,9 @@ def variants() -> tuple[Variant, ...]:
             scenario_key="realised_2026_symmetric",
             out_dir=RESULTS / "robustness" / "symmetric_damping",
             label=(
-                "Symmetric damping: one common peak-to-annual fraction (0.60) on "
-                "both the gas and the pump legs"
+                "Symmetric damping: one common peak-to-annual fraction "
+                f"({scen.SYMMETRIC_SUSTAINED_FRACTION:.3f}) on both the gas and "
+                "the pump legs"
             ),
         ),
         Variant(
@@ -168,6 +240,63 @@ def variants() -> tuple[Variant, ...]:
             ),
         ),
         Variant(
+            name="mt_fuel_parity",
+            scenario_key="realised_2026",
+            out_dir=RESULTS / "robustness" / "mt_fuel_parity",
+            calibration="mt_fuel_parity",
+            label=(
+                "Round-3: means-tested motor-fuel spend equalised to "
+                "non-means-tested within decile (decile totals preserved). The "
+                "specification that tests the paper's central policy finding: "
+                "rescale_motor_fuel_to_ons applies one factor per decile and so "
+                "cannot move the 6.2x means-tested fuel margin at all."
+            ),
+        ),
+        Variant(
+            name="nts_participation",
+            scenario_key="realised_2026",
+            out_dir=RESULTS / "robustness" / "nts_participation",
+            calibration="nts_participation",
+            label=(
+                "Round-3: DfT car-availability gradient imposed on the fuel "
+                "participation rate (England-only comparator; decile totals "
+                "preserved). Tests the margin the imputation cannot produce - "
+                "a zero-fuel share identical in deciles one and ten."
+            ),
+        ),
+        Variant(
+            name="linear_ramp",
+            scenario_key="realised_2026_linear_ramp",
+            out_dir=RESULTS / "robustness" / "linear_ramp",
+            label=(
+                "Alternative cap phase-in: the pre-round-3 linear ramp in "
+                "calendar time (with the partial-quarter fix), instead of the "
+                "observation-window construction. The counterfactual cap is "
+                "re-solved on the ramp's own profile, so this isolates the "
+                "phase-in construction from the baseline fix."
+            ),
+        ),
+        Variant(
+            name="calendar_2026",
+            scenario_key="realised_2026_calendar_2026",
+            out_dir=RESULTS / "robustness" / "calendar_2026",
+            label=(
+                "Main specification re-annualised onto calendar 2026, the "
+                "Resolution Foundation's £11bn window."
+            ),
+        ),
+        Variant(
+            name="peak_fuel_calendar_2026",
+            scenario_key="realised_2026_peak_fuel_calendar_2026",
+            out_dir=RESULTS / "robustness" / "peak_fuel_calendar_2026",
+            label=(
+                "Round-3 finding 10: the peak-fuel UPPER BOUND on calendar 2026, "
+                "so the Resolution Foundation bracketing is like-for-like. "
+                "Previously only the central case was re-annualised onto the RF "
+                "window, so the published bracket mixed two different windows."
+            ),
+        ),
+        Variant(
             name="unequivalised",
             scenario_key="realised_2026",
             out_dir=RESULTS / "robustness" / "unequivalised",
@@ -180,7 +309,12 @@ def variants() -> tuple[Variant, ...]:
     )
 
 
-def comparison_row(variant: Variant, result: ScenarioResult, base: Baseline) -> dict:
+def comparison_row(
+    variant: Variant,
+    result: ScenarioResult,
+    base: Baseline,
+    scenario: scen.Scenario | None = None,
+) -> dict:
     """The statistics every specification must be able to show side by side."""
     d1 = result.decile[0]
     d10 = result.decile[-1]
@@ -267,6 +401,45 @@ def comparison_row(variant: Variant, result: ScenarioResult, base: Baseline) -> 
         "decile_ranking_concept": (
             result.decile_concept.best_match if result.decile_concept else ""
         ),
+        "decile_ranking_documented_truth": (
+            result.decile_concept.documented_truth if result.decile_concept else ""
+        ),
+        "decile_ranking_person_weighted": (
+            result.decile_concept.person_weighted if result.decile_concept else None
+        ),
+        # Round-3 finding 9: the gradient from decile two, and with the
+        # non-positive tail winsorised back in rather than dropped.
+        "d2_d10_ratio_pct": result.d2_d10_ratio_pct,
+        "d2_d10_ratio_gbp": result.d2_d10_ratio_gbp,
+        "d1_d10_ratio_pct_winsorised": result.d1_d10_ratio_pct_winsorised,
+        "d2_d10_ratio_pct_winsorised": result.d2_d10_ratio_pct_winsorised,
+        "decile1_loss_pct_winsorised": result.decile1_loss_pct_winsorised,
+        "mean_loss_pct_winsorised": result.mean_loss_pct_winsorised,
+        # Round-3 finding 2: the margin that carries the central policy finding.
+        "means_tested_share_of_loss": (
+            result.motor_fuel_margins.means_tested_share_of_loss
+            if result.motor_fuel_margins
+            else float("nan")
+        ),
+        "means_tested_fuel_ratio": (
+            result.motor_fuel_margins.means_tested_fuel_ratio
+            if result.motor_fuel_margins
+            else float("nan")
+        ),
+        "zero_fuel_share_overall": (
+            result.motor_fuel_margins.zero_fuel_share_overall
+            if result.motor_fuel_margins
+            else float("nan")
+        ),
+        "zero_fuel_share_d1_minus_d10_pp": (
+            result.motor_fuel_margins.zero_share_d1_minus_d10_pp
+            if result.motor_fuel_margins
+            else float("nan")
+        ),
+        # The cap calibration this specification actually ran on.
+        "prewar_counterfactual_cap_gbp": float(
+            getattr(scenario, "baseline_cap_gbp", float("nan"))
+        ),
         "decile_ranking_matches_denominator": (
             result.decile_concept.matches_burden_denominator
             if result.decile_concept
@@ -319,12 +492,13 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
     central = scen.get_scenario("realised_2026")
     rows: list[dict] = []
 
-    def record(parameter: str, value: float, scenario: scen.Scenario) -> None:
+    def record(parameter: str, value: object, scenario: scen.Scenario) -> None:
         result, _ = run_scenario(base, scenario)
         rows.append(
             {
                 "parameter": parameter,
                 "value": value,
+                "prewar_counterfactual_cap_gbp": scenario.baseline_cap_gbp,
                 "sustained_fraction": scenario.pass_through.sustained_fraction,
                 "phase_in_at_anchor_quarter": (
                     scenario.pass_through.phase_in_profile[ANCHOR_INDEX]
@@ -347,8 +521,10 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
             }
         )
 
-    # 1. The split of the anchored product.
-    for fraction in (0.20, 0.25, 0.30, 0.36, 0.45, 0.60, 0.80, 1.00):
+    # 1. The split of the anchored product. The grid starts at the product
+    # itself: below it the anchor quarter would need a phase-in weight above
+    # 1.0, which is not a phase-in weight.
+    for fraction in (0.75, 0.80, 0.85, 0.90, 0.95, 1.00):
         anchor_weight = CAP_ANCHOR_PRODUCT / fraction
         if anchor_weight > 1.0:
             continue  # a phase-in weight above 1.0 is not a phase-in weight
@@ -387,6 +563,51 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
             "wholesale_share_electricity_bill",
             share,
             _with_pass_through(central, wholesale_share_electricity_bill=share),
+        )
+
+    # 5. The monthly wholesale gas path, which is what identifies the pre-war
+    # counterfactual cap. See scenarios.solve_cap_calibration on why this is the
+    # sweep that matters most after the baseline fix itself.
+    for label, kwargs in [
+        (f"shift{k:+d}m", {"shift_months": k}) for k in (-2, -1, 0, 1, 2)
+    ] + [(f"flatten{f:g}", {"flatten": f}) for f in (0.6, 0.8, 1.0, 1.2, 1.4)]:
+        profile = scen.gas_profile_variant(**kwargs)
+        phase_in = scen.cap_phase_in_profile(
+            central.pass_through.lag_quarters, central.quarter_labels, profile=profile
+        )
+        try:
+            calibration = scen.solve_cap_calibration(
+                central.gas.pct_change,
+                phase_in[scen.CAP_QUARTER_LABELS.index(scen.CAP_BASE_QUARTER)],
+                phase_in[ANCHOR_INDEX],
+            )
+        except ValueError as exc:
+            rows.append(
+                {
+                    "parameter": "gas_peak_monthly_profile",
+                    "value": label,
+                    "identified": False,
+                    "note": str(exc),
+                }
+            )
+            continue
+        variant = dataclasses.replace(
+            central,
+            baseline_cap_gbp=calibration.prewar_cap_gbp,
+            pass_through=dataclasses.replace(
+                central.pass_through,
+                phase_in_profile=phase_in,
+                sustained_fraction=calibration.sustained_fraction,
+            ),
+        )
+        before = len(rows)
+        record("gas_peak_monthly_profile", label, variant)
+        rows[before].update(
+            {
+                "identified": True,
+                "prewar_counterfactual_cap_gbp": calibration.prewar_cap_gbp,
+                "phase_in_profile": ";".join(f"{v:.4f}" for v in phase_in),
+            }
         )
     return rows
 
@@ -502,6 +723,122 @@ def cash_profiles(base: Baseline, scenario) -> dict:
     return out
 
 
+def round3_findings(base: Baseline, scenario) -> dict:
+    """Persist the round-3 facts the prose has to be written against.
+
+    Four things, none of which the paper could previously state from
+    ``results/``:
+
+    ``cap_calibration``
+        The pre-war counterfactual cap, the sustained fraction solved with it,
+        and the modelled-versus-observed caps in both published quarters. The
+        headline moves with these and nothing else in the domestic leg does.
+    ``decile_concept``
+        What ``household_income_decile`` actually ranks on, measured. The paper
+        asserts the opposite of the truth: the ranking is equivalised **BHC**,
+        person-weighted, while every burden is household-weighted equivalised
+        **AHC**. The ``-1`` sentinel share is the out-of-range households the
+        paper already discusses, now explained rather than described.
+    ``motor_fuel_margins``
+        The means-tested fuel margin and the participation margin, under every
+        calibration, so the effect of each specification on each margin is
+        visible in one table.
+    ``means_tested_fuel``
+        The headline consequence: the means-tested share of the aggregate loss
+        under the raw imputation and under within-decile parity.
+    """
+    out: dict = {
+        "note": (
+            "Round-3 findings, persisted so the paper can be written against "
+            "measured facts rather than assertions."
+        ),
+        "cap_calibration": {
+            "prewar_counterfactual_cap_gbp": scen.PREWAR_COUNTERFACTUAL_CAP_GBP,
+            "sustained_fraction": scen.REALISED_SUSTAINED_FRACTION,
+            "phase_in_profile": list(scen.CAP_PHASE_IN_PROFILE),
+            "quarter_labels": list(scen.CAP_QUARTER_LABELS),
+            "cap_anchor_pct": scen.CAP_ANCHOR_PCT,
+            "cap_base_pct": scen.CAP_BASE_PCT,
+            "validation": dict(scen.CAP_VALIDATION),
+            "bill_level_pass_through": scen.BILL_LEVEL_PASS_THROUGH,
+            "electricity_to_gas_pass_through_ratio": (
+                scen.ELECTRICITY_TO_GAS_PASS_THROUGH_RATIO
+            ),
+            "annual_phase_in_gas": scenario.pass_through.annual_phase_in_gas,
+            "annual_applied_gas_factor": (scenario.annual_retail_shock.gas_factor),
+            "annual_applied_electricity_factor": (
+                scenario.annual_retail_shock.electricity_factor
+            ),
+            "steady_state_gas_factor": scenario.retail_shock.gas_factor,
+            "steady_state_electricity_factor": (
+                scenario.retail_shock.electricity_factor
+            ),
+            "superseded": {
+                "baseline_cap_gbp": scen.OFGEM_CAP_JUL_2026_GBP,
+                "cap_anchor_pct": (
+                    (
+                        scen.OFGEM_CAP_OCT_2026_GBP
+                        + scen.OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
+                    )
+                    / scen.OFGEM_CAP_JUL_2026_GBP
+                    - 1.0
+                ),
+                "why": (
+                    "The observed 1 Jul - 30 Sep 2026 cap was used as the "
+                    "un-shocked baseline while 2026Q3 carried a phase-in of "
+                    "1.0. One quarter cannot be both the unshocked denominator "
+                    "and the fully shocked numerator."
+                ),
+            },
+        },
+        "decile_concept": _asdict(decile_concept_audit(base)),
+        "motor_fuel_margins": {},
+        "means_tested_fuel": {},
+    }
+    out["decile_concept"]["household_weighted_agreement"] = _asdict(
+        decile_concept_audit(base, person_weighted=False)
+    )["agreement"]
+    for calibration in inc.CALIBRATIONS:
+        run_base = apply_calibration(base, calibration)
+        result, _ = run_scenario(base, scenario, calibration=calibration)
+        out["motor_fuel_margins"][calibration] = _asdict(
+            motor_fuel_margins(run_base, None)
+        )
+        out["means_tested_fuel"][calibration] = {
+            "means_tested_share_of_loss": (
+                result.motor_fuel_margins.means_tested_share_of_loss
+                if result.motor_fuel_margins
+                else float("nan")
+            ),
+            "means_tested_mean_fuel_gbp": (
+                result.motor_fuel_margins.means_tested_mean_fuel_gbp
+                if result.motor_fuel_margins
+                else float("nan")
+            ),
+            "non_means_tested_mean_fuel_gbp": (
+                result.motor_fuel_margins.non_means_tested_mean_fuel_gbp
+                if result.motor_fuel_margins
+                else float("nan")
+            ),
+            "aggregate_cost_bn": result.aggregate_cost_bn,
+            "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
+            "d1_d10_ratio_pct": result.all_channel_d1_d10_ratio_pct,
+        }
+    raw = out["means_tested_fuel"]["raw"]["means_tested_share_of_loss"]
+    parity = out["means_tested_fuel"]["mt_fuel_parity"]["means_tested_share_of_loss"]
+    out["means_tested_fuel"]["implied_targeting_multiple"] = {
+        "note": (
+            "The paper's 'seven times' claim scales inversely with the "
+            "means-tested share of the loss, so the ratio of these two shares "
+            "is the factor by which the claim moves under within-decile parity."
+        ),
+        "raw_share": raw,
+        "parity_share": parity,
+        "factor": (parity / raw if raw else float("nan")),
+    }
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--period", type=int, default=2026)
@@ -516,8 +853,32 @@ def main() -> None:
     base = load_baseline(path, args.period)
     print(f"baseline: {base.n:,} households, {base.weight.sum() / 1e6:.1f}m weighted")
     mt = pol.means_tested_flag(path, args.period)
+    base = dataclasses.replace(base, means_tested=mt)
     means_tested_share = float(wmean(mt.astype(float), base.weight))
     print(f"means-tested: {100 * means_tested_share:.1f}% of households")
+
+    round3 = round3_findings(base, scen.get_scenario("realised_2026"))
+    (RESULTS / "round3_findings.json").write_text(json.dumps(round3, indent=2))
+    print(
+        "cap calibration: pre-war counterfactual "
+        f"£{scen.PREWAR_COUNTERFACTUAL_CAP_GBP:,.0f}, sustained fraction "
+        f"{scen.REALISED_SUSTAINED_FRACTION:.3f}, October move "
+        f"{100 * scen.CAP_ANCHOR_PCT:.2f}% (was 6.31% against the July cap)"
+    )
+    print(
+        "decile ranking concept: "
+        f"{round3['decile_concept']['best_match']} "
+        f"(documented truth {round3['decile_concept']['documented_truth']}), "
+        f"matches the burden denominator: "
+        f"{round3['decile_concept']['matches_burden_denominator']}"
+    )
+    _mt = round3["means_tested_fuel"]
+    print(
+        "means-tested share of loss: raw "
+        f"{100 * _mt['raw']['means_tested_share_of_loss']:.2f}% -> parity "
+        f"{100 * _mt['mt_fuel_parity']['means_tested_share_of_loss']:.2f}% "
+        f"(x{_mt['implied_targeting_multiple']['factor']:.2f})"
+    )
 
     persisted = persisted_values(base)
     (RESULTS / "persisted_values.json").write_text(json.dumps(persisted, indent=2))
@@ -545,8 +906,12 @@ def main() -> None:
 
     rows: list[dict] = []
     policy_rows: list[dict] = []
+    derived = derived_scenarios()
     for variant in variants():
-        scenario = scen.SCENARIOS[variant.scenario_key]
+        scenario = scenario_for(variant.scenario_key, derived)
+        if scenario is None:
+            print(f"\n{variant.name}: scenario unavailable, skipped")
+            continue
         run_base = apply_calibration(base, variant.calibration)
         result, cost = run_scenario(
             base,
@@ -632,7 +997,7 @@ def main() -> None:
                 }
             )
 
-        rows.append(comparison_row(variant, result, run_base))
+        rows.append(comparison_row(variant, result, run_base, scenario))
 
     robustness = RESULTS / "robustness"
     robustness.mkdir(parents=True, exist_ok=True)

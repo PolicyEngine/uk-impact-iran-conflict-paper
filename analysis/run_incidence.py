@@ -73,8 +73,17 @@ def _load_env() -> None:
 
 
 def dataset_path() -> str:
+    """Resolve the pinned microdata file, reading ``.env`` for the token.
+
+    Round-3 finding 7: only ``main()`` called :func:`_load_env`, so importing
+    this module and calling ``dataset_path()`` directly — which every other
+    analysis script does — raised "No Hugging Face token" despite a valid
+    ``.env`` sitting next to it. :func:`_load_env` uses ``setdefault``, so
+    calling it here as well is idempotent and never overrides an exported value.
+    """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
+    _load_env()
     token = os.environ.get("HUGGING_FACE_TOKEN") or os.environ.get("HF_TOKEN")
     if not token:
         raise SystemExit(
@@ -120,6 +129,9 @@ def main() -> None:
     base = load_baseline(path, args.period)
     print(f"baseline: {base.n:,} households, {base.weight.sum() / 1e6:.1f}m weighted")
     mt = pol.means_tested_flag(path, args.period)
+    # Attach the means-tested flag so the fuel-margin diagnostics and the
+    # ``mt_fuel_parity`` calibration can see it (round-3 finding 2).
+    base = dataclasses.replace(base, means_tested=mt)
     print(
         f"means-tested: {100 * wmean(mt.astype(float), base.weight):.1f}% of households"
     )
@@ -191,6 +203,17 @@ def main() -> None:
             "aggregate_fuel_spend_bn": wsum(base.motor_fuel, base.weight) / 1e9,
         }
         (out / "aggregates.json").write_text(json.dumps(rows_extra, indent=2))
+
+        # The policy block's non-scorecard diagnostics — feasible maxima
+        # uncapped by the envelope, what each envelope arm actually spends, the
+        # JRF reference quantities and the large-loser statistic — written once,
+        # off the paper's central scenario. ``analysis/emit_tex_values.py``
+        # reads it so no policy number in the prose is a carried literal.
+        if key == "realised_2026":
+            diagnostics = pol.write_policy_diagnostics(
+                base, cost, mt, pol.COMMON_ENVELOPE_BN
+            )
+            print(f"   wrote {diagnostics}")
 
     RESULTS.mkdir(exist_ok=True)
     pd.DataFrame(rows).to_csv(RESULTS / "summary.csv", index=False)

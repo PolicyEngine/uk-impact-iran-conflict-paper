@@ -16,8 +16,12 @@ __pycache__/
 *.toc
 *.synctex.gz
 paper/main.pdf
+# Secrets. The Hugging Face token for the private microdata lives in `.env`,
+# which is never committed; `.env.example` is the committed placeholder.
 .env
 .env.*
+*.env
+.envrc
 !.env.example
 
 __pycache__/

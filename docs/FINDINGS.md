@@ -1,5 +1,36 @@
 # Findings from the first full run — what the prose must be corrected to
 
+> **HISTORICAL RECORD — SUPERSEDED. Do not cite these numbers.** This file
+> records the **first** full run of the pipeline, before three rounds of referee
+> review. It is kept unedited as an audit trail of what was found and when; it
+> is deliberately **not** rewritten to match later results, because the
+> corrections it prompted are themselves part of the record.
+>
+> Several headline figures below have since been superseded. In particular:
+>
+> - the **£13.9bn** aggregate and **£471** mean loss predate decision D2 in
+>   `docs/FIXES.md` (the consumption-weighted quarterly phase-in, which the
+>   paper's Step 1 always claimed and the code did not implement). On the main
+>   specification the aggregate is materially lower.
+> - the **67.8%** motor-fuel share is a single point estimate on one damping
+>   calibration. `docs/VALIDATION.md` Check 2 shows it is inflated by two
+>   compounding imputation errors, and the paper now reports the share as a
+>   **range across specifications**, not as a point.
+> - percentage-of-income statistics here are on the **unequivalised**
+>   denominator; decision D1 moved everything to equivalised AHC income.
+>
+> Where this file and the documents below disagree, **they win**:
+>
+> - `docs/VALIDATION.md` — external validation against ONS, DfT, DWP and the literature
+> - `docs/REFEREE_REPORTS.md`, `docs/REFEREE_ROUND2.md` — the referee reports
+> - `docs/FIXES.md` — the resulting work list and the two decisions taken
+> - `results/` and `paper/values_generated.tex` — the current numbers, always
+>
+> What in this file **is** still current: §1, the structural finding that
+> PolicyEngine UK has no price channel, that `energy_bills` is a dead parameter
+> and that there is no Warm Home Discount. That finding held through every
+> round and is a contribution of the paper.
+
 Generated from the real pipeline (`analysis/run_incidence.py`, `run_sensitivity.py`)
 against PolicyEngine UK microdata (`populace_uk_2023.h5`, 535,080 households,
 29.5m weighted, period 2026). **Every claim below is verified.** The drafted

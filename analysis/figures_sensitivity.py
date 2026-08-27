@@ -29,6 +29,19 @@ TEAL = "#39C6C0"
 BLUE = "#2C6496"
 GREY = "#616161"
 DARK = "#0C1A27"
+#: Added for the fourth envelope row type (the instrument's own ceiling),
+#: which needs to read as a darker sibling of BLUE rather than a new hue.
+BLUE_DARK = "#1B3F5E"
+
+#: Small-integer -> English word, so a title reads "three of five", not "3 of five".
+NUMBER_WORD = (
+    "Zero",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+)
 
 
 def _style(ax) -> None:
@@ -148,7 +161,9 @@ def welfare_bounds_figure() -> Path:
     named = df[df["kind"] == "named"]
     x = -flat["epsilon_mean"]
 
-    fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8))
+    # Wider and taller than the three-bar version: four row types per
+    # instrument, and a legend that no longer fits on one short row.
+    fig, axes = plt.subplots(1, 2, figsize=(11.6, 4.3))
 
     ax = axes[0]
     ax.fill_between(
@@ -259,8 +274,15 @@ def cap_lag_figure() -> Path:
     figure now — they agree out to two quarters and separate after, so the
     long-lag divergence is the anchoring rule rather than the lag. The old
     annualised-versus-cumulative pair cannot be drawn: the sweep no longer
-    carries cumulative columns, and the cumulative burden is invariant along the
-    unanchored series by construction, so it is a flat line by identity.
+    carries cumulative columns, and the cumulative burden is very nearly
+    invariant along the unanchored series, so it would be a flat line.
+
+    Three of the five anchored lags do not solve at all after the round-3
+    rebuild — at those lags the two published caps' observation windows either
+    fail to separate them or imply a pre-war counterfactual above the observed
+    July cap — so their rows are blank. Blank rows are drawn as an explicit
+    "not identified" mark rather than left as a gap, which is what they looked
+    like before: three missing bars and no reason given.
     """
     df = pd.read_csv(SENS / "cap_lag.csv").sort_values("lag_quarters")
     lags = sorted(df["lag_quarters"].unique())
@@ -273,13 +295,30 @@ def cap_lag_figure() -> Path:
         (("anchored", BLUE), ("unanchored", TEAL))
     ):
         sub = df[df["anchor"] == anchor].sort_values("lag_quarters")
+        values = pd.to_numeric(sub["mean_loss_gbp"], errors="coerce")
+        positions = sub["lag_quarters"] + (offset - 0.5) * width
         ax.bar(
-            sub["lag_quarters"] + (offset - 0.5) * width,
-            sub["mean_loss_gbp"],
+            positions,
+            values.fillna(0.0),
             width,
             color=colour,
             label=anchor.capitalize(),
         )
+        # Say why a bar is absent. An unexplained gap reads as a broken
+        # pipeline; "not identified" is the actual finding.
+        for pos, value in zip(positions, values, strict=True):
+            if pd.isna(value):
+                ax.annotate(
+                    "not\nidentified",
+                    (pos, 0),
+                    xytext=(0, 6),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    rotation=90,
+                    fontsize=6.5,
+                    color=colour,
+                )
     central = df[df["is_central_specification"].astype(str).str.lower() == "true"]
     if not central.empty:
         ax.axvline(
@@ -310,10 +349,18 @@ def cap_lag_figure() -> Path:
     _style(ax)
 
     ax = axes[1]
-    anchored = df[df["anchor"] == "anchored"].sort_values("lag_quarters")
+    # The UNANCHORED series, which is defined at every lag.
+    #
+    # This panel used to plot the anchored one, and after the rebuild that left
+    # two points out of five joined by a line across an axis running to four
+    # quarters. The unanchored series is also the right one for this panel on
+    # the merits: it varies when the shock reaches the bill and holds how big it
+    # is fixed, which is what "the lag moves the attribution, not the shock"
+    # means. The anchored series re-solves the shock's size at every lag.
+    series = df[df["anchor"] == "unanchored"].sort_values("lag_quarters")
     ax.plot(
-        anchored["lag_quarters"],
-        anchored["domestic_loss_bn"],
+        series["lag_quarters"],
+        pd.to_numeric(series["domestic_loss_bn"], errors="coerce"),
         marker="o",
         color=BLUE,
         linewidth=1.8,
@@ -321,8 +368,8 @@ def cap_lag_figure() -> Path:
         label="Domestic energy",
     )
     ax.plot(
-        anchored["lag_quarters"],
-        anchored["motor_fuel_loss_bn"],
+        series["lag_quarters"],
+        pd.to_numeric(series["motor_fuel_loss_bn"], errors="coerce"),
         marker="s",
         color=TEAL,
         linewidth=1.8,
@@ -350,10 +397,18 @@ def cap_lag_figure() -> Path:
 
 
 #: Row type -> (display label, colour). The order is the order of the argument:
-#: what the instrument can actually do, what proportional scaling pretends it
-#: can do, and what the same money buys through eligibility instead.
+#: what the instrument can actually do, how much of the envelope that lets it
+#: absorb, what proportional scaling pretends it can do, and what the same money
+#: buys through eligibility instead.
+#:
+#: The first bar used to be ``common_capped`` labelled "At feasible max", which
+#: is the mislabel the round-3 referees flagged: that row is
+#: ``min(envelope, feasible-max cost)``, so for an instrument costing more than
+#: the envelope it is the BUDGET, not the ceiling. The genuine ceiling is its
+#: own row and its own bar, and the two are labelled apart.
 ENVELOPE_VARIANTS = (
-    ("common_capped", "At feasible max", BLUE),
+    ("feasible_max", "Own ceiling (no envelope)", BLUE_DARK),
+    ("common_capped", "Absorbs envelope", BLUE),
     ("common_scaled", "Scaled to envelope", GREY),
     ("common_eligibility", "Wider eligibility", TEAL),
 )
@@ -371,15 +426,21 @@ def policy_envelope_figure() -> Path:
     """What each instrument can absorb, and what it offsets when it does.
 
     The withdrawn claim — "VAT zero-rating wins at a common envelope" — is an
-    artefact of the middle bar. Zero-rating absorbs £1.96bn and stops; the
-    scaled row reaches £5bn only by removing 12.7 points of a five-point tax.
+    artefact of the scaled bar. Zero-rating absorbs about £2bn and stops; the
+    scaled row reaches £5bn only by removing more VAT points than the tax has.
     Hatching marks every infeasible bar, so the reader can see at a glance that
     the tallest offsets in the scaled series are not available.
+
+    The first two bars answer different questions and the pre-revision figure
+    drew only the second while labelling it as the first. "Own ceiling" is the
+    instrument at its own feasible maximum with no envelope applied; "absorbs
+    envelope" is the smaller of that ceiling and the budget.
     """
     df = pd.read_csv(SENS / "policy_envelope.csv")
     order = [key for key, _ in ENVELOPE_LABELS.items() if (df["policy"] == key).any()]
     x = list(range(len(order)))
-    width = 0.26
+    # Four row types rather than three.
+    width = 0.20
 
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8))
 
@@ -390,7 +451,9 @@ def policy_envelope_figure() -> Path:
             for i, key in enumerate(order):
                 if key not in sub.index:
                     continue
-                positions.append(i + (offset - 1) * width)
+                positions.append(
+                    i + (offset - (len(ENVELOPE_VARIANTS) - 1) / 2) * width
+                )
                 values.append(float(sub.loc[key, column]) * scale)
                 feasible.append(str(sub.loc[key, "is_feasible"]).lower() == "true")
             drawn = ax.bar(positions, values, width, color=colour, label=label)
@@ -410,10 +473,25 @@ def policy_envelope_figure() -> Path:
     ax = axes[0]
     bars(ax, "cost_bn", 1.0)
     ax.axhline(envelope, color=DARK, linewidth=0.9, linestyle="--")
-    ax.set_ylim(0, envelope * 1.18)
-    ax.set_ylabel("Exchequer cost (£bn)", fontsize=9, color=DARK)
+    # The own-ceiling bars run far above the envelope — the JRF block reaches
+    # more than four times it — so a limit pinned to 1.18x the envelope would
+    # crop the very bars that make the point. A log scale keeps £2bn and £22bn
+    # on the same axis without the small bars vanishing.
+    ceilings = pd.to_numeric(
+        df.loc[df["envelope"] == "feasible_max", "cost_bn"], errors="coerce"
+    ).dropna()
+    ax.set_yscale("log")
+    ax.set_ylim(
+        0.5, max(float(ceilings.max()) if len(ceilings) else envelope, envelope) * 1.7
+    )
+    ax.set_ylabel("Exchequer cost (£bn, log scale)", fontsize=9, color=DARK)
+    saturating = int((ceilings < envelope).sum())
+    # Two short lines rather than one long one: at this width a single-line
+    # title ran straight into the right-hand panel's.
     ax.set_title(
-        f"Three of five cannot absorb the envelope (dashed: £{envelope:.0f}bn)",
+        "The ceiling is not the budget\n"
+        f"({NUMBER_WORD[saturating]} of five cannot absorb "
+        f"the £{envelope:.0f}bn, dashed)",
         fontsize=9.5,
         color=DARK,
         loc="left",
@@ -423,7 +501,7 @@ def policy_envelope_figure() -> Path:
     bars(ax, "share_of_aggregate_loss_offset", 100.0)
     ax.set_ylabel("Share of aggregate loss offset (%)", fontsize=9, color=DARK)
     ax.set_title(
-        "Hatched bars are settings that cannot exist",
+        "What each actually offsets\n(hatched: settings that cannot exist)",
         fontsize=9.5,
         color=DARK,
         loc="left",
@@ -437,11 +515,13 @@ def policy_envelope_figure() -> Path:
         labels,
         frameon=False,
         fontsize=8,
-        ncol=3,
+        ncol=4,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.04),
+        bbox_to_anchor=(0.5, -0.02),
     )
-    fig.tight_layout()
+    # Reserve the strip the legend occupies before tight_layout packs the axes,
+    # or the four-entry legend lands on top of the instrument labels.
+    fig.tight_layout(rect=(0, 0.09, 1, 1))
     out = FIGS / "figA4_policy_envelope.png"
     fig.savefig(out, dpi=200, bbox_inches="tight")
     plt.close(fig)

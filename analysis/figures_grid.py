@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover
 
 import matplotlib.pyplot as plt
 
+from uk_iran_conflict import scenarios as scen
+
 ROOT = Path(__file__).resolve().parents[1]
 GRID = ROOT / "results" / "grid"
 
@@ -196,6 +198,24 @@ def scenario_grid() -> Path:
     for col in ("motor_fuel_share_pct", "d1_d10_ratio"):
         df.loc[dead, col] = np.nan
 
+    #: Half-width of panel C's colour range, in ratio units.
+    #:
+    #: The round-3 rebuild made the gradient invariant across the whole grid --
+    #: every cell is 9.31 -- because the ratio is carried by the domestic leg,
+    #: which is a common scaling of one consumption vector. That invariance IS
+    #: the finding. But auto-scaling a colour map to the surviving spread, which
+    #: is under two thousandths, renders floating-point residue as a bold blue
+    #: gradient and invites the reader to interpret it. A fixed range wide
+    #: enough to contain any variation worth seeing leaves a genuinely flat
+    #: field looking flat.
+    RATIO_PANEL_PAD = 0.5
+    ratio_finite = df["d1_d10_ratio"].dropna()
+    ratio_mid = float(ratio_finite.mean()) if len(ratio_finite) else 0.0
+    ratio_range = (ratio_mid - RATIO_PANEL_PAD, ratio_mid + RATIO_PANEL_PAD)
+    ratio_spread = (
+        float(ratio_finite.max() - ratio_finite.min()) if len(ratio_finite) else 0.0
+    )
+
     panels = [
         ("mean_loss_gbp", "A", "Mean household loss (£/yr)", SEQ, "{:.0f}", None),
         ("aggregate_cost_bn", "B", "Aggregate cost (£bn/yr)", SEQ, "{:.1f}", None),
@@ -206,7 +226,7 @@ def scenario_grid() -> Path:
             SEQ_BLUE,
             "{:.2f}",
             None,
-        ),
+        ),  # colour range fixed below: see RATIO_PANEL_PAD
         (
             "motor_fuel_share_pct",
             "D",
@@ -222,15 +242,25 @@ def scenario_grid() -> Path:
         panels, axes.ravel(), strict=True
     ):
         piv = _pivot(df, col)
-        im = _heatmap(ax, piv, cmap, fmt, center=center)
+        limits = ratio_range if col == "d1_d10_ratio" else (None, None)
+        im = _heatmap(ax, piv, cmap, fmt, center=center, vmin=limits[0], vmax=limits[1])
         _mark_named(ax, piv, named)
         ax.set_title(f"{letter}. {title}", fontsize=8.6, pad=5)
+        if col == "d1_d10_ratio":
+            # Say the flat field is flat, and by how much, so the panel is read
+            # as the invariance result it is rather than as a failed heatmap.
+            ax.set_xlabel(
+                f"invariant across the grid (spread {ratio_spread:.4f})",
+                fontsize=6.8,
+                labelpad=2,
+            )
         cb = fig.colorbar(im, ax=ax, shrink=0.86, pad=0.03)
         cb.ax.tick_params(labelsize=6.5, length=0)
         cb.outline.set_visible(False)
 
-    for ax in axes[1]:
-        ax.set_xlabel("Wholesale gas change (%)", fontsize=8)
+    # Panel C carries its own x-label (the invariance note), so only panel D
+    # gets the axis name on the bottom row; C's is set in the loop above.
+    axes[1][1].set_xlabel("Wholesale gas change (%)", fontsize=8)
     for ax in axes[:, 0]:
         ax.set_ylabel("Brent oil change (%)", fontsize=8)
 
@@ -249,10 +279,15 @@ def scenario_grid() -> Path:
         "domestic-bill shocks. Marked points are the named scenarios "
         "(1 NIESR baseline, 2 NIESR adverse, 3 realised 2026), plotted at "
         "damped-equivalent coordinates: every cell runs undamped, so a "
-        "scenario that damps its peak wholesale move (realised 2026 damps gas "
-        "to 0.36 of its peak) is placed at the sustained move that reproduces "
-        "its own retail and pump prices, not at its headline peak. The "
-        "zero-shock corner is undefined and left blank.",
+        "scenario that damps its peak wholesale move (realised 2026 sustains "
+        f"{scen.REALISED_CAP_CALIBRATION.sustained_fraction:.2f} of its gas "
+        "peak) is placed at the sustained move that reproduces its own retail "
+        "and pump prices, not at its headline peak. The zero-shock corner is "
+        "undefined and left blank. Panel C is flat by construction: the "
+        "gradient is carried by the domestic leg, which is a common scaling of "
+        "one consumption vector, so it does not move with the gas/oil mix. "
+        "That invariance is the result; the colour range is fixed so a flat "
+        "field is not shaded as if it varied.",
         y=0.035,
     )
     return fs.save(fig, "fig_scenario_grid.png")

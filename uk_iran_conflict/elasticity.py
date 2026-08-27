@@ -156,6 +156,12 @@ __all__ = [
     "LABANDEIRA_2017_SHORT_RUN",
     "LABANDEIRA_2017_LONG_RUN",
     "LABANDEIRA_2017_RESIDENTIAL_SHORT_RUN",
+    "LABANDEIRA_2017_DIESEL_SHORT_RUN",
+    "LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN",
+    "ROAD_FUELS",
+    "CARRIER_FALLBACK",
+    "blend_motor_fuel",
+    "diesel_share_of_spend",
     "PRIESMANN_2025_SHORT_RUN_ENDPOINTS",
     "PRIESMANN_2025_LONG_RUN_ENDPOINTS",
     "PRIOR_REPO_ELASTICITY_BY_DECILE",
@@ -173,15 +179,33 @@ __all__ = [
     "cv_bounds",
     "welfare_shaved_share",
     "resolve_elasticity_spec",
+    "basket_spend_change",
 ]
 
 # --------------------------------------------------------------------------
 # Carriers
 # --------------------------------------------------------------------------
 
-Carrier = Literal["gas", "electricity", "motor_fuel"]
+Carrier = Literal["gas", "electricity", "motor_fuel", "petrol", "diesel"]
 
 CARRIERS: Final[tuple[Carrier, ...]] = ("gas", "electricity", "motor_fuel")
+"""The three carriers every spec must define."""
+
+ROAD_FUELS: Final[tuple[Carrier, ...]] = ("petrol", "diesel")
+"""The two road fuels, which the 2026 shock moves by very different amounts.
+
+``motor_fuel`` remains the aggregate carrier. A spec may define ``petrol`` and
+``diesel`` separately (see
+:meth:`ElasticitySpec.labandeira_road_fuel_split`); one that does not resolves
+either of them through :data:`CARRIER_FALLBACK` to ``motor_fuel``, so callers
+can always ask for the road fuel they are actually pricing.
+"""
+
+CARRIER_FALLBACK: Final[dict[str, Carrier]] = {
+    "petrol": "motor_fuel",
+    "diesel": "motor_fuel",
+}
+"""Resolution fallback for a carrier a spec does not define explicitly."""
 
 N_DECILES: Final[int] = 10
 
@@ -231,7 +255,28 @@ sensitivity band.
 """
 
 LABANDEIRA_2017_DIESEL_SHORT_RUN: Final[float] = -0.153
+"""Labandeira et al. (2017) Table 6 short-run mean for **diesel**.
+
+Half the magnitude of the gasoline figure (-0.293), and it is the fuel that
+carries the larger price move in this shock (diesel +36% against petrol +20% in
+the realised 2026 path) and roughly a third to a half of household motor-fuel
+spend. Pricing the diesel leg with the gasoline elasticity — which is what
+happened while this constant was defined and never used — overstates the demand
+response on the larger half of the shock, and so understates the loss under
+every non-zero elasticity variant.
+"""
+
 LABANDEIRA_2017_HEATING_OIL_SHORT_RUN: Final[float] = -0.017
+
+LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN: Final[dict[Carrier, float]] = {
+    "petrol": -0.293,  # Table 6, "Gasoline"
+    "diesel": LABANDEIRA_2017_DIESEL_SHORT_RUN,  # Table 6, "Diesel"
+}
+"""Short-run road-fuel elasticities, kept apart rather than blended away.
+
+Only the short run is split: Table 6's long-run column is not reproduced here
+for diesel, so a long-run split spec is refused rather than invented.
+"""
 
 LABANDEIRA_2017_RESIDENTIAL_SHORT_RUN: Final[float] = -0.215
 """Labandeira et al. (2017) Table 4, residential consumers, all products.
@@ -353,6 +398,52 @@ def priesmann_by_decile(
     return interpolate_by_decile(low, high, n_deciles=n_deciles)
 
 
+def diesel_share_of_spend(petrol_spend: float, diesel_spend: float) -> float:
+    """Diesel's share of motor-fuel spend, from the data — never assumed.
+
+    There is no default: the split is a property of the microdata (or of the
+    decile being priced), not a constant this module is entitled to invent.
+
+    >>> round(diesel_share_of_spend(600.0, 400.0), 3)
+    0.4
+    """
+    if petrol_spend < 0.0 or diesel_spend < 0.0:
+        raise ValueError("spends must be non-negative")
+    total = petrol_spend + diesel_spend
+    if total <= 0.0:
+        raise ValueError("no motor-fuel spend to split")
+    return diesel_spend / total
+
+
+def blend_motor_fuel(
+    diesel_share: float,
+    petrol_epsilon: float = LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN["petrol"],
+    diesel_epsilon: float = LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN["diesel"],
+) -> float:
+    """Spend-weighted motor-fuel elasticity for a diesel-weighted basket.
+
+    Labandeira et al. give gasoline and diesel separately and the module has
+    always said "for a diesel-weighted basket, blend the two". This is that
+    blend, made callable, so the aggregate carrier can carry a basket that is
+    not 100% petrol.
+
+    Prefer the split spec (:meth:`ElasticitySpec.labandeira_road_fuel_split`)
+    where petrol and diesel face *different price ratios*, as they do in every
+    scenario in this paper: blending elasticities and then applying one ratio
+    is only exact when the two ratios coincide.
+
+    >>> round(blend_motor_fuel(0.0), 3)
+    -0.293
+    >>> round(blend_motor_fuel(1.0), 3)
+    -0.153
+    >>> round(blend_motor_fuel(0.5), 3)
+    -0.223
+    """
+    if not 0.0 <= diesel_share <= 1.0:
+        raise ValueError(f"diesel_share must be in [0, 1], got {diesel_share}")
+    return (1.0 - diesel_share) * petrol_epsilon + diesel_share * diesel_epsilon
+
+
 @dataclass(frozen=True, slots=True)
 class ElasticitySpec:
     """A complete, self-describing elasticity specification for one run.
@@ -402,20 +493,57 @@ class ElasticitySpec:
 
     @classmethod
     def labandeira_flat(
-        cls, horizon: Literal["short_run", "long_run"] = "short_run"
+        cls,
+        horizon: Literal["short_run", "long_run"] = "short_run",
+        diesel_share: float | None = None,
     ) -> ElasticitySpec:
-        """Robustness variant: flat per-carrier meta-analytic elasticities."""
+        """Robustness variant: flat per-carrier meta-analytic elasticities.
+
+        ``diesel_share`` (short run only) replaces the aggregate ``motor_fuel``
+        value — the *gasoline* figure — with a spend-weighted blend of the
+        gasoline and diesel figures (:func:`blend_motor_fuel`). Passing it makes
+        the spec name carry the share, so a blended run can never be mistaken
+        for the unblended one.
+        """
+        flat = (
+            LABANDEIRA_2017_SHORT_RUN
+            if horizon == "short_run"
+            else LABANDEIRA_2017_LONG_RUN
+        )
+        name = f"labandeira_2017_{horizon}"
+        source = (
+            "Labandeira, Labeaga & Lopez-Otero (2017), Energy Policy "
+            "102:549-568, Table 6."
+        )
+        if diesel_share is not None:
+            if horizon != "short_run":
+                raise ValueError(
+                    "no long-run diesel elasticity is recorded in this module; "
+                    "blending is defined for the short run only"
+                )
+            flat = {**flat, "motor_fuel": blend_motor_fuel(diesel_share)}
+            name = f"{name}_diesel_share_{diesel_share:.3f}"
+            source += " Motor fuel blended gasoline/diesel by spend share."
+        return cls(name=name, source=source, flat=flat)
+
+    @classmethod
+    def labandeira_road_fuel_split(cls) -> ElasticitySpec:
+        """Short-run Labandeira with **petrol and diesel priced separately**.
+
+        The two road fuels move by very different amounts in this shock (diesel
+        +36% against petrol +20% on the realised 2026 path), so applying one
+        elasticity to both is not a rounding matter: it prices the larger price
+        move with the more elastic of the two published estimates. ``petrol``
+        takes -0.293 and ``diesel`` -0.153; ``motor_fuel`` is retained at the
+        gasoline value for any caller that still asks for the aggregate.
+        """
         return cls(
-            name=f"labandeira_2017_{horizon}",
+            name="labandeira_2017_short_run_road_fuel_split",
             source=(
                 "Labandeira, Labeaga & Lopez-Otero (2017), Energy Policy "
-                "102:549-568, Table 6."
+                "102:549-568, Table 6, gasoline and diesel rows kept apart."
             ),
-            flat=(
-                LABANDEIRA_2017_SHORT_RUN
-                if horizon == "short_run"
-                else LABANDEIRA_2017_LONG_RUN
-            ),
+            flat={**LABANDEIRA_2017_SHORT_RUN, **LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN},
         )
 
     @classmethod
@@ -481,16 +609,20 @@ def elasticity_for(
     -0.64
     """
     if spec.flat is not None:
-        try:
+        if carrier in spec.flat:
             return float(spec.flat[carrier])
-        except KeyError as exc:
-            raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}") from exc
+        fallback = CARRIER_FALLBACK.get(str(carrier))
+        if fallback is not None and fallback in spec.flat:
+            return float(spec.flat[fallback])
+        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}")
 
     assert spec.by_decile is not None
-    try:
-        table = spec.by_decile[carrier]
-    except KeyError as exc:
-        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}") from exc
+    table = spec.by_decile.get(carrier)
+    if table is None:
+        fallback = CARRIER_FALLBACK.get(str(carrier))
+        table = spec.by_decile.get(fallback) if fallback is not None else None
+    if table is None:
+        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}")
 
     if decile is None:
         raise ValueError(
@@ -760,6 +892,9 @@ def resolve_elasticity_spec(spec: object = "main") -> ElasticitySpec:
         "zero": ElasticitySpec.main,
         "labandeira_short_run": lambda: ElasticitySpec.labandeira_flat("short_run"),
         "labandeira_long_run": lambda: ElasticitySpec.labandeira_flat("long_run"),
+        "labandeira_short_run_road_fuel_split": (
+            ElasticitySpec.labandeira_road_fuel_split
+        ),
         "priesmann_short_run": lambda: ElasticitySpec.priesmann_income_varying(
             "short_run"
         ),

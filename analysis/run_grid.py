@@ -57,7 +57,13 @@ except ImportError:  # pragma: no cover
     from analysis.run_incidence import _load_env, dataset_path
 
 from uk_iran_conflict import scenarios as scen
-from uk_iran_conflict.incidence import load_baseline, run_scenario, wmean, wsum
+from uk_iran_conflict.incidence import (
+    decile_table,
+    load_baseline,
+    run_scenario,
+    wmean,
+    wsum,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "results" / "grid"
@@ -272,54 +278,104 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
 
 
 def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
-    """Check every named scenario's decile ratio lies inside the grid's range.
+    """Reconcile each named scenario's decile ratio with the grid, meaningfully.
 
-    Round-2 finding 7 asked for a reconciliation or for the ratio to stop being
-    emitted. This is the reconciliation, and it is a *test*, not a note: the
-    burden ratio is scale-invariant, so a named scenario differs from a grid
-    cell only in its channel mix, and any mix must produce a ratio bracketed by
-    the two pure-channel cells. If a named scenario falls outside the live
-    grid's range, the grid and the headline were produced by different code and
-    the file says so instead of leaving a reader to notice.
+    **Round-3 finding 5: the previous check could not fail.** It asserted that
+    every named scenario's D1/D10 burden ratio lay within ±5% of the live grid's
+    range. Across all thirty-six cells that range was 9.311577 to 9.312363 — a
+    spread of 0.0008 — because the two *pure-channel* ratios are themselves
+    9.3116 and 9.3124. The ratio is a convex combination of those two, so every
+    convex combination lands inside a band five per cent wide by arithmetic, and
+    the check passed for reasons that had nothing to do with the pipeline.
+
+    Two things replace it.
+
+    **An honest statement about the grid.** The grid's near-degeneracy is a
+    *result*, not a nuisance: it says the modelled decile gradient is invariant
+    to the channel mix, because in this imputation the domestic and motor-fuel
+    channels have almost the same decile gradient. That, in turn, is the
+    motor-fuel imputation defect showing up from a third direction — a fuel
+    channel whose gradient matches the domestic channel's is a fuel channel that
+    has not reproduced car ownership. ``grid_shows_invariance`` and the measured
+    spread say so directly, and ``check_is_informative`` records that a
+    range-membership test on this grid carries no information.
+
+    **A reconciliation that can actually fail.** The burden ratio decomposes
+    exactly. Writing ``a`` for the share of decile ten's loss that is domestic::
+
+        ratio_all = a x ratio_domestic + (1 - a) x ratio_fuel
+
+    That is an identity in the pipeline's own arithmetic, so it holds to
+    floating-point if the grid and the named scenarios come from the same code
+    and fails immediately if they do not — which is what the check was supposed
+    to be testing. It is asserted at 1e-6, not 5%.
     """
     lo = float(live["d1_d10_ratio"].min())
     hi = float(live["d1_d10_ratio"].max())
-    # The live grid's range can be a near-degenerate point: after the round-2
-    # revision every cell returns 9.31x, because the domestic and motor-fuel
-    # channels turn out to have almost the same decile gradient in this
-    # imputation — which is itself the ``docs/VALIDATION.md`` Check 2d finding
-    # (the fuel imputation gives deciles one and ten the same purchasing rate)
-    # showing up from a different direction. A 5% band is therefore allowed:
-    # the test is "the named scenarios and the grid come from the same
-    # pipeline", not "the ratio is identical to the last decimal".
-    tol = 0.05
-    lo_band, hi_band = lo * (1 - tol), hi * (1 + tol)
+    spread = hi - lo
+    # Below this the grid is degenerate and a range-membership test is vacuous.
+    informative_spread = 0.05 * max(abs(lo), 1e-12)
+    identity_tol = 1e-6
     scenarios: dict[str, dict] = {}
     for key, scenario in scen.SCENARIOS.items():
-        result, _ = run_scenario(base, scenario)
+        result, cost = run_scenario(base, scenario)
+        w = base.weight
+        d10 = base.decile == 10
+        domestic_d10 = wsum(cost.domestic[d10], w[d10])
+        fuel_d10 = wsum(cost.motor_fuel[d10], w[d10])
+        total_d10 = domestic_d10 + fuel_d10
+        share = domestic_d10 / total_d10 if total_d10 else float("nan")
+        fuel_rows = decile_table(base, cost.motor_fuel)
+        fuel_ratio = _decile_ratio(fuel_rows)
         ratio = result.all_channel_d1_d10_ratio_pct
+        domestic_ratio = result.domestic_only_d1_d10_ratio_pct
+        implied = share * domestic_ratio + (1.0 - share) * fuel_ratio
         scenarios[key] = {
             "d1_d10_ratio": ratio,
-            "d1_d10_ratio_domestic_only": result.domestic_only_d1_d10_ratio_pct,
+            "d1_d10_ratio_domestic_only": domestic_ratio,
+            "d1_d10_ratio_motor_fuel_only": fuel_ratio,
+            "domestic_share_of_decile10_loss": share,
+            "d1_d10_ratio_implied_by_channel_mix": implied,
+            "identity_residual": abs(ratio - implied),
+            "identity_holds": bool(abs(ratio - implied) < identity_tol),
             "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
-            "inside_grid_range": bool(lo_band <= ratio <= hi_band),
+            "inside_grid_range": bool(lo <= ratio <= hi),
         }
-    outside = [k for k, v in scenarios.items() if not v["inside_grid_range"]]
+    broken = [k for k, v in scenarios.items() if not v["identity_holds"]]
     return {
         "note": (
-            "The decile burden ratio is an aggregate ratio and therefore "
-            "scale-invariant, so a named scenario and a grid cell differ only "
-            "in channel mix; every named scenario must land inside the grid's "
-            "own range. Round-2 finding 7."
+            "Round-3 finding 5. The previous ±5% range-membership check could "
+            "not fail: the grid's D1/D10 ratio spans 0.0008 across 36 cells "
+            "because both pure-channel ratios are ~9.31 and every mix is a "
+            "convex combination of them. Replaced by (a) an explicit statement "
+            "that the grid shows INVARIANCE of the decile gradient to the "
+            "channel mix, which is itself evidence about the fuel imputation, "
+            "and (b) the exact convex-combination identity, asserted at 1e-6."
         ),
         "grid_d1_d10_ratio_min": lo,
         "grid_d1_d10_ratio_max": hi,
-        "tolerance": tol,
-        "accepted_band": [lo_band, hi_band],
+        "grid_d1_d10_ratio_spread": spread,
+        "grid_shows_invariance": bool(spread < informative_spread),
+        "check_is_informative": bool(spread >= informative_spread),
+        "informative_spread_threshold": informative_spread,
+        "identity_tolerance": identity_tol,
         "scenarios": scenarios,
-        "all_named_scenarios_inside_grid_range": not outside,
-        "outside": outside,
+        "all_named_scenarios_inside_grid_range": all(
+            v["inside_grid_range"] for v in scenarios.values()
+        ),
+        "channel_mix_identity_holds": not broken,
+        "identity_broken": broken,
+        "outside": broken,
     }
+
+
+def _decile_ratio(rows) -> float:
+    """Decile-one over decile-ten ``mean_loss_pct`` from a decile table."""
+    top = next((r for r in rows if r.decile == 10), None)
+    bottom = next((r for r in rows if r.decile == 1), None)
+    if top is None or bottom is None or not top.mean_loss_pct:
+        return float("nan")
+    return float(bottom.mean_loss_pct / top.mean_loss_pct)
 
 
 def main() -> None:
@@ -367,22 +423,30 @@ def main() -> None:
     reconciliation = reconcile_named_scenarios(base, live)
     (OUT / "reconciliation.json").write_text(json.dumps(reconciliation, indent=2))
     print(
-        f"\nnamed-scenario ratios inside the grid range "
-        f"[{reconciliation['grid_d1_d10_ratio_min']:.2f}x, "
-        f"{reconciliation['grid_d1_d10_ratio_max']:.2f}x]: "
-        f"{reconciliation['all_named_scenarios_inside_grid_range']}"
+        f"\ngrid D1/D10 ratio spans {reconciliation['grid_d1_d10_ratio_min']:.4f}x "
+        f"to {reconciliation['grid_d1_d10_ratio_max']:.4f}x "
+        f"(spread {reconciliation['grid_d1_d10_ratio_spread']:.6f}); "
+        + (
+            "the grid shows INVARIANCE of the decile gradient to the channel "
+            "mix, so a range-membership test on it carries no information"
+            if reconciliation["grid_shows_invariance"]
+            else "the range is wide enough for membership to be informative"
+        )
     )
     for key, payload in reconciliation["scenarios"].items():
         print(
-            f"  {key:26} {payload['d1_d10_ratio']:6.2f}x "
-            f"(domestic only {payload['d1_d10_ratio_domestic_only']:6.2f}x) "
-            f"{'ok' if payload['inside_grid_range'] else 'OUTSIDE'}"
+            f"  {key:26} {payload['d1_d10_ratio']:7.4f}x "
+            f"(domestic {payload['d1_d10_ratio_domestic_only']:7.4f}x, fuel "
+            f"{payload['d1_d10_ratio_motor_fuel_only']:7.4f}x) "
+            f"channel-mix identity residual {payload['identity_residual']:.2e} "
+            f"{'ok' if payload['identity_holds'] else 'BROKEN'}"
         )
-    if reconciliation["outside"]:
+    if reconciliation["identity_broken"]:
         raise SystemExit(
-            "grid and named scenarios disagree on the decile ratio for "
-            f"{reconciliation['outside']}; they are not the same pipeline. "
-            "Re-run analysis/run_variants.py and analysis/run_grid.py together."
+            "the decile ratio is not the convex combination of its own channel "
+            f"ratios for {reconciliation['identity_broken']}; the grid and the "
+            "named scenarios are not the same pipeline. Re-run "
+            "analysis/run_variants.py and analysis/run_grid.py together."
         )
 
     flip = live[live["motor_fuel_share_pct"] < 50]

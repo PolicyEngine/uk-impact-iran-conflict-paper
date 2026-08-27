@@ -224,16 +224,27 @@ def fig1_price_path() -> Path:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.4), width_ratios=[1.45, 1])
 
     quarters = scen.SCENARIOS[CENTRAL].quarter_labels
+    # The pre-war baseline is a SOLVED COUNTERFACTUAL, not an observed cap.
+    #
+    # It used to be the observed 1 Jul - 30 Sep 2026 cap, and this panel drew it
+    # as an extra "2026Q3 (actual)" point to the left of the path and labelled
+    # the reference line "Jul-Sep 2026 cap". Both are now wrong twice over: the
+    # counterfactual is £1,441 rather than £1,663, and 2026Q3 is not outside the
+    # path -- it is inside it, carrying an observed cap the calibration has to
+    # reproduce rather than assume. Drawing the observed cap as the un-shocked
+    # baseline was the picture of the error the whole rebuild is about, so the
+    # panel now draws the counterfactual as a reference line and marks the two
+    # published caps as the targets the path is fitted to.
     baseline_cap = scen.SCENARIOS[CENTRAL].baseline_cap_gbp
-    x = np.arange(len(quarters) + 1)
-    xlabels = ["2026Q3\n(actual)", *[q.replace("Q", "\nQ") for q in quarters]]
+    x = np.arange(len(quarters))
+    xlabels = [q.replace("Q", "\nQ") for q in quarters]
 
     ax1.axhline(baseline_cap, color=fs.GREY, lw=0.9, ls=(0, (4, 3)), zorder=1)
     ax1.text(
-        x[-1] + 0.6,
-        baseline_cap + 6,
-        f"Jul–Sep 2026 cap £{baseline_cap:,.0f}",
-        ha="right",
+        x[0] - 0.35,
+        baseline_cap + 16,
+        f"pre-war counterfactual £{baseline_cap:,.0f} (solved, not observed)",
+        ha="left",
         va="bottom",
         fontsize=8,
         color=fs.GREY,
@@ -241,7 +252,7 @@ def fig1_price_path() -> Path:
 
     for key in SCENARIO_ORDER:
         sc = scen.SCENARIOS[key]
-        caps = [baseline_cap, *[step.cap_gbp for step in sc.cap_path]]
+        caps = [step.cap_gbp for step in sc.cap_path]
         color = fs.SCENARIO_COLORS[key]
         ax1.step(
             x,
@@ -264,12 +275,56 @@ def fig1_price_path() -> Path:
             fontweight="bold",
         )
 
+    # The two published caps the calibration is exactly identified on. October
+    # is shown VAT-adjusted: Ofgem's £1,723 includes a £45 electricity VAT
+    # relief, which is a tax change rather than a wholesale one, so it has to be
+    # added back before the two observations are comparable with each other.
+    observed = {
+        "2026Q3": (scen.OFGEM_CAP_JUL_2026_GBP, "Jul 2026\nobserved"),
+        "2026Q4": (
+            scen.OFGEM_CAP_OCT_2026_GBP
+            + scen.OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP,
+            "Oct 2026 observed (+VAT relief)",
+        ),
+    }
+    # October's marker is the top of the path, so its label goes BELOW the
+    # point; July's has clear air above it. Offsetting both upward ran the
+    # October label into the panel title.
+    offsets = {"2026Q3": (0, 13, "bottom"), "2026Q4": (0, -15, "top")}
+    for quarter, (value, label) in observed.items():
+        if quarter not in quarters:
+            continue
+        xi = list(quarters).index(quarter)
+        dx, dy, va = offsets.get(quarter, (0, 13, "bottom"))
+        ax1.scatter(
+            [xi],
+            [value],
+            s=120,
+            facecolors="none",
+            edgecolors=fs.DARK,
+            lw=1.6,
+            zorder=6,
+        )
+        ax1.annotate(
+            label,
+            (xi, value),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            fontsize=7.5,
+            color=fs.DARK,
+        )
+
     ax1.set_xticks(x)
     ax1.set_xticklabels(xlabels)
-    ax1.set_xlim(-0.3, len(quarters) + 0.75)
+    ax1.set_xlim(-0.5, len(quarters) - 0.25)
     ax1.set_ylabel("Ofgem default tariff cap, £/yr (typical dual fuel)")
     ax1.yaxis.set_major_formatter(fs.GBP_FMT)
-    ax1.set_title("A implied cap path: lagged, quantised into quarterly steps")
+    ax1.set_title(
+        "A implied cap path, fitted to both published caps\n"
+        "(open circles: the observations it reproduces exactly)"
+    )
     ax1.legend(loc="upper left")
     fs.only_y_grid(ax1)
 
@@ -297,23 +352,43 @@ def fig1_price_path() -> Path:
     ax2.set_ylim(0, max(gas) * 1.28)
     fs.label_bars(ax2, bg, gas, fmt="+{:.1f}%")
     fs.label_bars(ax2, be, elec, fmt="+{:.1f}%")
+    # The electricity attenuation is a COMPUTED ratio, not the 0.85
+    # marginal-pricing share the title used to quote. The share of hours gas
+    # sets the power price is one input to it; electricity's smaller wholesale
+    # cost share is the other, and the product is what actually reaches a bill.
     ax2.set_title(
         "B gas and electricity move asymmetrically\n"
-        "(gas sets the power price ~85% of the time)"
+        f"(electricity passes through "
+        f"{100 * scen.ELECTRICITY_TO_GAS_PASS_THROUGH_RATIO:.0f}% of the gas move)"
     )
     ax2.legend(loc="upper left", bbox_to_anchor=(0.0, 0.92))
     fs.only_y_grid(ax2)
 
     fig.suptitle(
-        "Figure 1. From wholesale to the bill: scenario price paths, 2026Q4–2027Q3",
+        "Figure 1. From wholesale to the bill: scenario price paths, "
+        f"{quarters[0]}–{quarters[-1]}",
         y=1.06,
+    )
+    oct_vat_adjusted = (
+        scen.OFGEM_CAP_OCT_2026_GBP + scen.OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
     )
     fs.note(
         fig,
-        "Wholesale is ~45% of a dual-fuel bill and the cap lags the forward curve by "
-        "2–3 quarters; electricity is attenuated by the marginal-pricing share and its "
-        "smaller wholesale cost share.\nSource: authors' calculations, "
-        "uk_iran_conflict.scenarios; Ofgem cap (Jul 2026 TDCV basis); "
+        "Panel A: the pre-war baseline is a counterfactual solved jointly "
+        "with the sustained fraction from BOTH published caps — "
+        f"£{scen.PREWAR_COUNTERFACTUAL_CAP_GBP:,.0f}, reproducing July's "
+        f"£{scen.OFGEM_CAP_JUL_2026_GBP:,.0f} and October's VAT-adjusted "
+        f"£{oct_vat_adjusted:,.0f} to floating point. The observed July cap is "
+        "not the baseline: it already carries part of the shock, and using it "
+        "as the un-shocked denominator is what the rebuild corrects. The "
+        "phase-in is built from each cap period's real forward-curve "
+        "observation window, so it is non-monotone rather than a linear ramp.\n"
+        f"Panel B: bill-level pass-through {scen.BILL_LEVEL_PASS_THROUGH:.3f}, "
+        "electricity-to-gas ratio "
+        f"{scen.ELECTRICITY_TO_GAS_PASS_THROUGH_RATIO:.3f}; both computed, not "
+        "assumed. Bars are steady-state; the factors actually applied over the "
+        "modelled year are smaller.\nSource: authors' calculations, "
+        "uk_iran_conflict.scenarios; Ofgem caps (Jul and Oct 2026 TDCV basis); "
         "Cornwall Insight 19 Aug 2026.",
         y=-0.06,
     )
@@ -598,6 +673,15 @@ def _spec_fuel_shares() -> list[tuple[str, float, float]]:
     path = RESULTS / "robustness" / "comparison.csv"
     with path.open(newline="") as fh:
         rows = {r["variant"]: r for r in csv.DictReader(fh)}
+    # Every variant in comparison.csv, not the seven the panel used to show.
+    #
+    # The round-3 rebuild added four: two calendar-2026 windows (so the
+    # Resolution Foundation comparison is like for like) and two motor-fuel
+    # margin corrections. They widen the range substantially at both ends, and
+    # the widening is the finding -- the peak-fuel calendar run puts motor fuel
+    # at nearly three quarters of the loss while the steady-state run puts it
+    # under two fifths. Showing only the narrower old set would understate
+    # exactly the calibration-dependence the panel exists to make.
     order = (
         ("main", "Main"),
         ("steady_state", "Steady\nstate"),
@@ -606,6 +690,10 @@ def _spec_fuel_shares() -> list[tuple[str, float, float]]:
         ("ons_shape", "ONS\nshape"),
         ("ons_both_levels", "ONS both\nlevels"),
         ("unequivalised", "Unequiv-\nalised"),
+        ("mt_fuel_parity", "Means-tested\nfuel parity"),
+        ("nts_participation", "NTS partici-\npation"),
+        ("calendar_2026", "Calendar\n2026"),
+        ("peak_fuel_calendar_2026", "Calendar 2026,\npeak fuel"),
     )
     out = []
     for key, label in order:
@@ -772,13 +860,18 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
     axc.set_ylim(y.min() - 1.5, y.max() + 0.6)
     fs.label_hbars(axc, bars, motor_shares, fmt="{:.1f}%")
     axc.set_yticks(y)
-    axc.set_yticklabels(labels, fontsize=7.5)
+    # Eleven two-line labels rather than seven: drop a point of type so the
+    # panel stays legible at the figure's fixed width.
+    axc.set_yticklabels(labels, fontsize=6.2)
     axc.set_xlim(0, 100)
     axc.xaxis.set_major_formatter(fs.PCT_FMT)
     axc.set_xlabel("Motor fuel, % of the aggregate loss")
+    below = int((motor_shares <= 50).sum())
     axc.set_title(
         "C the majority is calibration-dependent:\n"
-        f"{motor_shares.min():.0f}–{motor_shares.max():.0f}% across specifications"
+        f"{motor_shares.min():.0f}–{motor_shares.max():.0f}% across "
+        f"{len(motor_shares)} specifications "
+        f"({below} at or below 50%)"
     )
     fs.only_x_grid(axc)
 
@@ -797,9 +890,11 @@ def fig5_fuel_decomposition(cache: dict) -> Path:
         f"can reach at most "
         f"{100 * (s['gas_share_of_loss'] + s['electricity_share_of_loss']):.0f}% of "
         f"the shock. Panel C: the same statistic under all "
-        f"{len(specs)} specifications. The share depends only on the ratio of the gas "
-        "and pump damping fractions, so it is a calibration result, not a robust "
-        "fact.\nSource: authors' calculations on PolicyEngine UK (LCFS-imputed "
+        f"{len(specs)} specifications, which now include two calendar-2026 windows and "
+        "two motor-fuel margin corrections. The damping fractions move it most, but "
+        "the annualising window and the motor-fuel calibration move it too, so the "
+        "majority is a calibration result rather than a robust fact.\n"
+        "Source: authors' calculations on PolicyEngine UK (LCFS-imputed "
         "spend, NEED-calibrated quantities); results/robustness/comparison.csv.",
         y=-0.03,
     )

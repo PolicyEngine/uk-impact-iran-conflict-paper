@@ -1,5 +1,30 @@
 # VALIDATION — our numbers against the published record
 
+> **STABLE REFERENCE — DO NOT RENUMBER.** Docstrings throughout
+> `uk_iran_conflict/` and `analysis/` cite this file by check number
+> (`docs/VALIDATION.md Check 2b`, `Check 2d`, `Check 4`, ...) to explain why a
+> piece of code does what it does. Those labels are part of the replication
+> package's interface. Rules:
+>
+> - **Never renumber a check or a sub-check.** Checks are numbered 1–7; the
+>   sub-checks under Check 2 are lettered 2a–2d.
+> - **Never delete a check**, and never change what one asserts. Append a dated
+>   note instead; the code that cites it was written against the original
+>   wording.
+> - New checks append at the end with the next free number.
+>
+> This file is a normative reference for the code, so it ships **inside** the
+> replication package.
+>
+> **Scope note.** The checks below were run against the **first** results tree
+> (`docs/FINDINGS.md`, now superseded). They are retained in that form because
+> the code cites them and because they are the record of how each defect was
+> found. Their *verdicts* — which numbers survive contact with the published
+> record and which do not — are what the code depends on, and those still hold.
+> The specific "ours" figures quoted in the comparison tables are first-run
+> values; the current figures are in `results/` and
+> `paper/values_generated.tex`.
+
 Adversarial check of the realised-2026 results (`results/realised_2026/`,
 `docs/FINDINGS.md`) against published institutional and academic estimates.
 Written as a referee would: the question is not "is our number defensible" but
@@ -138,7 +163,15 @@ share as decile 1. The published data confirms this is an artefact:
   top and bottom deciles *identical* fuel incidence. It is flatly contradicted.
 
 The consequence is bigger than a footnote. ONS motor-fuel spend by gross income
-decile runs **£318 (D1) to £1,362 (D10)** — a 4.3x gradient. Our imputed figures
+decile runs **£318 (D1) to £1,362 (D10)** — a 4.3x gradient. Source: ONS Family
+Spending in the UK, FYE 2025 (published 11 June 2026), **Table A6, in Workbook 1
+"Detailed expenditure and trends"** —
+https://www.ons.gov.uk/peoplepopulationandcommunity/personalandhouseholdfinances/expenditure/bulletins/familyspendingintheuk/april2024tomarch2025
+Note that Workbook 2 ("Expenditure by income") contains Tables A4, A5, A7 and
+A8 and **does not contain A6**; and the standalone
+`ons.gov.uk/...datasets/...tablea6` landing page is **frozen at FYE 2018** and
+must not be cited for current figures. Take A6 from Workbook 1 of the current
+release. Our imputed figures
 run **£1,073 (D1) to £1,333 (D10)** — essentially flat, and **3.4x too high in
 decile 1** while roughly correct in decile 10. The imputation is loading motor
 fuel onto poor households that do not own cars.
@@ -456,7 +489,9 @@ honest 26% gap.
 records disagree with each other. Biases the domestic loss down and makes every
 domestic-bill policy look cheaper than it is. *Change required:* resolve the
 internal inconsistency; benchmark the imputation against ONS Family Spending FYE
-2025 Table A6 and report the ratio in the appendix; if the shortfall is real,
+2025 Table A6 (Workbook 1, "Detailed expenditure and trends" — not Workbook 2,
+and not the standalone `tablea6` dataset page, which is frozen at FYE 2018) and
+report the ratio in the appendix; if the shortfall is real,
 state that domestic-leg results are conservative by roughly a quarter.
 
 **5. The 15.7% means-tested coverage and the 98% uncompensated claim.**
