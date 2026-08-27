@@ -1344,6 +1344,7 @@ def main(draft: bool = False) -> None:
         "{:.2f}",
         RECON,
     )
+
     # ROUND 4. Why the named scenarios sit outside the grid's range is now
     # diagnosed rather than guessed at: petrol and diesel have materially
     # different decile gradients, and every grid cell fixes the petrol:diesel
@@ -4776,7 +4777,9 @@ def main(draft: bool = False) -> None:
     )
     emit(
         "genJrfModelledDiscountPct",
-        lambda: 100 * jrf_gap()["single_parameter_reconciliations"]["modelled_discount"],
+        lambda: (
+            100 * jrf_gap()["single_parameter_reconciliations"]["modelled_discount"]
+        ),
         "{:.0f}",
         DIAG,
     )
@@ -4790,10 +4793,12 @@ def main(draft: bool = False) -> None:
     )
     emit(
         "genJrfImpliedEligibleSharePct",
-        lambda: 100
-        * jrf_gap()["single_parameter_reconciliations"][
-            "implied_eligible_share_poorest_first"
-        ],
+        lambda: (
+            100
+            * jrf_gap()["single_parameter_reconciliations"][
+                "implied_eligible_share_poorest_first"
+            ]
+        ),
         "{:.1f}",
         DIAG,
     )
@@ -4807,8 +4812,10 @@ def main(draft: bool = False) -> None:
     )
     emit(
         "genJrfNettingShareOfGapPct",
-        lambda: 100
-        * jrf_gap()["netting_off_existing_support"]["share_of_gap_it_could_close"],
+        lambda: (
+            100
+            * jrf_gap()["netting_off_existing_support"]["share_of_gap_it_could_close"]
+        ),
         "{:.1f}",
         DIAG,
     )
@@ -4966,21 +4973,25 @@ def main(draft: bool = False) -> None:
     emit(
         "genSocialTariffAdmissionRandomSeedCount",
         lambda: number_word(
-            len(admission("social_tariff")["by_rule"]["random"]["random_draws"]["seeds"])
+            len(
+                admission("social_tariff")["by_rule"]["random"]["random_draws"]["seeds"]
+            )
         ),
         source=DIAG,
     )
     emit(
         "genSocialTariffAdmissionRandomOffsetMinPct",
-        lambda: 100
-        * admission("social_tariff")["by_rule"]["random"]["random_draws"]["min"],
+        lambda: (
+            100 * admission("social_tariff")["by_rule"]["random"]["random_draws"]["min"]
+        ),
         "{:.1f}",
         DIAG,
     )
     emit(
         "genSocialTariffAdmissionRandomOffsetMaxPct",
-        lambda: 100
-        * admission("social_tariff")["by_rule"]["random"]["random_draws"]["max"],
+        lambda: (
+            100 * admission("social_tariff")["by_rule"]["random"]["random_draws"]["max"]
+        ),
         "{:.1f}",
         DIAG,
     )
