@@ -157,13 +157,60 @@ def test_cv_bounds_bracket_the_spend_change(base, scenario, spec_name):
 # --- D24: the cap-lag invariance is an identity ---------------------------
 
 
-def test_cumulative_loss_is_lag_invariant_by_construction(base, scenario):
+def test_cap_lag_sweep_reconciles_with_the_headline(base, scenario):
+    """Round-2 finding 1 / ``docs/FIXES.md`` A2, and the whole point of the sweep.
+
+    Before the revision the headline and this appendix reported the same
+    specification as £304 and £205 — a 48% gap — because they applied unrelated
+    arithmetic (a hand-written phase-in tuple versus a sliding calendar count)
+    over unrelated windows. Both now go through
+    ``scenarios.cap_phase_in_profile``, so the central row *is* the headline.
+    """
+    from uk_iran_conflict import scenarios as scen
+    from uk_iran_conflict.incidence import run_scenario
+
     frame = rs.sweep_cap_lag(base, scenario)
-    assert frame["cumulative_is_lag_invariant_by_construction"].all()
-    assert frame["phase_in_weight_cumulative"].nunique() == 1
-    assert frame["cumulative_loss_bn"].nunique() == 1
-    # ... whereas the annualised figure genuinely varies with the lag.
-    assert frame["annualised_loss_bn"].nunique() > 1
+    headline, _ = run_scenario(base, scenario)
+
+    central = frame[frame["is_central_specification"]]
+    assert len(central) == 1
+    assert central["lag_quarters"].iloc[0] == pytest.approx(scen.CAP_LAG_QUARTERS)
+    assert central["mean_loss_gbp"].iloc[0] == pytest.approx(headline.mean_loss_gbp)
+    assert bool(central["reconciles_with_headline"].iloc[0])
+
+
+def test_cap_lag_sweep_holds_the_cap_anchor_when_anchored(base, scenario):
+    from uk_iran_conflict import scenarios as scen
+
+    frame = rs.sweep_cap_lag(base, scenario)
+    anchored = frame[frame["anchor"] == "anchored"]
+    assert len(anchored) == len(rs.CAP_LAG_GRID)
+    assert np.allclose(anchored["cap_anchor_quarter_pct"], 100 * scen.CAP_ANCHOR_PCT)
+    # The anchored domestic leg is nearly lag-invariant, which is now a result
+    # about an externally anchored cap rather than an identity. The unanchored
+    # one is not: that is how much of the invariance the anchor is doing.
+    anchored_spread = anchored["mean_loss_gbp"].max() - anchored["mean_loss_gbp"].min()
+    unanchored = frame[frame["anchor"] == "unanchored"]
+    unanchored_spread = (
+        unanchored["mean_loss_gbp"].max() - unanchored["mean_loss_gbp"].min()
+    )
+    assert anchored_spread < unanchored_spread
+    # And the whole sweep sits far inside the 48% gap it replaces.
+    assert anchored_spread / anchored["mean_loss_gbp"].min() < 0.15
+
+
+def test_cap_lag_sweep_derives_the_profile_from_the_lag(base, scenario):
+    from uk_iran_conflict import scenarios as scen
+
+    frame = rs.sweep_cap_lag(base, scenario)
+    for lag, profile in zip(
+        frame["lag_quarters"], frame["phase_in_profile"], strict=True
+    ):
+        expected = scen.cap_phase_in_profile(lag)
+        assert profile == ";".join(f"{v:.4f}" for v in expected)
+    # A longer lag pushes the cap move out of the modelled window.
+    anchored = frame[frame["anchor"] == "anchored"].sort_values("lag_quarters")
+    assert anchored["annual_phase_in_gas"].is_monotonic_decreasing
 
 
 # --- D26: petrol, diesel and diesel share by decile -----------------------
@@ -199,9 +246,21 @@ def test_policy_envelope_sweep(base, scenario):
         frame = rs.sweep_policy_envelope(base, scenario, mt, envelope_bn=5.0)
     finally:
         pol._CHILD_COUNTS.pop(base.n, None)
-    assert len(frame) == 2 * len(pol.POLICIES)
-    common = frame[frame["envelope"] == "common"]
-    assert np.allclose(common["cost_bn"], 5.0)
+    # stated + common_capped + common_scaled for every policy, plus a
+    # common_eligibility row for each means-tested one.
+    means_tested = sum(1 for p in pol.POLICIES.values() if p.means_tested)
+    assert len(frame) == 3 * len(pol.POLICIES) + means_tested
+    scaled = frame[frame["envelope"] == "common_scaled"]
+    assert np.allclose(scaled["cost_bn"], 5.0)
+    # Round-2 finding 2: the implied parameter is on every row, and any row
+    # outside the instrument's parameter space is renamed.
+    for _, row in frame.iterrows():
+        assert row["implied_parameter"] == row["implied_parameter"]  # not NaN
+        if not row["is_feasible"]:
+            assert row["label_used"] != pol.POLICIES[row["policy"]].label
+    capped = frame[frame["envelope"] == "common_capped"]
+    assert (capped["is_feasible"]).all()
+    assert (capped["cost_bn"] <= 5.0 + 1e-9).all()
     for col in (
         "share_of_aggregate_loss_offset",
         "mean_residual_loss_gbp",

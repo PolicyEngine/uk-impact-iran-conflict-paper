@@ -14,6 +14,8 @@ These cover the four policy-modelling fixes in ``docs/FIXES.md``:
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -159,14 +161,101 @@ def test_block_never_exceeds_the_household_bill(world):
 
 
 @pytest.mark.parametrize("key", sorted(pol.POLICIES))
-def test_common_envelope_hits_the_envelope(world, key):
+def test_uncapped_common_envelope_hits_the_envelope(world, key):
+    """The pure scalar rescaling still hits the envelope — and says what it cost.
+
+    Retained so the published numbers stay auditable, but the row now carries
+    the parameter it implies and, when that parameter is outside the
+    instrument's own space, a generic name instead of the real policy's.
+    """
+    base, cost, mt = world
+    score, _ = pol.score_policy_at_envelope(
+        base, cost, mt, pol.POLICIES[key], envelope_bn=3.0, cap_at_feasible_max=False
+    )
+    assert score.cost_bn == pytest.approx(3.0)
+    assert score.envelope == "common_scaled"
+    assert score.envelope_scale > 0
+    assert score.implied_parameter == pytest.approx(
+        pol.POLICIES[key].stated_parameter * score.envelope_scale
+    )
+    if score.is_feasible:
+        assert score.label_used == pol.POLICIES[key].label
+    else:
+        assert score.label_used != pol.POLICIES[key].label
+        assert score.implied_parameter > score.feasible_max_parameter
+
+
+@pytest.mark.parametrize("key", sorted(pol.POLICIES))
+def test_capped_common_envelope_never_leaves_the_parameter_space(world, key):
+    """The round-2 fix: an instrument may not be paid past its own ceiling."""
     base, cost, mt = world
     score, _ = pol.score_policy_at_envelope(
         base, cost, mt, pol.POLICIES[key], envelope_bn=3.0
     )
-    assert score.cost_bn == pytest.approx(3.0)
-    assert score.envelope == "common"
-    assert score.envelope_scale > 0
+    assert score.envelope == "common_capped"
+    assert score.is_feasible
+    assert score.implied_parameter <= score.feasible_max_parameter * (1 + 1e-9)
+    assert score.label_used == pol.POLICIES[key].label
+    # It spends at most the envelope, and reports what it could absorb.
+    assert score.cost_bn <= 3.0 + 1e-9
+    assert score.absorbable_envelope_bn <= 3.0 + 1e-9
+    if score.cost_bn < 3.0 - 1e-9:
+        assert score.absorbable_envelope_bn == pytest.approx(score.cost_bn, rel=1e-6)
+
+
+def test_vat_zero_rating_cannot_be_scaled_past_its_arithmetic_ceiling(world):
+    """The referees' sharpest example: x2.47 of a 5% rate is a negative VAT rate."""
+    base, cost, mt = world
+    policy = pol.POLICIES["vat_zero"]
+    assert policy.feasible_max_parameter(base, cost, mt) == 5.0
+    capped, _ = pol.score_policy_at_envelope(base, cost, mt, policy, envelope_bn=3.0)
+    scaled, _ = pol.score_policy_at_envelope(
+        base, cost, mt, policy, envelope_bn=3.0, cap_at_feasible_max=False
+    )
+    assert capped.implied_parameter == pytest.approx(5.0)
+    assert capped.cost_bn < 3.0
+    assert scaled.implied_parameter > 5.0
+    assert not scaled.is_feasible
+    assert "domestic-bill subsidy" in scaled.label_used
+    assert "VAT" not in scaled.label_used
+
+
+def test_a_means_tested_instrument_can_reach_the_envelope_by_widening_eligibility(
+    world,
+):
+    """The margin a real policymaker uses, and the one the coverage finding
+    points at."""
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    widened, _ = pol.score_policy_by_eligibility(
+        base, cost, mt, policy, envelope_bn=3.0
+    )
+    assert widened.envelope == "common_eligibility"
+    assert widened.is_feasible
+    # Generosity is untouched; only the eligible population moved.
+    assert widened.implied_parameter == pytest.approx(policy.stated_parameter)
+    assert widened.eligible_share > float(base.weight[mt].sum() / base.weight.sum())
+    assert widened.label_used == policy.label
+
+
+def test_eligibility_widening_adds_the_poorest_first(world):
+    base, cost, mt = world
+    widened = pol.widen_eligibility(
+        base, cost, mt, pol.POLICIES["social_tariff"], envelope_bn=3.0
+    )
+    added = widened & ~mt
+    if added.any():
+        assert (
+            base.equiv_income_ahc[added].max() <= base.equiv_income_ahc[~widened].min()
+        )
+
+
+def test_eligibility_widening_is_undefined_for_a_universal_instrument(world):
+    base, cost, mt = world
+    with pytest.raises(ValueError, match="universal"):
+        pol.score_policy_by_eligibility(
+            base, cost, mt, pol.POLICIES["vat_zero"], envelope_bn=3.0
+        )
 
 
 @pytest.mark.parametrize("key", sorted(pol.POLICIES))
@@ -175,19 +264,32 @@ def test_rescaling_preserves_the_shape_of_the_spend(world, key):
     base, cost, mt = world
     stated, _ = pol.score_policy(base, cost, mt, pol.POLICIES[key])
     common, _ = pol.score_policy_at_envelope(
-        base, cost, mt, pol.POLICIES[key], envelope_bn=3.0
+        base, cost, mt, pol.POLICIES[key], envelope_bn=3.0, cap_at_feasible_max=False
     )
     assert common.share_to_bottom_three == pytest.approx(stated.share_to_bottom_three)
+    # Which is exactly why scaling cannot settle a targeting question, and why
+    # the eligibility margin has to be scored separately.
 
 
-def test_scorecard_returns_both_envelopes_for_every_policy(world):
+def test_scorecard_returns_every_envelope_for_every_policy(world):
     base, cost, mt = world
     scores = pol.scorecard(base, cost, mt, envelope_bn=4.0)
-    assert len(scores) == 2 * len(pol.POLICIES)
-    assert {s.envelope for s in scores} == {"stated", "common"}
+    means_tested = sum(1 for p in pol.POLICIES.values() if p.means_tested)
+    assert len(scores) == 3 * len(pol.POLICIES) + means_tested
+    assert {s.envelope for s in scores} == {
+        "stated",
+        "common_capped",
+        "common_scaled",
+        "common_eligibility",
+    }
     for s in scores:
-        if s.envelope == "common":
+        if s.envelope == "common_scaled":
             assert s.cost_bn == pytest.approx(4.0)
+        if s.envelope == "common_capped":
+            assert s.is_feasible
+        # Every row records the parameter it implies and its ceiling.
+        assert s.implied_parameter == s.implied_parameter
+        assert s.feasible_max_parameter == s.feasible_max_parameter
 
 
 def test_the_stated_cost_comparison_is_not_like_for_like(world):
@@ -217,10 +319,20 @@ def test_continuous_measures_are_populated(world, key):
 def test_residual_loss_falls_as_the_policy_gets_more_generous(world):
     base, cost, mt = world
     small, _ = pol.score_policy_at_envelope(
-        base, cost, mt, pol.POLICIES["vat_zero"], envelope_bn=1.0
+        base,
+        cost,
+        mt,
+        pol.POLICIES["vat_zero"],
+        envelope_bn=1.0,
+        cap_at_feasible_max=False,
     )
     large, _ = pol.score_policy_at_envelope(
-        base, cost, mt, pol.POLICIES["vat_zero"], envelope_bn=4.0
+        base,
+        cost,
+        mt,
+        pol.POLICIES["vat_zero"],
+        envelope_bn=4.0,
+        cap_at_feasible_max=False,
     )
     assert large.mean_residual_loss_gbp < small.mean_residual_loss_gbp
     assert large.share_of_aggregate_loss_offset > small.share_of_aggregate_loss_offset
@@ -365,3 +477,142 @@ def test_the_audit_records_every_resolved_variable(monkeypatch, tmp_path):
     assert path.exists()
     assert "universal_credit" in path.read_text()
     pol._CHILD_COUNTS.pop(n, None)
+
+
+# --------------------------------------------------------------------------
+# Round-2 corrections to the scorecard's arithmetic
+# --------------------------------------------------------------------------
+
+
+def test_share_to_bottom_three_excludes_out_of_range_deciles(world):
+    """``decile <= 3`` had no lower guard.
+
+    ``incidence.decile_table`` correctly excludes households carrying a missing
+    or out-of-range decile — about 0.24m weighted households, 100% of them with
+    non-positive equivalised AHC income — while the scorecard swept them into
+    "the bottom three deciles" and credited their gain there.
+    """
+    base, cost, mt = world
+    out_of_range = np.concatenate([base.decile[:-1], [-1.0]])
+    shifted = dataclasses.replace(base, decile=out_of_range)
+    score, _ = pol.score_policy(shifted, cost, mt, pol.POLICIES["ippr_rebate"])
+    w, gain = shifted.weight, pol.POLICIES["ippr_rebate"].gain(shifted, cost, mt)
+    inside = (shifted.decile >= 1) & (shifted.decile <= 3)
+    assert score.share_to_bottom_three == pytest.approx(
+        wsum(gain[inside], w[inside]) / wsum(gain, w)
+    )
+    # And the unguarded version would have been strictly larger.
+    unguarded = shifted.decile <= 3
+    assert wsum(gain[unguarded], w[unguarded]) > wsum(gain[inside], w[inside])
+
+
+def test_cost_per_pound_to_decile_one_is_dimensionless(world):
+    """It was £bn divided by £/household, printed as pounds."""
+    base, cost, mt = world
+    policy = pol.POLICIES["ippr_rebate"]
+    score, gain = pol.score_policy(base, cost, mt, policy)
+    d1 = base.decile == 1
+    expected = wsum(gain, base.weight) / wsum(gain[d1], base.weight[d1])
+    assert score.cost_per_pound_decile_one == pytest.approx(expected)
+    # Total cost per £1 reaching decile one can never be below £1.
+    assert score.cost_per_pound_decile_one >= 1.0
+    assert "dimensionless" in score.cost_per_pound_decile_one_units
+
+
+def test_cost_per_pound_to_decile_one_is_scale_invariant(world):
+    """It measures targeting, so doubling every payment must not move it."""
+    base, cost, mt = world
+    policy = pol.POLICIES["ippr_rebate"]
+    stated, _ = pol.score_policy(base, cost, mt, policy)
+    doubled, _ = pol.score_policy(
+        base, cost, mt, policy, gain=policy.gain(base, cost, mt) * 2.0
+    )
+    assert doubled.cost_per_pound_decile_one == pytest.approx(
+        stated.cost_per_pound_decile_one
+    )
+
+
+def test_a_perfectly_targeted_instrument_costs_one_pound_per_pound(world):
+    base, cost, mt = world
+    only_d1 = np.where(base.decile == 1, 100.0, 0.0)
+    score, _ = pol.score_policy(
+        base, cost, mt, pol.POLICIES["ippr_rebate"], gain=only_d1
+    )
+    assert score.cost_per_pound_decile_one == pytest.approx(1.0)
+
+
+def test_the_two_loss_offset_definitions_are_now_one(world):
+    """Capping at the decile aggregate produced 100% offset beside a real residual."""
+    base, cost, mt = world
+    # Pay decile one ten times its loss and nobody else anything: on the old
+    # decile-aggregate definition every pound counts; on the household-level
+    # one, only the pounds that meet a loss do.
+    d1 = base.decile == 1
+    gain = np.where(d1, cost.total * 10.0, 0.0)
+    score, _ = pol.score_policy(base, cost, mt, pol.POLICIES["ippr_rebate"], gain=gain)
+    assert score.share_of_loss_offset_by_decile[1] == pytest.approx(1.0)
+    assert score.mean_residual_loss_by_decile[1] == pytest.approx(0.0)
+    # A decile that is over-paid on aggregate but unevenly cannot show 100%.
+    lumpy = np.zeros_like(cost.total)
+    lumpy[0] = cost.total.sum() * 5
+    score2, _ = pol.score_policy(
+        base, cost, mt, pol.POLICIES["ippr_rebate"], gain=lumpy
+    )
+    for d, offset in score2.share_of_loss_offset_by_decile.items():
+        residual = score2.mean_residual_loss_by_decile[d]
+        assert offset <= 1.0
+        # The invariant that was violated: full offset and a positive residual
+        # cannot coexist in the same row.
+        if offset == pytest.approx(1.0):
+            assert residual == pytest.approx(0.0)
+
+
+def test_offset_by_decile_uses_the_same_definition_as_the_headline(world):
+    base, cost, mt = world
+    for policy in pol.POLICIES.values():
+        score, gain = pol.score_policy(base, cost, mt, policy)
+        w, loss = base.weight, cost.total
+        credited = np.minimum(gain, loss)
+        assert score.share_of_aggregate_loss_offset == pytest.approx(
+            wsum(credited, w) / wsum(loss, w)
+        )
+        for d, offset in score.share_of_loss_offset_by_decile.items():
+            sel = base.decile == d
+            assert offset == pytest.approx(
+                wsum(credited[sel], w[sel]) / wsum(loss[sel], w[sel])
+            )
+
+
+# --- item 8: the JRF post-shock revaluation -------------------------------
+
+
+def test_jrf_block_is_not_revalued_at_post_shock_prices_by_default(world):
+    """The revaluation was the entire basis of the "more generous than JRF" claim."""
+    base, cost, mt = world
+    plain = pol._jrf_block(base, cost, mt)
+    revalued = pol._jrf_block(base, cost, mt, revalue_at_post_shock_prices=True)
+    assert (revalued >= plain).all()
+    assert wsum(revalued, base.weight) > wsum(plain, base.weight)
+    # The default is the documented one.
+    assert pol.POLICIES["jrf_block"].gain(base, cost, mt) == pytest.approx(plain)
+
+
+def test_jrf_revaluation_grows_with_the_shock_which_is_why_it_is_wrong(world):
+    """A subsidy that gets more generous the worse the shock is: nobody proposed it."""
+    base, cost, mt = world
+    bigger = ShockCost(
+        gas=cost.gas * 3, electricity=cost.electricity * 3, motor_fuel=cost.motor_fuel
+    )
+    small = wsum(
+        pol._jrf_block(base, cost, mt, revalue_at_post_shock_prices=True), base.weight
+    )
+    large = wsum(
+        pol._jrf_block(base, bigger, mt, revalue_at_post_shock_prices=True),
+        base.weight,
+    )
+    assert large > small
+    # Without the revaluation the instrument's cost is invariant to the shock,
+    # as a discount on a fixed block at a pegged rate should be.
+    assert wsum(pol._jrf_block(base, cost, mt), base.weight) == pytest.approx(
+        wsum(pol._jrf_block(base, bigger, mt), base.weight)
+    )

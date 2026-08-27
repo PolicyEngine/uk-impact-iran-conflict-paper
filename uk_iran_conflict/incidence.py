@@ -819,6 +819,186 @@ def intra_decile_table(
 
 
 @dataclass
+class DispersionSummary:
+    """Within-decile dispersion against between-decile dispersion (round 2).
+
+    The paper's horizontal-incidence claim is that the spread *within* deciles
+    exceeds the spread *between* them. Two of three round-2 referees showed the
+    result is carried entirely by decile one — the decile in which about a fifth
+    of households have non-positive equivalised AHC income and which is
+    therefore the least reliable place in the distribution to measure a ratio to
+    income. Excluding it, the mean within-decile p90-p10 range (2.08pp) falls
+    **below** the between-decile range (2.27pp), eight of ten deciles are below
+    it, and the median within-decile range is 2.18pp.
+
+    Every one of those statistics is now computed and persisted, with and
+    without decile one and with a median-based measure alongside the mean, so
+    the prose has to be written against the numbers rather than against the
+    single decile that supports it.
+
+    Attributes
+    ----------
+    mean_within_decile_range_pp, median_within_decile_range_pp:
+        Mean and median of the ten within-decile p90-p10 ranges.
+    mean_within_decile_range_excl_d1_pp, median_within_decile_range_excl_d1_pp:
+        The same, over deciles two to ten.
+    between_decile_range_pp:
+        Range of the ten decile-mean burdens: ``max - min``.
+    within_decile_range_by_decile_pp:
+        The ten ranges themselves.
+    deciles_below_between_range:
+        How many of the ten within-decile ranges are below
+        ``between_decile_range_pp``.
+    within_exceeds_between, within_exceeds_between_excl_d1:
+        The paper's claim, evaluated on the mean measure, with and without
+        decile one. **These two disagree**, which is the finding.
+    median_based_within_pp:
+        A median-based dispersion measure that does not depend on the tails at
+        all: the median across deciles of each decile's own median burden
+        distance from the decile median (a within-decile median absolute
+        deviation), averaged over deciles. Reported because p90-p10 in a decile
+        where 20% of incomes are non-positive is a statement about the
+        denominator, not about horizontal incidence.
+    """
+
+    mean_within_decile_range_pp: float
+    median_within_decile_range_pp: float
+    mean_within_decile_range_excl_d1_pp: float
+    median_within_decile_range_excl_d1_pp: float
+    between_decile_range_pp: float
+    within_decile_range_by_decile_pp: list[float] = field(default_factory=list)
+    deciles_below_between_range: int = 0
+    within_exceeds_between: bool = False
+    within_exceeds_between_excl_d1: bool = False
+    median_based_within_pp: float = float("nan")
+
+
+def dispersion_summary(
+    intra: list[IntraDecileRow], decile: list[DecileRow]
+) -> DispersionSummary:
+    """Compute :class:`DispersionSummary` from the two decile tables."""
+    ranges = [row.p90_loss_pct - row.p10_loss_pct for row in intra]
+    excl = [row.p90_loss_pct - row.p10_loss_pct for row in intra if row.decile != 1]
+    means = [row.mean_loss_pct for row in decile]
+    between = (max(means) - min(means)) if means else float("nan")
+    # A median-based within-decile measure: half the p90-p10 span is still a
+    # tail statistic, so use the median distance of the two quartile-ish
+    # anchors from the decile median instead.
+    med_based = [
+        0.5
+        * (
+            (row.p90_loss_pct - row.p50_loss_pct)
+            + (row.p50_loss_pct - row.p10_loss_pct)
+        )
+        for row in intra
+        if row.decile != 1
+    ]
+    return DispersionSummary(
+        mean_within_decile_range_pp=float(np.mean(ranges)) if ranges else float("nan"),
+        median_within_decile_range_pp=(
+            float(np.median(ranges)) if ranges else float("nan")
+        ),
+        mean_within_decile_range_excl_d1_pp=(
+            float(np.mean(excl)) if excl else float("nan")
+        ),
+        median_within_decile_range_excl_d1_pp=(
+            float(np.median(excl)) if excl else float("nan")
+        ),
+        between_decile_range_pp=between,
+        within_decile_range_by_decile_pp=[float(r) for r in ranges],
+        deciles_below_between_range=int(sum(1 for r in ranges if r < between)),
+        within_exceeds_between=bool(ranges and float(np.mean(ranges)) > between),
+        within_exceeds_between_excl_d1=bool(excl and float(np.mean(excl)) > between),
+        median_based_within_pp=float(np.median(med_based))
+        if med_based
+        else float("nan"),
+    )
+
+
+#: Income concepts the decile ranking variable is checked against (round 2).
+DECILE_CONCEPT_CANDIDATES: tuple[str, ...] = (
+    "unequivalised_bhc",
+    "equivalised_ahc",
+    "equivalised_bhc",
+)
+
+
+@dataclass
+class DecileConceptAudit:
+    """Which income concept ``household_income_decile`` actually ranks on.
+
+    Round-2 referee 3: the code took PolicyEngine UK's ``household_income_decile``
+    unexamined while every burden in the paper is measured against equivalised
+    **AHC** income. If the ranking variable is a **BHC** (or unequivalised)
+    concept then the decile a household is placed in and the income it is
+    divided by are two different objects, and the gradient is a cross-concept
+    statistic — which is a thing the paper has to state, not something a referee
+    should have to discover.
+
+    This audit reports, for each candidate concept, the weighted share of
+    households whose own decile of that concept matches the decile they are
+    placed in, so the answer is a measured fact in ``results/`` rather than an
+    assumption. ``best_match`` is the concept with the highest agreement, and
+    ``matches_burden_denominator`` says whether that is the concept the
+    percentages divide by.
+    """
+
+    agreement: dict[str, float]
+    best_match: str
+    burden_denominator: str
+    matches_burden_denominator: bool
+    mean_absolute_decile_gap: dict[str, float]
+
+
+def _weighted_deciles(values: np.ndarray, weight: np.ndarray) -> np.ndarray:
+    """Decile 1-10 of ``values`` under ``weight`` (weighted equal-count bins)."""
+    order = np.argsort(values, kind="stable")
+    cum = np.cumsum(weight[order])
+    total = cum[-1] if len(cum) else 0.0
+    if total <= 0:
+        return np.zeros_like(values, dtype=int)
+    # Mid-rank position, consistent with wquantile.
+    pos = (cum - 0.5 * weight[order]) / total
+    out = np.empty_like(values, dtype=int)
+    out[order] = np.clip((pos * 10).astype(int) + 1, 1, 10)
+    return out
+
+
+def decile_concept_audit(
+    base: Baseline, income_basis: str = DEFAULT_INCOME_BASIS
+) -> DecileConceptAudit:
+    """Identify the income concept behind ``household_income_decile``. See above."""
+    inside = (base.decile >= 1) & (base.decile <= 10)
+    w = base.weight[inside]
+    placed = np.asarray(base.decile[inside], dtype=int)
+    equivalisation = np.clip(base.equivalisation, 1e-9, None)
+    candidates = {
+        "unequivalised_bhc": base.net_income,
+        "equivalised_ahc": base.equiv_income_ahc,
+        "equivalised_bhc": base.net_income / equivalisation,
+    }
+    agreement: dict[str, float] = {}
+    gaps: dict[str, float] = {}
+    total = float(w.sum())
+    for name, values in candidates.items():
+        own = _weighted_deciles(np.asarray(values, dtype=float), base.weight)[inside]
+        agreement[name] = (
+            float(w[own == placed].sum() / total) if total else float("nan")
+        )
+        gaps[name] = (
+            float((np.abs(own - placed) * w).sum() / total) if total else float("nan")
+        )
+    best = max(agreement, key=lambda k: agreement[k])
+    return DecileConceptAudit(
+        agreement=agreement,
+        best_match=best,
+        burden_denominator=income_basis,
+        matches_burden_denominator=(best == income_basis),
+        mean_absolute_decile_gap=gaps,
+    )
+
+
+@dataclass
 class GeographyRow:
     name: str
     mean_loss_gbp: float
@@ -901,6 +1081,64 @@ class ScenarioResult:
     annual_phase_in_gas: float = float("nan")
     annual_phase_in_electricity: float = float("nan")
     coverage: DecileCoverage | None = None
+    # --- round-2 disclosures -------------------------------------------
+    #: The window both legs are annualised over. Round-2 finding 1: they used
+    #: to be different windows, summed and labelled "2026".
+    modelled_window: str = ""
+    #: Peak-to-window damping actually applied to each leg. Recorded on EVERY
+    #: result because Table 1 is not like-for-like without it: ``realised_2026``
+    #: damps the pump leg to 0.65 while both NIESR scenarios use 1.0 (their
+    #: paths are specified as sustained levels, not peaks, so 1.0 is right for
+    #: them — but the reader has to be told, and the prose cannot disclose what
+    #: the results do not carry).
+    gas_sustained_fraction: float = float("nan")
+    pump_sustained_fraction: float = float("nan")
+    cap_lag_quarters: float = float("nan")
+    #: Within- versus between-decile dispersion, with and without decile one.
+    dispersion: DispersionSummary | None = None
+    #: What income concept the decile ranking variable actually ranks on.
+    decile_concept: DecileConceptAudit | None = None
+    # --- the domestic-energy-only robustness anchor ---------------------
+    #: The decile gradient computed on the **domestic-energy leg alone**.
+    #:
+    #: ``docs/VALIDATION.md`` ranks this the most informative check available to
+    #: the paper and the decomposition was already being computed. Motor fuel is
+    #: the channel with the broken imputation — ONS puts decile-one motor-fuel
+    #: spend at £318 against our £1,073, and DfT NTS0703 puts 40% of the bottom
+    #: income quintile without a car against our identical fuel-purchasing rate
+    #: in deciles one and ten — so the all-channel gradient inherits that
+    #: defect. The domestic leg is imputed from a variable 99% of households
+    #: record, and it is the leg every bill-based instrument in the scorecard
+    #: acts on. It is the gradient that can be defended.
+    decile_domestic_only: list[DecileRow] = field(default_factory=list)
+    domestic_only_d1_d10_ratio_pct: float = float("nan")
+    domestic_only_d1_d10_ratio_gbp: float = float("nan")
+    all_channel_d1_d10_ratio_pct: float = float("nan")
+
+
+def _ratio(rows: list[DecileRow], field_name: str) -> float:
+    """Decile-one over decile-ten value of ``field_name``, or NaN."""
+    if not rows:
+        return float("nan")
+    top = next((r for r in rows if r.decile == 10), None)
+    bottom = next((r for r in rows if r.decile == 1), None)
+    if top is None or bottom is None:
+        return float("nan")
+    denominator = getattr(top, field_name)
+    return (
+        float(getattr(bottom, field_name) / denominator)
+        if denominator
+        else float("nan")
+    )
+
+
+def _module_window_label(scenario: Any) -> str:
+    """The modelled window the scenario module declares, if it declares one."""
+    try:
+        from uk_iran_conflict.scenarios import MODELLED_WINDOW_LABEL  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - synthetic scenarios in tests
+        return ""
+    return MODELLED_WINDOW_LABEL
 
 
 def run_scenario(
@@ -948,6 +1186,9 @@ def run_scenario(
     equivalisation = np.clip(base.equivalisation, 1e-9, None)
     after = np.clip(income - total, 0, None)
     pass_through = getattr(scenario, "pass_through", None)
+    decile_rows = decile_table(base, total, income_basis)
+    intra_rows = intra_decile_table(base, total, income_basis)
+    domestic_rows = decile_table(base, cost.domestic, income_basis)
     return (
         ScenarioResult(
             scenario=cost.scenario,
@@ -961,8 +1202,8 @@ def run_scenario(
             motor_fuel_share_of_loss=(
                 wsum(cost.motor_fuel, w) / agg if agg else float("nan")
             ),
-            decile=decile_table(base, total, income_basis),
-            intra_decile=intra_decile_table(base, total, income_basis),
+            decile=decile_rows,
+            intra_decile=intra_rows,
             region=geography_table(base, total, "region", income_basis),
             gini_baseline=gini(income, w),
             gini_after=gini(after, w),
@@ -986,6 +1227,23 @@ def run_scenario(
                 getattr(pass_through, "annual_phase_in_electricity", float("nan"))
             ),
             coverage=decile_coverage(base, total, income_basis),
+            modelled_window=str(
+                getattr(scenario, "modelled_window", "")
+                or _module_window_label(scenario)
+            ),
+            gas_sustained_fraction=float(
+                getattr(pass_through, "sustained_fraction", float("nan"))
+            ),
+            pump_sustained_fraction=float(
+                getattr(pass_through, "pump_sustained_fraction", float("nan"))
+            ),
+            cap_lag_quarters=float(getattr(pass_through, "lag_quarters", float("nan"))),
+            dispersion=dispersion_summary(intra_rows, decile_rows),
+            decile_concept=decile_concept_audit(base, income_basis),
+            decile_domestic_only=domestic_rows,
+            domestic_only_d1_d10_ratio_pct=_ratio(domestic_rows, "mean_loss_pct"),
+            domestic_only_d1_d10_ratio_gbp=_ratio(domestic_rows, "mean_loss_gbp"),
+            all_channel_d1_d10_ratio_pct=_ratio(decile_rows, "mean_loss_pct"),
         ),
         cost,
     )

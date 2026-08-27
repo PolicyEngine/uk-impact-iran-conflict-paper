@@ -82,11 +82,20 @@ from uk_iran_conflict.incidence import (
     wsum,
 )
 
-#: The product the Cornwall Insight October-2026 anchor actually identifies:
-#: ``sustained_fraction`` x the first quarter's phase-in weight. Only the product
-#: is pinned (``docs/FIXES.md`` A4), which is why the split is swept below.
-CORNWALL_ANCHOR_PRODUCT = (
-    scen.REALISED_SUSTAINED_FRACTION * scen.CAP_PHASE_IN_PROFILE[0]
+#: Index of the cap quarter the Ofgem October-2026 anchor prices.
+ANCHOR_INDEX = scen.CAP_QUARTER_LABELS.index(scen.CAP_ANCHOR_QUARTER)
+
+#: The product the cap anchor actually identifies: ``sustained_fraction`` x the
+#: phase-in weight **in the anchor quarter**. Only the product is pinned
+#: (``docs/FIXES.md`` A4), which is why the split is swept below.
+#:
+#: This used to read ``CAP_PHASE_IN_PROFILE[0]`` — the *first* modelled quarter —
+#: which was the anchor quarter only because the modelled window happened to
+#: begin at 2026Q4. On the shock-year window the first quarter is 2026Q1, whose
+#: phase-in weight is zero, and the old expression would have silently pinned
+#: the product at zero.
+CAP_ANCHOR_PRODUCT = (
+    scen.REALISED_SUSTAINED_FRACTION * scen.CAP_PHASE_IN_PROFILE[ANCHOR_INDEX]
 )
 
 
@@ -200,6 +209,69 @@ def comparison_row(variant: Variant, result: ScenarioResult, base: Baseline) -> 
         "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
         "annual_phase_in_gas": result.annual_phase_in_gas,
         "annual_phase_in_electricity": result.annual_phase_in_electricity,
+        # Round-2 disclosures. Table 1 is not like-for-like without the two
+        # damping fractions: realised_2026 damps the pump leg while both NIESR
+        # scenarios use 1.0 (defensible — their paths are sustained levels, not
+        # peaks — but it has to be in the results before the prose can say so).
+        "modelled_window": result.modelled_window,
+        "gas_sustained_fraction": result.gas_sustained_fraction,
+        "pump_sustained_fraction": result.pump_sustained_fraction,
+        "cap_lag_quarters": result.cap_lag_quarters,
+        "legs_damped_symmetrically": (
+            result.gas_sustained_fraction == result.pump_sustained_fraction
+        ),
+        # The domestic-energy-only gradient: VALIDATION.md's most informative
+        # available robustness anchor, and the one channel whose imputation is
+        # not contradicted by DfT car-access data.
+        "domestic_only_d1_d10_ratio_pct": result.domestic_only_d1_d10_ratio_pct,
+        "domestic_only_d1_d10_ratio_gbp": result.domestic_only_d1_d10_ratio_gbp,
+        "domestic_only_decile1_loss_pct": (
+            result.decile_domestic_only[0].mean_loss_pct
+            if result.decile_domestic_only
+            else float("nan")
+        ),
+        "domestic_only_decile10_loss_pct": (
+            result.decile_domestic_only[-1].mean_loss_pct
+            if result.decile_domestic_only
+            else float("nan")
+        ),
+        # Within- vs between-decile dispersion, with and without decile one.
+        "mean_within_decile_range_pp": (
+            result.dispersion.mean_within_decile_range_pp
+            if result.dispersion
+            else float("nan")
+        ),
+        "mean_within_decile_range_excl_d1_pp": (
+            result.dispersion.mean_within_decile_range_excl_d1_pp
+            if result.dispersion
+            else float("nan")
+        ),
+        "median_within_decile_range_pp": (
+            result.dispersion.median_within_decile_range_pp
+            if result.dispersion
+            else float("nan")
+        ),
+        "between_decile_range_pp": (
+            result.dispersion.between_decile_range_pp
+            if result.dispersion
+            else float("nan")
+        ),
+        "within_exceeds_between": (
+            result.dispersion.within_exceeds_between if result.dispersion else None
+        ),
+        "within_exceeds_between_excl_d1": (
+            result.dispersion.within_exceeds_between_excl_d1
+            if result.dispersion
+            else None
+        ),
+        "decile_ranking_concept": (
+            result.decile_concept.best_match if result.decile_concept else ""
+        ),
+        "decile_ranking_matches_denominator": (
+            result.decile_concept.matches_burden_denominator
+            if result.decile_concept
+            else None
+        ),
         "excluded_households_m": coverage.households_m if coverage else float("nan"),
         "excluded_share_of_loss": coverage.share_of_loss if coverage else float("nan"),
         "aggregate_energy_spend_bn": wsum(base.energy, base.weight) / 1e9,
@@ -227,18 +299,17 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
     Four parameters, each currently unswept and each entering the domestic leg
     linearly:
 
-    ``sustained_fraction`` x ``phase_in[0]``
-        The Cornwall Insight October-2026 anchor identifies only the **product**
-        of these two (0.36 x 0.35 = 0.126), and it constrains only the *first*
-        modelled quarter. The sweep holds that product — so every row still
-        reproduces the anchor exactly — and for each candidate
-        ``sustained_fraction`` sets ``phase_in[0]`` to whatever the anchor
-        requires, leaving the later quarters at the profile's own (0.85, 1.00,
-        0.90). A lower sustained fraction therefore means a *steeper* climb from
-        the anchored first quarter to full pass-through, and a larger annual
-        domestic factor. Every one of these specifications is observationally
-        equivalent at the anchor and none is equivalent for the headline, which
-        is exactly the identification problem.
+    ``sustained_fraction`` x the anchor quarter's phase-in weight
+        Ofgem's confirmed October-2026 cap identifies only the **product** of
+        these two (0.199 x 1.00 = 0.199), and it constrains only the *anchor*
+        quarter. The sweep holds that product — so every row still reproduces
+        the anchor exactly — and for each candidate ``sustained_fraction`` sets
+        the anchor quarter's phase-in weight to whatever the anchor requires,
+        leaving the other quarters at the lag-derived profile. A lower sustained
+        fraction therefore means a *steeper* climb to full pass-through and a
+        larger window-average domestic factor. Every one of these specifications
+        is observationally equivalent at the anchor and none is equivalent for
+        the headline, which is exactly the identification problem.
     ``PREWAR_NBP_PENCE_PER_THERM``
         The realised gas percentage change is +78p on this base, so the domestic
         leg scales inversely with it.
@@ -255,10 +326,12 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
                 "parameter": parameter,
                 "value": value,
                 "sustained_fraction": scenario.pass_through.sustained_fraction,
-                "phase_in_first_quarter": scenario.pass_through.phase_in_profile[0],
+                "phase_in_at_anchor_quarter": (
+                    scenario.pass_through.phase_in_profile[ANCHOR_INDEX]
+                ),
                 "anchor_product": (
                     scenario.pass_through.sustained_fraction
-                    * scenario.pass_through.phase_in_profile[0]
+                    * scenario.pass_through.phase_in_profile[ANCHOR_INDEX]
                 ),
                 "annual_phase_in_gas": scenario.pass_through.annual_phase_in_gas,
                 "gas_pct_change": scenario.annual_retail_shock.gas_pct_change,
@@ -275,14 +348,19 @@ def domestic_leg_sweep(base: Baseline) -> list[dict]:
         )
 
     # 1. The split of the anchored product.
-    for fraction in (0.18, 0.24, 0.30, 0.36, 0.45, 0.60, 0.72):
-        first = CORNWALL_ANCHOR_PRODUCT / fraction
-        profile = (first, *scen.CAP_PHASE_IN_PROFILE[1:])
+    for fraction in (0.20, 0.25, 0.30, 0.36, 0.45, 0.60, 0.80, 1.00):
+        anchor_weight = CAP_ANCHOR_PRODUCT / fraction
+        if anchor_weight > 1.0:
+            continue  # a phase-in weight above 1.0 is not a phase-in weight
+        profile = list(scen.CAP_PHASE_IN_PROFILE)
+        profile[ANCHOR_INDEX] = anchor_weight
         record(
             "sustained_fraction_split",
             fraction,
             _with_pass_through(
-                central, sustained_fraction=fraction, phase_in_profile=profile
+                central,
+                sustained_fraction=fraction,
+                phase_in_profile=tuple(profile),
             ),
         )
 
@@ -360,6 +438,70 @@ def persisted_values(base: Baseline) -> dict:
     return out
 
 
+#: Calibrations the full decile cash profile is reported under (round-2
+#: finding 4).
+CASH_PROFILE_CALIBRATIONS: tuple[tuple[str, str], ...] = (
+    ("raw", "Uncalibrated PolicyEngine UK imputation"),
+    ("ons_fuel_shape", "ONS motor-fuel decile shape, national total preserved"),
+    ("ons_both_levels", "Both imputation levels corrected against ONS"),
+)
+
+
+def cash_profiles(base: Baseline, scenario) -> dict:
+    """Persist the FULL decile cash profile under every calibration.
+
+    Round-2 finding: the paper says the cash profile's non-monotonicity "is
+    common to every specification". Two of three referees checked, and it is
+    not: under **both** ONS calibrations the profile is strictly monotone and
+    peaks at decile ten. Only the uncalibrated imputation — the one whose
+    decile-one motor-fuel spend is £1,073 against ONS's £318, and which gives
+    deciles one and ten an identical fuel-purchasing rate against DfT's 60% and
+    86% car access — produces the kink the claim rests on.
+
+    Two decile-eight-shaped things were being confused, so the profile is
+    persisted in full, per calibration, with the monotonicity and the peak
+    decile computed here rather than eyeballed: ``is_monotone_increasing``,
+    ``peak_decile`` and the list of deciles at which the profile falls. The
+    prose has to be written against this file.
+    """
+    out: dict = {
+        "note": (
+            "Full decile cash-loss profile under each calibration. The paper's "
+            "claim that the non-monotone cash profile is common to every "
+            "specification is false under both ONS calibrations, which are "
+            "strictly monotone and peak at decile ten (round-2 referees)."
+        ),
+        "scenario": getattr(scenario, "key", ""),
+        "profiles": {},
+    }
+    for calibration, label in CASH_PROFILE_CALIBRATIONS:
+        result, _ = run_scenario(base, scenario, calibration=calibration)
+        cash = [row.mean_loss_gbp for row in result.decile]
+        pct = [row.mean_loss_pct for row in result.decile]
+        falls = [
+            row.decile
+            for row, prev in zip(result.decile[1:], result.decile[:-1], strict=True)
+            if row.mean_loss_gbp < prev.mean_loss_gbp
+        ]
+        out["profiles"][calibration] = {
+            "label": label,
+            "decile": [row.decile for row in result.decile],
+            "mean_loss_gbp": cash,
+            "mean_loss_pct": pct,
+            "is_monotone_increasing": not falls,
+            "deciles_where_cash_falls": falls,
+            "peak_decile": (
+                result.decile[int(max(range(len(cash)), key=cash.__getitem__))].decile
+                if cash
+                else None
+            ),
+            "decile1_over_decile10_gbp": (
+                cash[0] / cash[-1] if cash and cash[-1] else float("nan")
+            ),
+        }
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--period", type=int, default=2026)
@@ -379,6 +521,17 @@ def main() -> None:
 
     persisted = persisted_values(base)
     (RESULTS / "persisted_values.json").write_text(json.dumps(persisted, indent=2))
+
+    robustness_dir = RESULTS / "robustness"
+    robustness_dir.mkdir(parents=True, exist_ok=True)
+    profiles = cash_profiles(base, scen.SCENARIOS["realised_2026"])
+    (robustness_dir / "cash_profiles.json").write_text(json.dumps(profiles, indent=2))
+    for calibration, payload in profiles["profiles"].items():
+        print(
+            f"cash profile {calibration:16} monotone="
+            f"{payload['is_monotone_increasing']!s:5} peak=D{payload['peak_decile']} "
+            f"falls at {payload['deciles_where_cash_falls'] or 'nowhere'}"
+        )
     print(
         "motor fuel D1/D10 £/yr: raw "
         f"{persisted['motor_fuel_decile_mean_gbp']['raw'][0]:.0f}/"
@@ -464,6 +617,14 @@ def main() -> None:
                     "cost_bn": score.cost_bn,
                     "share_to_bottom_three": score.share_to_bottom_three,
                     "cost_per_pound_decile_one": score.cost_per_pound_decile_one,
+                    "cost_per_pound_decile_one_units": (
+                        score.cost_per_pound_decile_one_units
+                    ),
+                    "share_of_aggregate_loss_offset": (
+                        score.share_of_aggregate_loss_offset
+                    ),
+                    "implied_parameter": score.implied_parameter,
+                    "parameter_units": score.parameter_units,
                     "uncompensated_share": score.uncompensated_share_overall,
                     "fully_compensated_share": score.fully_compensated_share,
                     "mean_gain_gbp": score.mean_gain_gbp,

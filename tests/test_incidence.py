@@ -75,7 +75,12 @@ def test_shock_cost_uses_the_damped_pump_moves():
         inc.wsum(bound.electricity, w)
     )
     ratio = inc.wsum(main.motor_fuel, w) / inc.wsum(bound.motor_fuel, w)
-    assert ratio == pytest.approx(0.60)
+    from uk_iran_conflict.scenarios import REALISED_PUMP_SUSTAINED_FRACTION
+
+    assert ratio == pytest.approx(REALISED_PUMP_SUSTAINED_FRACTION)
+    # Derived over the same twelve months as the cap phase-in, not over
+    # calendar 2026 (round-2 finding 1).
+    assert ratio == pytest.approx(0.65)
     # And the fuel share of the loss falls as a result.
     main_share = inc.wsum(main.motor_fuel, w) / inc.wsum(main.total, w)
     bound_share = inc.wsum(bound.motor_fuel, w) / inc.wsum(bound.total, w)
@@ -297,8 +302,8 @@ def test_domestic_basis_is_validated():
 
 def test_run_scenario_reports_the_phase_in_it_applied():
     result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
-    assert result.annual_phase_in_gas == pytest.approx(0.7285)
-    assert result.annual_phase_in_electricity == pytest.approx(0.754)
+    assert result.annual_phase_in_gas == pytest.approx(0.7972, abs=1e-4)
+    assert result.annual_phase_in_electricity == pytest.approx(0.8028, abs=1e-4)
 
 
 # --- A3: symmetric damping ------------------------------------------------
@@ -471,3 +476,166 @@ def test_missing_shock_raises_instead_of_returning_an_unshocked_one():
         inc.domestic_retail_factors(Bare(), "steady_state")
     with pytest.raises(AttributeError, match="pump path"):
         inc.sustained_pump_factors(Bare())
+
+
+# --------------------------------------------------------------------------
+# Round-2: within- vs between-decile dispersion
+# --------------------------------------------------------------------------
+
+
+def _intra(ranges):
+    return [
+        inc.IntraDecileRow(
+            decile=i + 1,
+            p10_loss_pct=1.0,
+            p50_loss_pct=1.0 + r / 2,
+            p90_loss_pct=1.0 + r,
+            share_above_5pct=0.0,
+            share_above_10pct=0.0,
+        )
+        for i, r in enumerate(ranges)
+    ]
+
+
+def _deciles(means):
+    return [
+        inc.DecileRow(
+            decile=i + 1,
+            mean_loss_gbp=100.0 * m,
+            mean_loss_pct=m,
+            share_of_total_loss=0.1,
+            households_m=3.0,
+        )
+        for i, m in enumerate(means)
+    ]
+
+
+def test_dispersion_summary_reports_both_with_and_without_decile_one():
+    """The finding: the claim reverses once decile one is set aside.
+
+    Decile one is where about a fifth of households have non-positive
+    equivalised AHC income, so a p90-p10 range there is a statement about the
+    denominator rather than about horizontal incidence.
+    """
+    # One huge decile-one range, nine small ones.
+    summary = inc.dispersion_summary(
+        _intra([10.0] + [1.0] * 9), _deciles([2.5] + [0.5] * 9)
+    )
+    assert summary.between_decile_range_pp == pytest.approx(2.0)
+    assert summary.mean_within_decile_range_pp == pytest.approx(1.9)
+    assert summary.mean_within_decile_range_excl_d1_pp == pytest.approx(1.0)
+    assert summary.median_within_decile_range_pp == pytest.approx(1.0)
+    assert summary.within_exceeds_between is False
+    assert summary.within_exceeds_between_excl_d1 is False
+    assert summary.deciles_below_between_range == 9
+    assert len(summary.within_decile_range_by_decile_pp) == 10
+
+
+def test_dispersion_summary_can_disagree_with_itself_across_decile_one():
+    summary = inc.dispersion_summary(
+        _intra([30.0] + [1.9] * 9), _deciles([2.5] + [0.5] * 9)
+    )
+    assert summary.within_exceeds_between is True
+    assert summary.within_exceeds_between_excl_d1 is False
+
+
+def test_run_scenario_persists_the_dispersion_statistics():
+    result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    d = result.dispersion
+    assert d is not None
+    assert len(d.within_decile_range_by_decile_pp) == len(result.intra_decile)
+    assert d.between_decile_range_pp > 0
+
+
+# --------------------------------------------------------------------------
+# Round-2: what income concept does the decile ranking use?
+# --------------------------------------------------------------------------
+
+
+def test_decile_concept_audit_identifies_the_ranking_variable():
+    base = make_baseline()
+    audit = inc.decile_concept_audit(base)
+    assert set(audit.agreement) == set(inc.DECILE_CONCEPT_CANDIDATES)
+    assert audit.best_match in inc.DECILE_CONCEPT_CANDIDATES
+    assert 0.0 <= audit.agreement[audit.best_match] <= 1.0
+    assert audit.burden_denominator == inc.DEFAULT_INCOME_BASIS
+    assert audit.matches_burden_denominator == (
+        audit.best_match == inc.DEFAULT_INCOME_BASIS
+    )
+    for gap in audit.mean_absolute_decile_gap.values():
+        assert gap >= 0.0
+
+
+def test_decile_concept_audit_detects_a_deliberately_wrong_ranking():
+    """If the ranking were on a different concept, the audit must say so."""
+    base = make_baseline()
+    reversed_decile = 11.0 - base.decile
+    scrambled = dataclasses.replace(base, decile=reversed_decile)
+    audit = inc.decile_concept_audit(scrambled)
+    assert (
+        audit.agreement[audit.best_match]
+        < inc.decile_concept_audit(base).agreement["equivalised_ahc"]
+    )
+
+
+def test_run_scenario_persists_the_decile_concept_audit():
+    result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    assert result.decile_concept is not None
+    assert result.decile_concept.burden_denominator == "equivalised_ahc"
+
+
+# --------------------------------------------------------------------------
+# Round-2: the domestic-energy-only gradient (VALIDATION.md's anchor)
+# --------------------------------------------------------------------------
+
+
+def test_domestic_only_gradient_is_computed_and_uses_the_domestic_leg():
+    base = make_baseline()
+    scenario = get_scenario("realised_2026")
+    result, cost = inc.run_scenario(base, scenario)
+    expected = inc.decile_table(base, cost.domestic)
+    assert [r.mean_loss_gbp for r in result.decile_domestic_only] == pytest.approx(
+        [r.mean_loss_gbp for r in expected]
+    )
+    # It is strictly smaller than the all-channel loss in every decile.
+    for dom, total in zip(result.decile_domestic_only, result.decile, strict=True):
+        assert dom.mean_loss_gbp <= total.mean_loss_gbp
+
+
+def test_domestic_only_gradient_is_reported_beside_the_all_channel_one():
+    result, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    assert result.domestic_only_d1_d10_ratio_pct > 0
+    assert result.all_channel_d1_d10_ratio_pct == pytest.approx(
+        result.decile[0].mean_loss_pct / result.decile[-1].mean_loss_pct
+    )
+    assert result.domestic_only_d1_d10_ratio_gbp > 0
+
+
+# --------------------------------------------------------------------------
+# Round-2: Table 1 disclosures
+# --------------------------------------------------------------------------
+
+
+def test_every_result_records_the_window_and_both_damping_fractions():
+    """Table 1 is not like-for-like without them, so the prose cannot omit them."""
+    from uk_iran_conflict import scenarios as scen
+
+    realised, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    niesr, _ = inc.run_scenario(make_baseline(), get_scenario("niesr_baseline"))
+
+    assert realised.modelled_window == scen.MODELLED_WINDOW_LABEL
+    assert realised.pump_sustained_fraction == pytest.approx(
+        scen.REALISED_PUMP_SUSTAINED_FRACTION
+    )
+    assert realised.cap_lag_quarters == pytest.approx(scen.CAP_LAG_QUARTERS)
+    # The asymmetry Table 1 has to disclose: NIESR paths are sustained levels,
+    # so their pump leg is undamped while the realised one is not.
+    assert niesr.pump_sustained_fraction == 1.0
+    assert realised.pump_sustained_fraction < niesr.pump_sustained_fraction
+
+
+def test_the_symmetric_specification_is_the_one_with_equal_fractions():
+    sym, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026_symmetric"))
+    assert sym.gas_sustained_fraction == pytest.approx(sym.pump_sustained_fraction)
+    main, _ = inc.run_scenario(make_baseline(), get_scenario("realised_2026"))
+    assert main.gas_sustained_fraction != main.pump_sustained_fraction

@@ -46,6 +46,19 @@ RESULTS = ROOT / "results"
 DATASET_REPO = "policyengine/populace-uk-private"
 DATASET_FILE = "populace_uk_2023.h5"
 
+#: Exact dataset commit the paper's results are produced from.
+#:
+#: Round-2 referee 3: ``hf_hub_download`` was called with no ``revision=``, so
+#: it resolved the repository's ``main`` branch at whatever it happened to point
+#: to on the day. The *model* (``policyengine-uk``) is pinned exactly in
+#: ``pyproject.toml`` and the *data* it consumes was not, which is the harder
+#: half of replication to get right and the easier half to get wrong: a
+#: recalibration of the enhanced FRS moves every number in the paper with no
+#: diff anywhere in this repository. Pinned to the commit the published results
+#: were produced from. To move to a newer release, change this line, re-run
+#: every pipeline, and say so.
+DATASET_REVISION = "f0baa351d94f666e3b4b8f4e270ade45f02a89cc"
+
 
 def _load_env() -> None:
     """Read the gitignored .env so the token never has to be exported by hand."""
@@ -68,7 +81,13 @@ def dataset_path() -> str:
             "No Hugging Face token. Set HUGGING_FACE_TOKEN in .env — the "
             "PolicyEngine UK microdata is a private dataset."
         )
-    return hf_hub_download(DATASET_REPO, DATASET_FILE, repo_type="dataset", token=token)
+    return hf_hub_download(
+        DATASET_REPO,
+        DATASET_FILE,
+        repo_type="dataset",
+        revision=DATASET_REVISION,
+        token=token,
+    )
 
 
 def _asdict(obj):
@@ -146,6 +165,14 @@ def main() -> None:
                     "cost_bn": score.cost_bn,
                     "share_to_bottom_three": score.share_to_bottom_three,
                     "cost_per_pound_decile_one": score.cost_per_pound_decile_one,
+                    "cost_per_pound_decile_one_units": (
+                        score.cost_per_pound_decile_one_units
+                    ),
+                    "share_of_aggregate_loss_offset": (
+                        score.share_of_aggregate_loss_offset
+                    ),
+                    "implied_parameter": score.implied_parameter,
+                    "parameter_units": score.parameter_units,
                     "uncompensated_share": score.uncompensated_share_overall,
                     "fully_compensated_share": score.fully_compensated_share,
                     "mean_gain_gbp": score.mean_gain_gbp,

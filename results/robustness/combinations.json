@@ -1,16 +1,16 @@
 {
   "symmetric_steady_state": {
     "label": "Symmetric damping on the steady-state basis (phase-in not applied)",
-    "aggregate_cost_bn": 13.097819136,
-    "mean_loss_gbp": 444.4370422363281,
-    "mean_loss_pct": 0.9763644486502999,
-    "motor_fuel_share_pct": 43.14157187030499
+    "aggregate_cost_bn": 14.189303808,
+    "mean_loss_gbp": 481.47344970703125,
+    "mean_loss_pct": 1.0577281919731245,
+    "motor_fuel_share_pct": 43.14156964169499
   },
   "symmetric_ons_levels": {
     "label": "Symmetric damping with both imputation levels corrected against ONS",
-    "aggregate_cost_bn": 11.874082327192703,
-    "mean_loss_gbp": 402.91303108186463,
-    "mean_loss_pct": 0.889458995005165,
-    "motor_fuel_share_pct": 37.93798663288223
+    "aggregate_cost_bn": 13.507222528678337,
+    "mean_loss_gbp": 458.328974026383,
+    "mean_loss_pct": 1.0116999549174994,
+    "motor_fuel_share_pct": 36.13020172142648
   }
 }

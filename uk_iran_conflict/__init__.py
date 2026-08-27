@@ -11,7 +11,7 @@ Modules:
 
 * :mod:`uk_iran_conflict.scenarios` — the macro scenario registry (``SCENARIOS``)
 * :mod:`uk_iran_conflict.elasticity` — constant-elasticity consumption responses
-* :mod:`uk_iran_conflict.reforms` — the price shock and the five policy responses
+* :mod:`uk_iran_conflict.reforms` — price-path helpers read off a scenario
 * :mod:`uk_iran_conflict.incidence` — the consumption-side first-order shock
 * :mod:`uk_iran_conflict.policies` — the five scored policy responses
 
@@ -26,19 +26,19 @@ support — and silently returned different numbers from the consumption-side
 pipeline in :mod:`uk_iran_conflict.incidence`. They were deleted
 (docs/FIXES.md C14). ``resolve_elasticity_spec`` moved to
 :mod:`uk_iran_conflict.elasticity`.
+
+The same applies to the reform builders that used to live in
+:mod:`uk_iran_conflict.reforms`: a second implementation of the shock and of all
+five policy instruments, on different parameters (including a Warm Home Discount
+parameter that does not exist in PolicyEngine UK), imported by nothing and
+contradicting the paper. Deleted in the round-2 revision; only the price-path
+helpers remain.
 """
 
 from __future__ import annotations
 
 from uk_iran_conflict.elasticity import ElasticitySpec, resolve_elasticity_spec
-from uk_iran_conflict.reforms import (
-    POLICY_REFORMS,
-    PolicyResponse,
-    build_blunt_energy_bills_reform,
-    build_policy_reform,
-    build_shock_reform,
-    compose,
-)
+from uk_iran_conflict.reforms import cap_levels, pump_price_factors, retail_factors
 
 try:  # pragma: no cover — sibling module, may land after this one
     from uk_iran_conflict.scenarios import SCENARIOS
@@ -46,13 +46,10 @@ except ImportError:  # TODO(contract): expects uk_iran_conflict.scenarios.SCENAR
     SCENARIOS = {}
 
 __all__ = [
-    "POLICY_REFORMS",
     "SCENARIOS",
     "ElasticitySpec",
-    "PolicyResponse",
-    "build_blunt_energy_bills_reform",
-    "build_policy_reform",
-    "build_shock_reform",
-    "compose",
+    "cap_levels",
+    "pump_price_factors",
     "resolve_elasticity_spec",
+    "retail_factors",
 ]

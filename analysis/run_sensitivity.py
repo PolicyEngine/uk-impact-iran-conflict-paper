@@ -17,11 +17,18 @@ Three sweeps, each writing one CSV under ``results/sensitivity/``:
    compensating variation between the Paasche term ``q1 . dp`` and the
    Laspeyres term ``q0 . dp``. Quote the bracket, never the spend change.
 
-2. ``cap_lag.csv`` — the wholesale-to-retail lag sweep. ``CAP_LAG_QUARTERS``
-   is the paper's most contestable modelling choice, so the lag is swept over
-   1-4 quarters and BOTH the annualised (2026-window) and cumulative
-   (whole-path) loss are reported, so a reader can separate a genuine effect
-   from an artefact of which quarters fall inside the 2026 window.
+2. ``cap_lag.csv`` — the wholesale-to-retail lag sweep, and the **headline
+   reconciliation**. ``CAP_LAG_QUARTERS`` is the paper's most contestable
+   modelling choice, and before the round-2 revision the headline and this
+   appendix reported the same specification as £304 and £205 because they
+   applied unrelated arithmetic over unrelated windows. Both now derive the
+   phase-in profile from the lag through the single function
+   ``scenarios.cap_phase_in_profile`` and average it over the single window
+   ``scenarios.MODELLED_WINDOW_LABEL``, so the row at the central lag *is* the
+   headline and the sweep raises ``AssertionError`` if it ever stops being.
+   Each lag is run twice: with the sustained fraction re-solved to hold Ofgem's
+   confirmed October-2026 cap anchor, and with it held fixed so the anchor
+   breaks.
 
 3. ``asymmetry.csv`` — the gas/electricity asymmetry sweep.
    ``MARGINAL_PRICING_SHARE`` = 0.85 is the paper's central modelling claim;
@@ -68,6 +75,19 @@ OUT = ROOT / "results" / "sensitivity"
 DATASET_REPO = "policyengine/populace-uk-private"
 DATASET_FILE = "populace_uk_2023.h5"
 
+#: Exact dataset commit the paper's results are produced from.
+#:
+#: Round-2 referee 3: ``hf_hub_download`` was called with no ``revision=``, so
+#: it resolved the repository's ``main`` branch at whatever it happened to point
+#: to on the day. The *model* (``policyengine-uk``) is pinned exactly in
+#: ``pyproject.toml`` and the *data* it consumes was not, which is the harder
+#: half of replication to get right and the easier half to get wrong: a
+#: recalibration of the enhanced FRS moves every number in the paper with no
+#: diff anywhere in this repository. Pinned to the commit the published results
+#: were produced from. To move to a newer release, change this line, re-run
+#: every pipeline, and say so.
+DATASET_REVISION = "f0baa351d94f666e3b4b8f4e270ade45f02a89cc"
+
 #: Every sweep is run on the paper's realised central case.
 SCENARIO_KEY = "realised_2026"
 
@@ -84,10 +104,10 @@ EPSILON_GRID: tuple[float, ...] = (
     -0.8,
 )
 
-#: Quarter labels used to place the phase-in profile on a calendar in sweep 2.
-#: The war starts ~28 Feb 2026, so the shock quarter is 2026Q1.
-SHOCK_QUARTER_INDEX = 0
-CALENDAR = ("2026Q1", "2026Q2", "2026Q3", "2026Q4", "2027Q1", "2027Q2", "2027Q3")
+#: The shock's onset month and the modelled window both live in
+#: :mod:`uk_iran_conflict.scenarios` now; sweep 2 reads them from there rather
+#: than keeping a second calendar that could drift out of step with the
+#: headline. That drift is exactly what round-2 finding 1 was.
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +136,13 @@ def dataset_path() -> str:
             "No Hugging Face token. Set HUGGING_FACE_TOKEN in .env — the "
             "PolicyEngine UK microdata is a private dataset."
         )
-    return hf_hub_download(DATASET_REPO, DATASET_FILE, repo_type="dataset", token=token)
+    return hf_hub_download(
+        DATASET_REPO,
+        DATASET_FILE,
+        repo_type="dataset",
+        revision=DATASET_REVISION,
+        token=token,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -435,102 +461,150 @@ def sweep_elasticity(base: Baseline, scenario) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 
+#: Lags swept in sweep 2, in quarters. 1.5 is the central case
+#: (``scenarios.CAP_LAG_QUARTERS``); 3 is the pre-revision value, kept so the
+#: published specification stays reproducible.
+CAP_LAG_GRID: tuple[float, ...] = (1.0, 1.5, 2.0, 3.0, 4.0)
+
+
 def sweep_cap_lag(base: Baseline, scenario) -> pd.DataFrame:
-    """Sweep ``lag_quarters`` over 1-4, reporting annualised AND cumulative loss.
+    """Sweep the wholesale-to-retail cap lag, on the paper's own window.
 
-    The scenario's phase-in profile is placed on a calendar starting at the
-    shock quarter (2026Q1). With a lag of L quarters the profile's first
-    element lands in 2026Q1+L. Two very different quantities follow:
+    **This sweep is the round-2 reconciliation** (finding 1, and ``docs/FIXES.md``
+    A2, which asked for it and did not get it). Before this revision the headline
+    and this appendix computed different things and disagreed by 48%:
 
-    * **annualised** — the loss inside the 2026 calendar year only. This falls
-      mechanically as the lag lengthens, because fewer phase-in quarters fit
-      inside the window. It is largely a windowing artefact.
-    * **cumulative** — the loss over the whole phase-in path, wherever it
-      falls. This is invariant to the lag **by construction, as an identity**:
-      ``cumulative_weight = sum(profile) / 4`` contains no lag term at all
-      (docs/FIXES.md D24). It is not an empirical finding that the cumulative
-      loss survives a re-timing of the cap; it is arithmetic, and the sweep
-      asserts it rather than discovering it.
+    * the headline damped the domestic leg by
+      ``PassThroughAssumptions.annual_phase_in_gas``, the consumption-weighted
+      average of a hand-written ``(0.35, 0.85, 1.00, 0.90)`` phase-in tuple that
+      had **no functional relation to** ``CAP_LAG_QUARTERS`` at all;
+    * this sweep slid that same tuple along a calendar and counted how much of it
+      landed inside calendar 2026 — a *different window* from the one the
+      headline averaged over (2026Q4-2027Q3) and a different arithmetic.
 
-    The domestic-energy (cap) channel is lagged; motor fuel is not, since pump
-    prices pass through in weeks. Motor fuel therefore enters both columns at
-    its full annual value.
+    So the two could not agree, and changing the headline from £343 to £304
+    narrowed the gap without touching its cause. Both now go through one
+    function of one parameter: ``scenarios.cap_phase_in_profile(lag)`` produces
+    the profile, the scenario's own consumption weights average it over
+    ``scenarios.MODELLED_WINDOW_LABEL``, and each row is a full
+    :func:`~uk_iran_conflict.incidence.run_scenario` on that scenario. The row at
+    ``lag_quarters == scenarios.CAP_LAG_QUARTERS`` **is** the headline, exactly,
+    and ``reconciles_with_headline`` asserts it rather than hoping.
+
+    Two columns per lag, because the cap anchor and the lag are not independent:
+
+    ``anchored``
+        The sustained fraction is re-solved at each lag so the modelled
+        October-2026 cap still reproduces Ofgem's confirmed £1,723
+        (:func:`~uk_iran_conflict.scenarios.sustained_fraction_for_cap_anchor`).
+        This is the specification the paper uses. The domestic leg is nearly
+        lag-invariant here — and that near-invariance is now a real result about
+        an externally anchored cap, not the identity
+        ``cumulative_weight = sum(profile) / 4`` that the previous version
+        asserted and correctly flagged as arithmetic (``docs/FIXES.md`` D24).
+    ``unanchored``
+        The sustained fraction is held at the scenario's own value while the lag
+        moves, so the cap anchor breaks. Reported to show how much of the
+        invariance is the anchor doing the work.
     """
-    pt = scenario.pass_through
-    profile = tuple(pt.phase_in_profile)
-    ratios = _price_ratios(scenario)
-
-    # Steady-state (full-pass-through) annual costs.
-    domestic = base.gas * (ratios["gas"] - 1.0) + base.electricity * (
-        ratios["electricity"] - 1.0
-    )
-    fuel = base.petrol * (ratios["petrol"] - 1.0) + base.diesel * (
-        ratios["diesel"] - 1.0
-    )
-    w = base.weight
-    income = np.clip(base.net_income, 1, None)
-    steady_domestic_bn = wsum(domestic, w) / 1e9
-
     rows: list[dict] = []
+    anchor_index = scen.CAP_QUARTER_LABELS.index(scen.CAP_ANCHOR_QUARTER)
+    headline, _ = run_scenario(base, scenario)
     print("\n=== sweep 2: wholesale-to-retail cap lag (realised_2026) ===")
     print(
-        f"{'lag':>3} {'first qtr':>9} {'qtrs in 2026':>12} "
-        f"{'ann £':>7} {'ann £bn':>8} {'ann %':>6} "
-        f"{'cum £':>7} {'cum £bn':>8} {'ann share':>9} {'cum share':>9}"
+        f"headline: mean £{headline.mean_loss_gbp:.2f}, "
+        f"window {scen.MODELLED_WINDOW_LABEL}"
     )
-    for lag in (1, 2, 3, 4):
-        start = SHOCK_QUARTER_INDEX + lag
-        in_2026 = [
-            profile[i - start]
-            for i in range(4)  # 2026Q1..2026Q4
-            if 0 <= i - start < len(profile)
-        ]
-        # Quarterly weights: each quarter carries a quarter of an annual bill.
-        annual_weight = sum(in_2026) / 4.0
-        # D24: no lag term appears on the right-hand side. The "exact
-        # invariance" of the cumulative loss is this identity, not a result.
-        cumulative_weight = sum(profile) / 4.0
-        assert cumulative_weight == sum(profile) / 4.0
-
-        ann_cost = domestic * annual_weight + fuel
-        cum_cost = domestic * cumulative_weight + fuel
-
-        first_quarter = CALENDAR[start] if start < len(CALENDAR) else "2027Q4+"
-        row = {
-            "lag_quarters": lag,
-            "first_cap_quarter": first_quarter,
-            "phase_in_quarters_in_2026": len(in_2026),
-            "phase_in_weight_2026": annual_weight,
-            "phase_in_weight_cumulative": cumulative_weight,
-            "annualised_mean_loss_gbp": wmean(ann_cost, w),
-            "annualised_mean_loss_pct": 100 * wshare(ann_cost, income, w),
-            "annualised_loss_bn": wsum(ann_cost, w) / 1e9,
-            "cumulative_mean_loss_gbp": wmean(cum_cost, w),
-            "cumulative_mean_loss_pct": 100 * wshare(cum_cost, income, w),
-            "cumulative_loss_bn": wsum(cum_cost, w) / 1e9,
-            # Shares are of the domestic channel's full-pass-through year:
-            # the quantity the lag actually acts on.
-            "annualised_share": annual_weight,
-            "cumulative_share": cumulative_weight,
-            # True by construction: cumulative_weight is a function of the
-            # phase-in profile alone (docs/FIXES.md D24).
-            "cumulative_is_lag_invariant_by_construction": True,
-            "steady_state_domestic_bn": steady_domestic_bn,
-            "annualised_domestic_bn": steady_domestic_bn * annual_weight,
-            "cumulative_domestic_bn": steady_domestic_bn * cumulative_weight,
-            "motor_fuel_bn": wsum(fuel, w) / 1e9,
-        }
-        rows.append(row)
-        print(
-            f"{lag:3d} {first_quarter:>9} {len(in_2026):12d} "
-            f"{row['annualised_mean_loss_gbp']:7.0f} "
-            f"{row['annualised_loss_bn']:8.2f} "
-            f"{row['annualised_mean_loss_pct']:6.2f} "
-            f"{row['cumulative_mean_loss_gbp']:7.0f} "
-            f"{row['cumulative_loss_bn']:8.2f} "
-            f"{100 * row['annualised_share']:8.0f}% "
-            f"{100 * row['cumulative_share']:8.0f}%"
-        )
+    print(
+        f"{'lag':>5} {'anchor':>10} {'phase-in':>9} {'sustained':>10} "
+        f"{'gas %':>7} {'mean £':>8} {'£bn':>7} {'fuel %':>7} {'cap Q4 £':>9}"
+    )
+    for lag in CAP_LAG_GRID:
+        profile = scen.cap_phase_in_profile(lag)
+        for anchored in (True, False):
+            if anchored:
+                sustained = scen.sustained_fraction_for_cap_anchor(
+                    scenario.gas.pct_change,
+                    profile[anchor_index],
+                    wholesale_share_gas_bill=(
+                        scenario.pass_through.wholesale_share_gas_bill
+                    ),
+                    wholesale_share_electricity_bill=(
+                        scenario.pass_through.wholesale_share_electricity_bill
+                    ),
+                    marginal_pricing_share=(
+                        scenario.pass_through.marginal_pricing_share
+                    ),
+                    gas_share_of_dual_fuel_bill=(
+                        scenario.pass_through.gas_share_of_dual_fuel_bill
+                    ),
+                )
+            else:
+                sustained = scenario.pass_through.sustained_fraction
+            variant = dataclasses.replace(
+                scenario,
+                pass_through=dataclasses.replace(
+                    scenario.pass_through,
+                    lag_quarters=lag,
+                    phase_in_profile=profile,
+                    sustained_fraction=min(1.0, sustained),
+                ),
+            )
+            result, cost = run_scenario(base, variant)
+            w = base.weight
+            anchor_step = variant.cap_step(scen.CAP_ANCHOR_QUARTER)
+            is_central = anchored and abs(lag - scen.CAP_LAG_QUARTERS) < 1e-9
+            row = {
+                "lag_quarters": lag,
+                "anchor": "anchored" if anchored else "unanchored",
+                "phase_in_profile": ";".join(f"{v:.4f}" for v in profile),
+                "phase_in_at_anchor_quarter": profile[anchor_index],
+                "annual_phase_in_gas": variant.pass_through.annual_phase_in_gas,
+                "annual_phase_in_electricity": (
+                    variant.pass_through.annual_phase_in_electricity
+                ),
+                "sustained_fraction": variant.pass_through.sustained_fraction,
+                "anchor_product": (
+                    variant.pass_through.sustained_fraction * profile[anchor_index]
+                ),
+                "retail_gas_pct_change": (
+                    100 * variant.annual_retail_shock.gas_pct_change
+                ),
+                "cap_anchor_quarter_gbp": anchor_step.cap_gbp,
+                "cap_anchor_quarter_pct": 100 * anchor_step.cap_pct_change,
+                "mean_loss_gbp": result.mean_loss_gbp,
+                "mean_loss_pct": result.mean_loss_pct,
+                "aggregate_loss_bn": result.aggregate_cost_bn,
+                "domestic_loss_bn": wsum(cost.domestic, w) / 1e9,
+                "motor_fuel_loss_bn": wsum(cost.motor_fuel, w) / 1e9,
+                "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
+                "decile1_loss_pct": result.decile[0].mean_loss_pct,
+                "decile10_loss_pct": result.decile[-1].mean_loss_pct,
+                "is_central_specification": is_central,
+                "headline_mean_loss_gbp": headline.mean_loss_gbp,
+                "reconciles_with_headline": (
+                    abs(result.mean_loss_gbp - headline.mean_loss_gbp) < 1e-6
+                    if is_central
+                    else None
+                ),
+            }
+            if is_central and not row["reconciles_with_headline"]:
+                raise AssertionError(
+                    "cap-lag sweep no longer reproduces the headline at the "
+                    f"central lag: £{result.mean_loss_gbp:.4f} against "
+                    f"£{headline.mean_loss_gbp:.4f}. The headline and this "
+                    "appendix must be the same function of the same parameter."
+                )
+            rows.append(row)
+            print(
+                f"{lag:5.1f} {row['anchor']:>10} "
+                f"{row['annual_phase_in_gas']:9.4f} "
+                f"{row['sustained_fraction']:10.4f} "
+                f"{row['retail_gas_pct_change']:7.2f} "
+                f"{row['mean_loss_gbp']:8.2f} {row['aggregate_loss_bn']:7.2f} "
+                f"{100 * row['motor_fuel_share_of_loss']:6.1f}% "
+                f"{row['cap_anchor_quarter_gbp']:9.0f}"
+            )
     return pd.DataFrame(rows)
 
 
@@ -638,8 +712,8 @@ def sweep_policy_envelope(
     rows: list[dict] = []
     print("\n=== sweep 4: policy scorecard, stated cost vs common envelope ===")
     print(
-        f"{'policy':16} {'envelope':>9} {'£bn':>6} {'D1-3':>6} {'offset':>7} "
-        f"{'mean res':>9} {'med res':>8} {'unc':>6} {'£/£ D1':>7}"
+        f"{'policy':16} {'envelope':>18} {'£bn':>6} {'param':>9} {'max':>8} "
+        f"{'ok':>3} {'D1-3':>6} {'offset':>7} {'mean res':>9} {'£/£ D1':>7}"
     )
     for score in pol.scorecard(base, cost, mt, envelope_bn=envelope_bn):
         row = {
@@ -649,6 +723,19 @@ def sweep_policy_envelope(
             "envelope": score.envelope,
             "envelope_bn": score.envelope_bn,
             "envelope_scale": score.envelope_scale,
+            # Round-2 finding 2: the implied parameter is now on every scaled
+            # row, so a 138% bill discount or a negative VAT rate is visible in
+            # the CSV instead of hiding inside a scale factor.
+            "label_used": score.label_used,
+            "parameter": score.parameter,
+            "parameter_units": score.parameter_units,
+            "stated_parameter": score.stated_parameter,
+            "implied_parameter": score.implied_parameter,
+            "feasible_max_parameter": score.feasible_max_parameter,
+            "is_feasible": score.is_feasible,
+            "absorbable_envelope_bn": score.absorbable_envelope_bn,
+            "eligible_share": score.eligible_share,
+            "cost_per_pound_decile_one_units": (score.cost_per_pound_decile_one_units),
             "cost_bn": score.cost_bn,
             "stated_cost_bn": score.stated_cost_bn,
             "share_to_bottom_three": score.share_to_bottom_three,
@@ -672,12 +759,12 @@ def sweep_policy_envelope(
             row[f"uncompensated_d{d}"] = score.uncompensated_by_decile.get(d)
         rows.append(row)
         print(
-            f"{score.policy:16} {score.envelope:>9} {score.cost_bn:6.2f} "
+            f"{score.policy:16} {score.envelope:>18} {score.cost_bn:6.2f} "
+            f"{score.implied_parameter:9.2f} {score.feasible_max_parameter:8.2f} "
+            f"{'y' if score.is_feasible else 'NO':>3} "
             f"{100 * score.share_to_bottom_three:5.1f}% "
             f"{100 * score.share_of_aggregate_loss_offset:6.1f}% "
             f"{score.mean_residual_loss_gbp:9.0f} "
-            f"{score.median_residual_loss_gbp:8.0f} "
-            f"{100 * score.uncompensated_share_overall:5.1f}% "
             f"{score.cost_per_pound_decile_one:7.2f}"
         )
     return pd.DataFrame(rows)

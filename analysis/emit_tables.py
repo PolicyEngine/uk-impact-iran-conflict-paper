@@ -62,6 +62,22 @@ POLICY_LABELS = (
 )
 
 
+#: Small-integer -> English word, so a caption reads "three rows", not "3 rows".
+NUMBER_WORD = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+)
+
+
 def mc(*lines: str, align: str = "c") -> str:
     r"""A stacked (multi-line) column header, without needing ``makecell``.
 
@@ -130,18 +146,15 @@ def write(name: str, body: list[str], standalone: bool = True) -> None:
     print(f"wrote paper/tables/{name}")
 
 
-def cost_per_pound_decile_one(policy: dict, shock: dict) -> float:
-    """Total cost in £ per £1 of gain actually reaching decile one.
+def cost_per_pound_decile_one(policy: dict, shock: dict | None = None) -> float:
+    """Total exchequer cost per £1 of gain reaching decile one.
 
-    The stored ``cost_per_pound_decile_one`` is £bn per £1 of *mean* decile-one
-    gain; the mean is recovered from it and scaled by decile-one household
-    counts to get the gain delivered to the decile as a whole.
+    Stored **already dimensionless** by the rebuilt scorecard (cost divided by
+    the aggregate gain reaching decile one, >= 1 by construction), so it is
+    read straight through and rendered without a pound sign. See
+    ``cost_per_pound_decile_one_units`` in the results files.
     """
-    stored = float(policy["cost_per_pound_decile_one"])
-    cost_bn = float(policy["cost_bn"])
-    mean_gain_d1 = cost_bn / stored
-    households = float(decile_row(shock, "decile", 1)["households_m"]) * 1e6
-    return cost_bn * 1e9 / (mean_gain_d1 * households)
+    return float(policy["cost_per_pound_decile_one"])
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +278,7 @@ def tab_scorecard(shock: dict) -> None:
         + " & "
         + mc(r"Share to", r"deciles 1--3 (\%)")
         + " & "
-        + mc(r"Cost per \pounds 1", r"to decile 1 (\pounds)")
+        + mc(r"Cost per \pounds 1", r"to decile 1 ($\times$)")
         + " & "
         + mc(r"Loss", r"offset (\%)")
         + " & "
@@ -459,26 +472,73 @@ def tab_specifications() -> None:
     write("tab_specifications.tex", tight(body))
 
 
-#: Common-envelope scorecard: the five instruments scored at one exchequer cost
-#: so their targeting is comparable, rather than at each sponsor's own price.
-def tab_envelope() -> None:
-    r"""The five instruments at a common exchequer envelope.
+#: Common-envelope scorecard: the five instruments scored against one exchequer
+#: envelope, now with the row types the rebuild made load-bearing.
+ENVELOPE_ROWS = (
+    ("common_capped", "at feasible max"),
+    ("common_scaled", "scaled"),
+    ("common_eligibility", "wider eligibility"),
+)
 
-    ``results/sensitivity/policy_envelope.csv`` carries two rows per policy: the
-    sponsor's own stated design (``stated``) and the same instrument scaled to
-    the common envelope (``common``). Only the common rows appear here — that is
-    the point of the table — with the scaling factor shown so a reader can see
-    how far each instrument had to be stretched or shrunk.
+
+def tab_envelope() -> None:
+    r"""The five instruments against a common exchequer envelope.
+
+    ``results/sensitivity/policy_envelope.csv`` now carries up to four rows per
+    policy. Three of them appear here, one row each, grouped under the
+    instrument's name:
+
+    ``common_capped``       the instrument turned up to its feasible maximum.
+                            This is the honest common-envelope comparison, and
+                            it does **not** hold spend fixed: VAT zero-rating
+                            tops out at £1.96bn because there is no sixth VAT
+                            point to remove.
+    ``common_scaled``       the old proportional scaling to the full envelope,
+                            kept because it is what the withdrawn claim rested
+                            on, and flagged with a dagger where the implied
+                            parameter is not a thing that can exist.
+    ``common_eligibility``  the envelope spent on widening eligibility at the
+                            sponsor's own generosity, where that is defined.
+
+    The withdrawn claim is "VAT zero-rating wins at a common envelope". It won
+    only on the scaled row, by removing 12.7 points of a five-point tax.
     """
     with (SENS / "policy_envelope.csv").open(newline="") as fh:
-        rows = [r for r in csv.DictReader(fh) if r["envelope"].strip() == "common"]
-    by_policy = {r["policy"].strip(): r for r in rows}
-    envelope = next((float(r["envelope_bn"]) for r in rows), float("nan"))
+        rows = list(csv.DictReader(fh))
+    by_key = {(r["policy"].strip(), r["envelope"].strip()): r for r in rows}
+    envelope = next(
+        (
+            float(r["envelope_bn"])
+            for r in rows
+            if r["envelope"].strip() == "common_capped" and r["envelope_bn"]
+        ),
+        float("nan"),
+    )
+
+    def units_short(row: dict) -> str:
+        """A four-character-wide unit tag for the implied-parameter column."""
+        return (
+            r"\%" if not row["parameter_units"].strip().startswith("£") else r"\pounds"
+        )
+
+    def param_cell(row: dict) -> str:
+        value = float(row["implied_parameter"])
+        text = (
+            f"{value:,.0f}" if abs(value) >= 100 else f"{value:.1f}".removesuffix(".0")
+        )
+        unit = units_short(row)
+        cell = f"{text}{unit}" if unit == r"\%" else f"{unit} {text}"
+        if row["is_feasible"].strip().lower() != "true":
+            cell += r"$^\dagger$"
+        return cell
+
     body = [
-        r"\begin{tabular}{lrrrrrrr}",
+        r"\begin{tabular}{llrrrrrr}",
         r"\toprule",
-        "Instrument & "
-        + mc(r"Scaling", r"factor")
+        "Instrument & Variant & "
+        + mc(r"Spend", r"(\pounds bn)")
+        + " & "
+        + mc(r"Implied", r"setting")
         + " & "
         + mc(r"Share to", r"D1--3 (\%)")
         + " & "
@@ -486,40 +546,55 @@ def tab_envelope() -> None:
         + " & "
         + mc(r"Mean res-", r"idual (\pounds)")
         + " & "
-        + mc(r"Median res-", r"idual (\pounds)")
-        + " & "
-        + mc(r"D1 mean", r"residual (\pounds)")
-        + " & "
         + mc(r"Un-comp-", r"ensated (\%)")
         + r" \\",
         r"\midrule",
     ]
+    infeasible = 0
     for key, label in POLICY_LABELS:
-        r = by_policy.get(key)
-        if r is None:
-            continue
-        body.append(
-            f"{label} & {float(r['envelope_scale']):.2f} & "
-            f"{100 * float(r['share_to_bottom_three']):.1f} & "
-            f"{100 * float(r['share_of_aggregate_loss_offset']):.1f} & "
-            f"{float(r['mean_residual_loss_gbp']):,.0f} & "
-            f"{float(r['median_residual_loss_gbp']):,.0f} & "
-            f"{float(r['mean_residual_loss_d1']):,.0f} & "
-            f"{100 * float(r['uncompensated_share_overall']):.0f} \\\\"
-        )
+        first = True
+        for envelope_key, variant in ENVELOPE_ROWS:
+            r = by_key.get((key, envelope_key))
+            if r is None:
+                continue
+            if r["is_feasible"].strip().lower() != "true":
+                infeasible += 1
+            body.append(
+                f"{label if first else ''} & {variant} & "
+                f"{float(r['cost_bn']):.2f} & "
+                f"{param_cell(r)} & "
+                f"{100 * float(r['share_to_bottom_three']):.1f} & "
+                f"{100 * float(r['share_of_aggregate_loss_offset']):.1f} & "
+                f"{float(r['mean_residual_loss_gbp']):,.0f} & "
+                f"{100 * float(r['uncompensated_share_overall']):.0f} \\\\"
+            )
+            first = False
+        if not first:
+            body.append(r"\addlinespace")
+    if body[-1] == r"\addlinespace":
+        body.pop()
     body += [r"\bottomrule", r"\end{tabular}"]
     write(
         "tab_envelope.tex",
         float_wrap(
             tight(body),
-            "The five instruments scored at a common exchequer envelope of "
-            f"\\pounds {envelope:.0f}bn, realised 2026 scenario. Each is scaled "
-            "by the factor in column one from its sponsor's own design, so the "
-            "columns compare targeting rather than generosity. "
-            "``Loss offset'' is the share of the aggregate loss returned to "
-            "households; the residual columns are the loss remaining after the "
-            "policy, which is the continuous counterpart of the knife-edge "
-            "``uncompensated'' share in the final column.",
+            "The five instruments against a common exchequer envelope of "
+            f"\\pounds {envelope:.0f}bn, realised 2026 scenario. "
+            "``At feasible max'' turns each instrument up as far as it will go, "
+            "which for three of the five is short of the envelope --- VAT "
+            "zero-rating absorbs only \\pounds 1.96bn, because there is no "
+            "sixth VAT point to remove --- so the rows compare targeting at "
+            "the spend each design can actually reach, not at a common spend. "
+            "``Scaled'' is proportional scaling to the full envelope regardless "
+            "of feasibility; $\\dagger$ marks the "
+            f"{NUMBER_WORD[infeasible]} rows whose implied setting does not "
+            f"exist (a bill "
+            "discount above 100 per cent, more VAT points than the tax has). "
+            "``Wider eligibility'' spends the envelope on who is in the scheme "
+            "rather than on how generous it is, at the sponsor's own rate, and "
+            "is defined only for the two means-tested schemes. Any claim that "
+            "one instrument ``wins at a common envelope'' rests on the scaled "
+            "rows and is withdrawn.",
             "tab:envelope",
         ),
         standalone=False,
@@ -713,50 +788,80 @@ def tab_elasticity() -> None:
 
 
 def tab_caplag() -> None:
+    r"""The wholesale-to-retail lag sweep, on both anchoring rules.
+
+    The rebuilt sweep is two-way: each lag appears once ``anchored`` (the
+    sustained fraction re-solved so the Cornwall cap anchor still binds) and
+    once ``unanchored`` (that fraction held at the central value). The two
+    coincide up to two quarters and separate after, which is worth showing: the
+    long-lag rows are the ones where the choice of anchoring rule, not the lag
+    itself, is doing the work. ``lag_quarters`` is now a float and the
+    cumulative columns are gone, so the table reports the annualised figures
+    and the two legs behind them.
+    """
     rows = sload("cap_lag.csv")
+    lags = sorted({float(r["lag_quarters"]) for r in rows})
+    by_key = {(float(r["lag_quarters"]), r["anchor"].strip()): r for r in rows}
+    central = next(
+        (r for r in rows if r["is_central_specification"].strip().lower() == "true"),
+        None,
+    )
+    central_lag = float(central["lag_quarters"]) if central else None
+
+    def fmt_lag(value: float) -> str:
+        text = f"{value:g}"
+        return f"{text} (paper)" if value == central_lag else text
+
     body = [
         r"\begin{tabular}{llrrrrr}",
         r"\toprule",
-        r"& & \multicolumn{2}{c}{Annualised 2026} & "
-        r"\multicolumn{2}{c}{Cumulative} & \\",
+        r"& & \multicolumn{2}{c}{Booked in the modelled year} & "
+        r"\multicolumn{2}{c}{By leg (\pounds bn)} & \\",
         r"\cmidrule(lr){3-4} \cmidrule(lr){5-6}",
         mc(r"Lag", r"(quarters)", align="l")
         + " & "
-        + mc(r"First cap", r"quarter", align="l")
+        + mc(r"Cap", r"anchoring", align="l")
         + " & "
         + mc(r"Mean", r"(\pounds)")
         + " & "
         + mc(r"Total", r"(\pounds bn)")
+        + " & Domestic & "
+        + mc(r"Motor", r"fuel")
         + " & "
-        + mc(r"Mean", r"(\pounds)")
-        + " & "
-        + mc(r"Total", r"(\pounds bn)")
-        + " & "
-        + mc(r"Motor fuel", r"(\pounds bn)")
+        + mc(r"Motor fuel", r"share (\%)")
         + r" \\",
         r"\midrule",
     ]
-    for row in rows:
-        lag = int(row["lag_quarters"])
-        tag = f"{lag} (paper)" if lag == 3 else str(lag)
-        body.append(
-            f"{tag} & {row['first_cap_quarter']} & "
-            f"{float(row['annualised_mean_loss_gbp']):,.0f} & "
-            f"{float(row['annualised_loss_bn']):.2f} & "
-            f"{float(row['cumulative_mean_loss_gbp']):,.0f} & "
-            f"{float(row['cumulative_loss_bn']):.2f} & "
-            f"{float(row['motor_fuel_bn']):.2f} \\\\"
-        )
+    for lag in lags:
+        first = True
+        for anchor in ("anchored", "unanchored"):
+            r = by_key.get((lag, anchor))
+            if r is None:
+                continue
+            body.append(
+                f"{fmt_lag(lag) if first else ''} & {anchor} & "
+                f"{float(r['mean_loss_gbp']):,.0f} & "
+                f"{float(r['aggregate_loss_bn']):.2f} & "
+                f"{float(r['domestic_loss_bn']):.2f} & "
+                f"{float(r['motor_fuel_loss_bn']):.2f} & "
+                f"{100 * float(r['motor_fuel_share_of_loss']):.1f} \\\\"
+            )
+            first = False
     body += [r"\bottomrule", r"\end{tabular}"]
     write(
         "tab_caplag.tex",
         float_wrap(
             small(body),
-            "Wholesale-to-retail lag sweep, realised 2026 scenario. The "
-            "cumulative loss is exactly invariant to the lag; only the "
-            "calendar-year attribution moves. The annualised column is therefore "
-            "an accounting statement about which year the bill lands in, not a "
-            "statement about the size of the shock.",
+            "Wholesale-to-retail lag sweep, realised 2026 scenario, on both "
+            "anchoring rules. ``Anchored'' re-solves the sustained fraction at "
+            "each lag so the Cornwall cap anchor still binds; ``unanchored'' "
+            "holds it at the central value and so varies the timing alone. The "
+            "cumulative burden is invariant along the unanchored series --- an "
+            "identity, since the phase-in weights only move the burden between "
+            "calendar years --- so what moves in the columns below is the "
+            "attribution to the modelled year, not the size of the shock. The "
+            "two rules agree to two quarters and separate after, which is where "
+            "the anchoring rule rather than the lag is doing the work.",
             "tab:caplag",
         ),
         standalone=False,

@@ -490,8 +490,7 @@ def fig3_within_decile() -> Path:
         ax.set_xlim(0.4, 10.6)
 
     fig.suptitle(
-        "Figure 3. Horizontal beats vertical: dispersion of the loss within "
-        "income deciles",
+        "Figure 3. Dispersion of the loss within income deciles",
         y=1.02,
     )
     fs.note(
@@ -499,8 +498,11 @@ def fig3_within_decile() -> Path:
         "Realised 2026, main specification. Bands span the weighted 10th–90th "
         "percentile of the household loss as a share of equivalised AHC net income; "
         "households with non-positive equivalised income are excluded from the "
-        "ratio. The pattern is Cronin, Fullerton & Sexton "
-        "(2019): horizontal redistribution exceeds vertical.\nSource: authors' "
+        "ratio. The mean within-decile range exceeds the between-decile range, "
+        "but the comparison is carried entirely by decile one: excluding it, "
+        "the mean within-decile range falls below the between-decile one. The "
+        "case for reporting within-decile outcomes (Cronin, Fullerton & Sexton "
+        "2019) does not rest on that inequality.\nSource: authors' "
         "calculations on PolicyEngine UK.",
         y=-0.03,
     )
@@ -1105,6 +1107,85 @@ def fig8_benefit_status(cache: dict) -> Path:
     return fs.save(fig, "fig8_benefit_status.png")
 
 
+# ==========================================================================
+# fig9 — the cash profile under each calibration (a withdrawn claim)
+# ==========================================================================
+
+#: ``results/robustness/cash_profiles.json`` key -> (legend label, colour).
+CASH_PROFILE_STYLE = (
+    ("raw", "Uncalibrated imputation", fs.GREY),
+    ("ons_fuel_shape", "ONS motor-fuel shape", fs.BLUE),
+    ("ons_both_levels", "ONS both levels", fs.TEAL),
+)
+
+
+def fig9_cash_profiles() -> Path:
+    """Mean cash loss by decile under each calibration.
+
+    The paper claimed the non-monotone cash profile — the decile-eight hump —
+    was common to every specification. It is not. Both ONS calibrations are
+    strictly monotone in cash and peak at decile ten; only the uncalibrated
+    PolicyEngine imputation humps, and it humps in exactly the leg the ONS
+    calibration corrects. Drawing all three together is the honest way to show
+    that the hump is a property of one imputation rather than of the shock.
+    """
+    path = RESULTS / "robustness" / "cash_profiles.json"
+    profiles = json.loads(path.read_text())["profiles"]
+
+    fig, ax = plt.subplots(figsize=(7.4, 4.2))
+    for key, label, colour in CASH_PROFILE_STYLE:
+        profile = profiles.get(key)
+        if profile is None:
+            continue
+        monotone = bool(profile["is_monotone_increasing"])
+        ax.plot(
+            profile["decile"],
+            profile["mean_loss_gbp"],
+            marker="o" if monotone else "s",
+            markersize=4.5,
+            linewidth=1.9,
+            color=colour,
+            linestyle="-" if monotone else "--",
+            label=f"{label} ({'monotone' if monotone else 'non-monotone'})",
+        )
+        peak = int(profile["peak_decile"])
+        ax.scatter(
+            [peak],
+            [profile["mean_loss_gbp"][peak - 1]],
+            s=90,
+            facecolors="none",
+            edgecolors=colour,
+            linewidths=1.4,
+            zorder=5,
+        )
+
+    ax.set_xticks(range(1, 11))
+    ax.set_xlim(0.5, 10.5)
+    ax.set_xlabel("Equivalised net income decile (1 = poorest)")
+    ax.set_ylabel("Mean annual loss (£)")
+    ax.set_title("Rings mark each profile's peak decile")
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    fs.only_y_grid(ax)
+
+    fig.suptitle(
+        "Figure 9. The decile-eight cash hump is an artefact of one imputation",
+        y=1.0,
+    )
+    fs.note(
+        fig,
+        "Realised 2026. The decile-eight cash hump appears only in the "
+        "uncalibrated PolicyEngine UK motor-fuel imputation; under both ONS "
+        "calibrations the cash loss rises monotonically and peaks at decile "
+        "ten. The claim that the hump is common to every specification is "
+        "withdrawn. The percentage-of-income gradient, which is what the "
+        "paper's distributional argument rests on, is unaffected: it is "
+        "downward-sloping in all three.\nSource: authors' calculations on "
+        "PolicyEngine UK; results/robustness/cash_profiles.json.",
+        y=-0.04,
+    )
+    return fs.save(fig, "fig9_cash_profiles.png")
+
+
 # --------------------------------------------------------------------------
 # driver
 # --------------------------------------------------------------------------
@@ -1115,6 +1196,7 @@ NO_MICRO = {
     "fig3": fig3_within_decile,
     "fig4": fig4_region,
     "fig6": fig6_uncompensated,
+    "fig9": fig9_cash_profiles,
 }
 NEEDS_MICRO = {
     "fig5": fig5_fuel_decomposition,

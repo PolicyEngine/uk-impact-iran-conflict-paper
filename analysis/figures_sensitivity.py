@@ -251,39 +251,57 @@ def welfare_bounds_figure() -> Path:
 
 
 def cap_lag_figure() -> Path:
-    """Annualised versus cumulative loss across the wholesale-to-retail lag.
+    """The lag sweep on both anchoring rules, and the two legs behind it.
 
-    The point of the figure is that the cumulative burden is invariant: only the
-    calendar year in which it is booked moves. Drawing both series together is
-    the clearest way to show that the annual number is an attribution, not an
-    effect.
+    The rebuilt sweep runs each lag twice: ``anchored`` re-solves the sustained
+    fraction so the Cornwall cap anchor still binds, ``unanchored`` holds it
+    fixed and so varies the timing alone. Drawing both is the point of the
+    figure now — they agree out to two quarters and separate after, so the
+    long-lag divergence is the anchoring rule rather than the lag. The old
+    annualised-versus-cumulative pair cannot be drawn: the sweep no longer
+    carries cumulative columns, and the cumulative burden is invariant along the
+    unanchored series by construction, so it is a flat line by identity.
     """
     df = pd.read_csv(SENS / "cap_lag.csv").sort_values("lag_quarters")
-    x = df["lag_quarters"].astype(int)
-    width = 0.36
+    lags = sorted(df["lag_quarters"].unique())
+    width = 0.18 * (lags[1] - lags[0]) / 0.5 if len(lags) > 1 else 0.18
 
     fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.6))
 
     ax = axes[0]
-    ax.bar(
-        x - width / 2,
-        df["annualised_mean_loss_gbp"],
-        width,
-        color=BLUE,
-        label="Annualised (2026)",
-    )
-    ax.bar(
-        x + width / 2,
-        df["cumulative_mean_loss_gbp"],
-        width,
-        color=TEAL,
-        label="Cumulative",
-    )
-    ax.set_xticks(list(x))
+    for offset, (anchor, colour) in enumerate(
+        (("anchored", BLUE), ("unanchored", TEAL))
+    ):
+        sub = df[df["anchor"] == anchor].sort_values("lag_quarters")
+        ax.bar(
+            sub["lag_quarters"] + (offset - 0.5) * width,
+            sub["mean_loss_gbp"],
+            width,
+            color=colour,
+            label=anchor.capitalize(),
+        )
+    central = df[df["is_central_specification"].astype(str).str.lower() == "true"]
+    if not central.empty:
+        ax.axvline(
+            float(central["lag_quarters"].iloc[0]),
+            color=GREY,
+            linewidth=0.9,
+            linestyle=":",
+        )
+        ax.annotate(
+            "paper",
+            (float(central["lag_quarters"].iloc[0]), ax.get_ylim()[1]),
+            xytext=(3, -10),
+            textcoords="offset points",
+            fontsize=7.5,
+            color=GREY,
+        )
+    ax.set_xticks(list(lags))
+    ax.set_xticklabels([f"{lag:g}" for lag in lags])
     ax.set_xlabel("Wholesale-to-retail lag (quarters)", fontsize=9, color=DARK)
-    ax.set_ylabel("Mean household loss (£)", fontsize=9, color=DARK)
+    ax.set_ylabel("Mean loss booked in the year (£)", fontsize=9, color=DARK)
     ax.set_title(
-        "Cumulative burden is invariant; only its timing moves",
+        "The lag moves the attribution, not the shock",
         fontsize=9.5,
         color=DARK,
         loc="left",
@@ -292,9 +310,10 @@ def cap_lag_figure() -> Path:
     _style(ax)
 
     ax = axes[1]
+    anchored = df[df["anchor"] == "anchored"].sort_values("lag_quarters")
     ax.plot(
-        x,
-        df["annualised_domestic_bn"],
+        anchored["lag_quarters"],
+        anchored["domestic_loss_bn"],
         marker="o",
         color=BLUE,
         linewidth=1.8,
@@ -302,19 +321,20 @@ def cap_lag_figure() -> Path:
         label="Domestic energy",
     )
     ax.plot(
-        x,
-        df["motor_fuel_bn"],
+        anchored["lag_quarters"],
+        anchored["motor_fuel_loss_bn"],
         marker="s",
         color=TEAL,
         linewidth=1.8,
         markersize=4,
         label="Motor fuel",
     )
-    ax.set_xticks(list(x))
+    ax.set_xticks(list(lags))
+    ax.set_xticklabels([f"{lag:g}" for lag in lags])
     ax.set_xlabel("Wholesale-to-retail lag (quarters)", fontsize=9, color=DARK)
-    ax.set_ylabel("Booked in 2026 (£bn)", fontsize=9, color=DARK)
+    ax.set_ylabel("Booked in the modelled year (£bn)", fontsize=9, color=DARK)
     ax.set_title(
-        "Motor fuel dominates 2026: the bill shock lands in 2027",
+        "Motor fuel dominates: the bill shock lands later",
         fontsize=9.5,
         color=DARK,
         loc="left",
@@ -329,9 +349,113 @@ def cap_lag_figure() -> Path:
     return out
 
 
+#: Row type -> (display label, colour). The order is the order of the argument:
+#: what the instrument can actually do, what proportional scaling pretends it
+#: can do, and what the same money buys through eligibility instead.
+ENVELOPE_VARIANTS = (
+    ("common_capped", "At feasible max", BLUE),
+    ("common_scaled", "Scaled to envelope", GREY),
+    ("common_eligibility", "Wider eligibility", TEAL),
+)
+
+ENVELOPE_LABELS = {
+    "social_tariff": "Social\ntariff",
+    "jrf_block": "JRF\nblock",
+    "whd_expansion": "WHD\nexpansion",
+    "vat_zero": "VAT\nzero-rate",
+    "ippr_rebate": "Flat\nrebate",
+}
+
+
+def policy_envelope_figure() -> Path:
+    """What each instrument can absorb, and what it offsets when it does.
+
+    The withdrawn claim — "VAT zero-rating wins at a common envelope" — is an
+    artefact of the middle bar. Zero-rating absorbs £1.96bn and stops; the
+    scaled row reaches £5bn only by removing 12.7 points of a five-point tax.
+    Hatching marks every infeasible bar, so the reader can see at a glance that
+    the tallest offsets in the scaled series are not available.
+    """
+    df = pd.read_csv(SENS / "policy_envelope.csv")
+    order = [key for key, _ in ENVELOPE_LABELS.items() if (df["policy"] == key).any()]
+    x = list(range(len(order)))
+    width = 0.26
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8))
+
+    def bars(ax, column: str, scale: float) -> None:
+        for offset, (variant, label, colour) in enumerate(ENVELOPE_VARIANTS):
+            sub = df[df["envelope"] == variant].set_index("policy")
+            values, feasible, positions = [], [], []
+            for i, key in enumerate(order):
+                if key not in sub.index:
+                    continue
+                positions.append(i + (offset - 1) * width)
+                values.append(float(sub.loc[key, column]) * scale)
+                feasible.append(str(sub.loc[key, "is_feasible"]).lower() == "true")
+            drawn = ax.bar(positions, values, width, color=colour, label=label)
+            for patch, ok in zip(drawn, feasible, strict=True):
+                if not ok:
+                    patch.set_hatch("///")
+                    patch.set_edgecolor("white")
+                    patch.set_linewidth(0.0)
+        ax.set_xticks(x)
+        ax.set_xticklabels([ENVELOPE_LABELS[key] for key in order], fontsize=8)
+        _style(ax)
+
+    envelope = float(
+        df.loc[df["envelope"] == "common_capped", "envelope_bn"].dropna().iloc[0]
+    )
+
+    ax = axes[0]
+    bars(ax, "cost_bn", 1.0)
+    ax.axhline(envelope, color=DARK, linewidth=0.9, linestyle="--")
+    ax.set_ylim(0, envelope * 1.18)
+    ax.set_ylabel("Exchequer cost (£bn)", fontsize=9, color=DARK)
+    ax.set_title(
+        f"Three of five cannot absorb the envelope (dashed: £{envelope:.0f}bn)",
+        fontsize=9.5,
+        color=DARK,
+        loc="left",
+    )
+
+    ax = axes[1]
+    bars(ax, "share_of_aggregate_loss_offset", 100.0)
+    ax.set_ylabel("Share of aggregate loss offset (%)", fontsize=9, color=DARK)
+    ax.set_title(
+        "Hatched bars are settings that cannot exist",
+        fontsize=9.5,
+        color=DARK,
+        loc="left",
+    )
+
+    # One legend for both panels, below them, so neither bar chart has to give
+    # up headroom to it.
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        frameon=False,
+        fontsize=8,
+        ncol=3,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.04),
+    )
+    fig.tight_layout()
+    out = FIGS / "figA4_policy_envelope.png"
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def main() -> None:
     FIGS.mkdir(parents=True, exist_ok=True)
-    for fn in (elasticity_figure, welfare_bounds_figure, cap_lag_figure):
+    for fn in (
+        elasticity_figure,
+        welfare_bounds_figure,
+        cap_lag_figure,
+        policy_envelope_figure,
+    ):
         path = fn()
         size = path.stat().st_size / 1e3
         print(f"  {path.name:32} {size:7.1f} kB  ok")

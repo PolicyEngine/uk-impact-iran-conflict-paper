@@ -12,6 +12,7 @@ import dataclasses
 import pytest
 
 from uk_iran_conflict import reforms
+from uk_iran_conflict import scenarios as scen
 from uk_iran_conflict.scenarios import (
     CAP_PHASE_IN_PROFILE,
     QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY,
@@ -162,10 +163,20 @@ def test_cap_levels_are_plausible_annual_bills(key, scenario):
 
 @pytest.mark.parametrize("key,scenario", ALL)
 def test_cap_path_is_lagged_not_instant(key, scenario):
-    """The cap lags forward wholesale 6-9 months, so quarter 1 is damped."""
+    """The cap lags, so the shock quarter is damped relative to full pass-through.
+
+    The lag is now **1.5 quarters**, not 3. Ofgem's observation window closes
+    about seven weeks before the charge period and covers the preceding
+    quarter, so midpoint-to-midpoint is four to five months. Three round-2
+    referees flagged 3 as roughly double the institutional lag, and it was
+    doing real work: it pushed the cap move out of the modelled year and
+    produced the claim that 2026 is almost purely a pump-price event.
+    """
     profile = scenario.pass_through.phase_in_profile
     assert profile[0] < max(profile), f"{key}: no phase-in lag"
-    assert scenario.pass_through.lag_quarters >= 2, key
+    assert 1.0 <= scenario.pass_through.lag_quarters <= 2.0, key
+    # Monotone: the ramp does not unwind inside the modelled window.
+    assert list(profile) == sorted(profile), key
 
 
 @pytest.mark.parametrize("key,scenario", ALL)
@@ -255,10 +266,18 @@ def test_reforms_can_read_every_scenario(key, scenario):
 
 
 @pytest.mark.parametrize("key,scenario", ALL)
-def test_cap_changes_map_onto_four_policyengine_periods(key, scenario):
-    changes = reforms._cap_changes(reforms.cap_levels(scenario), 2026)
-    assert len(changes) == 4, key
-    assert all(period.startswith("2026-") for period in changes)
+def test_cap_levels_cover_the_modelled_window(key, scenario):
+    """One cap level per quarter the modelled year touches.
+
+    The period-string machinery this test used to exercise
+    (``reforms._cap_changes``) is gone with the rest of the parallel parameter
+    -reform implementation; two of the four period strings it emitted were
+    unreachable dates (``2026-06-31``, ``2026-09-31``).
+    """
+    levels = reforms.cap_levels(scenario)
+    assert len(levels) == len(scen.CAP_QUARTER_LABELS), key
+    assert scenario.quarter_labels == scen.CAP_QUARTER_LABELS, key
+    assert all(v > 0 for v in levels), key
 
 
 # --- pump damping (VALIDATION.md Check 2b) --------------------------------
@@ -317,7 +336,7 @@ def test_realised_main_damps_the_pump_peak_and_the_bound_does_not():
 
 
 def test_pump_damping_is_not_the_cap_damping():
-    """0.36 is calibrated to the Ofgem cap window; reusing it here would be wrong."""
+    """The cap fraction is a cap-window share; reusing it at the pump is wrong."""
     assert REALISED_PUMP_SUSTAINED_FRACTION != REALISED_SUSTAINED_FRACTION
     assert REALISED_PUMP_SUSTAINED_FRACTION > REALISED_SUSTAINED_FRACTION
     assert 0.0 < REALISED_PUMP_SUSTAINED_FRACTION <= 1.0
@@ -344,7 +363,7 @@ def test_incidence_applies_the_pump_damping():
     petrol, diesel = sustained_pump_factors(main)
     assert petrol == pytest.approx(1.0 + REALISED_PUMP_SUSTAINED_FRACTION * 0.20)
     assert diesel == pytest.approx(1.0 + REALISED_PUMP_SUSTAINED_FRACTION * 0.36)
-    # Undamped raw factors still available for the parameter reform.
+    # The quoted peaks stay available for reporting.
     assert reforms.pump_price_factors(main) == pytest.approx((1.20, 1.36))
 
 
@@ -359,14 +378,18 @@ def test_consumption_weights_are_shares_and_winter_heavy():
         assert len(weights) == len(CAP_PHASE_IN_PROFILE)
         assert sum(weights) == pytest.approx(1.0)
         assert all(w > 0 for w in weights)
-    # Oct-Dec and Jan-Mar are the heating quarters, and gas is the more
-    # seasonal of the two fuels.
+    # On the shock-year window the quarters are 2026Q1 (March only), Q2, Q3,
+    # Q4 and 2027Q1 (Jan-Feb). The two heating blocks are Q4 and 2027Q1.
     gas, elec = (
         QUARTERLY_CONSUMPTION_WEIGHTS_GAS,
         QUARTERLY_CONSUMPTION_WEIGHTS_ELECTRICITY,
     )
-    assert gas[0] + gas[1] > 0.6
-    assert max(gas) - min(gas) > max(elec) - min(elec)
+    assert gas[3] + gas[4] > 0.5, "Oct-Feb should carry most of the gas year"
+    assert max(gas) - min(gas) > max(elec) - min(elec), "gas is more seasonal"
+    # The window is a full annual heating cycle, so the monthly weights it is
+    # built from need no renormalisation.
+    assert sum(scen.MONTHLY_CONSUMPTION_WEIGHTS_GAS) == pytest.approx(1.0)
+    assert sum(scen.MONTHLY_CONSUMPTION_WEIGHTS_ELECTRICITY) == pytest.approx(1.0)
 
 
 def test_annual_phase_in_is_the_consumption_weighted_average_of_the_profile():
@@ -378,8 +401,8 @@ def test_annual_phase_in_is_the_consumption_weighted_average_of_the_profile():
         )
     )
     assert pt.annual_phase_in_gas == pytest.approx(expected)
-    assert pt.annual_phase_in_gas == pytest.approx(0.7285)
-    assert pt.annual_phase_in_electricity == pytest.approx(0.754)
+    assert pt.annual_phase_in_gas == pytest.approx(0.7972, abs=1e-4)
+    assert pt.annual_phase_in_electricity == pytest.approx(0.8028, abs=1e-4)
     # It is an average of the profile, so it lies inside the profile's range and
     # strictly below the peak: the paper's "not the peak".
     assert (
@@ -388,7 +411,7 @@ def test_annual_phase_in_is_the_consumption_weighted_average_of_the_profile():
 
 
 def test_annual_phase_in_is_flat_when_the_profile_is_flat():
-    pt = PassThroughAssumptions(phase_in_profile=(0.5, 0.5, 0.5, 0.5))
+    pt = PassThroughAssumptions(phase_in_profile=(0.5,) * len(CAP_PHASE_IN_PROFILE))
     assert pt.annual_phase_in_gas == pytest.approx(0.5)
     assert pt.annual_phase_in_electricity == pytest.approx(0.5)
 
@@ -396,10 +419,11 @@ def test_annual_phase_in_is_flat_when_the_profile_is_flat():
 def test_consumption_weights_are_validated():
     with pytest.raises(ValueError, match="same length"):
         PassThroughAssumptions(consumption_weights_gas=(1.0, 1.0))
+    n = len(CAP_PHASE_IN_PROFILE)
     with pytest.raises(ValueError, match="non-negative"):
-        PassThroughAssumptions(consumption_weights_gas=(-1.0, 1.0, 1.0, 1.0))
+        PassThroughAssumptions(consumption_weights_gas=(-1.0,) + (1.0,) * (n - 1))
     with pytest.raises(ValueError, match="sum to zero"):
-        PassThroughAssumptions(consumption_weights_electricity=(0.0, 0.0, 0.0, 0.0))
+        PassThroughAssumptions(consumption_weights_electricity=(0.0,) * n)
 
 
 @pytest.mark.parametrize("key,scenario", ALL)
@@ -434,15 +458,191 @@ def test_symmetric_scenario_damps_both_legs_by_one_fraction():
     assert sym.retail_shock.gas_pct_change > asym.retail_shock.gas_pct_change
 
 
-def test_symmetric_scenario_breaks_the_cornwall_cap_anchor_as_documented():
+def test_symmetric_scenario_breaks_the_cap_anchor_as_documented():
     """It buys symmetry at the price of the external anchor. Both are reported."""
-    asym = get_scenario("realised_2026").cap_step("2026Q4")
-    sym = get_scenario("realised_2026_symmetric").cap_step("2026Q4")
-    assert asym.cap_pct_change == pytest.approx(0.04, abs=0.005)
+    asym = get_scenario("realised_2026").cap_step(scen.CAP_ANCHOR_QUARTER)
+    sym = get_scenario("realised_2026_symmetric").cap_step(scen.CAP_ANCHOR_QUARTER)
+    assert asym.cap_pct_change == pytest.approx(scen.CAP_ANCHOR_PCT)
     assert sym.cap_pct_change > asym.cap_pct_change
-    assert "Cornwall" in get_scenario("realised_2026_symmetric").notes
+    assert "cap anchor" in get_scenario("realised_2026_symmetric").notes
 
 
 def test_symmetric_fraction_is_the_pump_profile_arithmetic_not_the_cap_anchor():
     assert SYMMETRIC_SUSTAINED_FRACTION == REALISED_PUMP_SUSTAINED_FRACTION
     assert SYMMETRIC_SUSTAINED_FRACTION != REALISED_SUSTAINED_FRACTION
+
+
+# --------------------------------------------------------------------------
+# Round-2 finding 1: ONE window, both legs
+# --------------------------------------------------------------------------
+
+
+def test_the_modelled_window_is_twelve_months_from_the_shock():
+    assert scen.MODELLED_WINDOW_MONTHS[0] == scen.SHOCK_ONSET_MONTH
+    assert len(scen.MODELLED_WINDOW_MONTHS) == 12
+    assert scen.MODELLED_WINDOW_MONTHS[-1] == "2027-02"
+    assert scen.MODELLED_WINDOW_START == "2026-03"
+
+
+def test_months_between_is_inclusive_and_rolls_the_year():
+    assert scen.months_between("2026-11", "2027-02") == (
+        "2026-11",
+        "2026-12",
+        "2027-01",
+        "2027-02",
+    )
+    assert scen.months_between("2026-05", "2026-05") == ("2026-05",)
+    with pytest.raises(ValueError, match="precedes"):
+        scen.months_between("2026-05", "2026-04")
+
+
+def test_quarter_helpers():
+    assert scen.quarter_of("2026-01") == "2026Q1"
+    assert scen.quarter_of("2026-03") == "2026Q1"
+    assert scen.quarter_of("2026-04") == "2026Q2"
+    assert scen.quarter_of("2026-12") == "2026Q4"
+    assert scen.quarters_of(scen.MODELLED_WINDOW_MONTHS) == (
+        "2026Q1",
+        "2026Q2",
+        "2026Q3",
+        "2026Q4",
+        "2027Q1",
+    )
+
+
+def test_both_legs_are_derived_from_the_same_window():
+    """The round-2 fix in one assertion.
+
+    The cap phase-in weights and the pump damping fraction must be functions of
+    the *same* month list. Before the revision the domestic leg averaged over
+    2026Q4-2027Q3 while the pump fraction was derived over calendar 2026, and
+    the two were summed and labelled "2026".
+    """
+    assert scen.CAP_QUARTER_LABELS == scen.quarters_of(scen.MODELLED_WINDOW_MONTHS)
+    assert scen.QUARTERLY_CONSUMPTION_WEIGHTS_GAS == scen.quarterly_consumption_weights(
+        scen.MODELLED_WINDOW_MONTHS, scen.MONTHLY_CONSUMPTION_WEIGHTS_GAS
+    )
+    assert scen.REALISED_PUMP_SUSTAINED_FRACTION == scen.pump_sustained_fraction(
+        scen.MODELLED_WINDOW_MONTHS
+    )
+    # Every month of the window is priced by exactly one of the cap quarters.
+    for month in scen.MODELLED_WINDOW_MONTHS:
+        assert scen.quarter_of(month) in scen.CAP_QUARTER_LABELS
+
+
+def test_the_window_choice_actually_moves_the_pump_fraction():
+    """If it did not, the finding would be cosmetic. It is not."""
+    assert scen.PUMP_SUSTAINED_FRACTION_CALENDAR_2026 == pytest.approx(0.5917, abs=1e-4)
+    assert scen.REALISED_PUMP_SUSTAINED_FRACTION == pytest.approx(0.65, abs=1e-4)
+    assert (
+        scen.REALISED_PUMP_SUSTAINED_FRACTION
+        > scen.PUMP_SUSTAINED_FRACTION_CALENDAR_2026
+    )
+
+
+def test_pump_profile_is_zero_before_the_shock():
+    for month in ("2026-01", "2026-02"):
+        assert scen.PUMP_PEAK_MONTHLY_PROFILE[month] == 0.0
+    assert scen.PUMP_PEAK_MONTHLY_PROFILE[scen.SHOCK_ONSET_MONTH] > 0.0
+    assert max(scen.PUMP_PEAK_MONTHLY_PROFILE.values()) == 1.0
+
+
+def test_pump_sustained_fraction_raises_on_a_month_it_cannot_price():
+    with pytest.raises(KeyError, match="2028-01"):
+        scen.pump_sustained_fraction(("2028-01",))
+
+
+# --- the phase-in profile is a function of the lag ------------------------
+
+
+def test_phase_in_profile_is_derived_from_the_lag():
+    assert scen.CAP_PHASE_IN_PROFILE == scen.cap_phase_in_profile(scen.CAP_LAG_QUARTERS)
+    assert scen.CAP_PHASE_IN_PROFILE[0] == 0.0  # 2026Q1's window closed pre-war
+    assert scen.CAP_PHASE_IN_PROFILE[-1] == 1.0
+
+
+@pytest.mark.parametrize("lag", [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+def test_phase_in_profile_is_bounded_and_monotone_at_every_lag(lag):
+    profile = scen.cap_phase_in_profile(lag)
+    assert len(profile) == len(scen.CAP_QUARTER_LABELS)
+    assert all(0.0 <= v <= 1.0 for v in profile)
+    assert list(profile) == sorted(profile)
+
+
+def test_a_longer_lag_pushes_the_shock_out_of_the_window():
+    """The mechanism by which lag = 3 made 2026 look like a pump-price event."""
+    short = PassThroughAssumptions(phase_in_profile=scen.cap_phase_in_profile(1.5))
+    long = PassThroughAssumptions(phase_in_profile=scen.cap_phase_in_profile(3.0))
+    assert long.annual_phase_in_gas < short.annual_phase_in_gas
+
+
+def test_cap_phase_in_profile_rejects_a_non_positive_lag():
+    with pytest.raises(ValueError, match="positive"):
+        scen.cap_phase_in_profile(0.0)
+
+
+# --- the cap anchor is solved, not written down ---------------------------
+
+
+def test_cap_anchor_uses_the_confirmed_ofgem_cap_net_of_the_vat_relief():
+    assert scen.OFGEM_CAP_OCT_2026_GBP == 1723.0
+    assert scen.CAP_ANCHOR_PCT == pytest.approx(
+        (1723.0 + 45.0) / scen.BASELINE_CAP_GBP - 1.0
+    )
+    # Ignoring the unrelated electricity VAT relief would attribute a tax cut
+    # to the war and understate the domestic leg by about two fifths.
+    assert scen.CAP_ANCHOR_PCT > 1723.0 / scen.BASELINE_CAP_GBP - 1.0
+
+
+def test_the_realised_scenario_reproduces_the_cap_anchor_exactly():
+    step = get_scenario("realised_2026").cap_step(scen.CAP_ANCHOR_QUARTER)
+    assert step.cap_pct_change == pytest.approx(scen.CAP_ANCHOR_PCT)
+    assert step.cap_gbp == pytest.approx(
+        scen.OFGEM_CAP_OCT_2026_GBP + scen.OFGEM_OCT_2026_ELECTRICITY_VAT_RELIEF_GBP
+    )
+
+
+@pytest.mark.parametrize("lag", [1.0, 1.5, 2.0, 3.0, 4.0])
+def test_the_anchor_holds_at_every_lag_when_the_fraction_is_re_solved(lag):
+    """``docs/FIXES.md`` A4: the anchor pins the product, not either factor.
+
+    Writing the sustained fraction as a literal while the phase-in profile
+    changed underneath it is how the anchor silently broke. Solving for it makes
+    the anchor hold by construction at any lag, window or bill-share
+    assumption — which is what lets the cap-lag appendix and the headline be the
+    same function of the same parameter.
+    """
+    profile = scen.cap_phase_in_profile(lag)
+    index = scen.CAP_QUARTER_LABELS.index(scen.CAP_ANCHOR_QUARTER)
+    fraction = scen.sustained_fraction_for_cap_anchor(
+        scen.REALISED_GAS_PCT_CHANGE, profile[index]
+    )
+    scenario = dataclasses.replace(
+        get_scenario("realised_2026"),
+        pass_through=dataclasses.replace(
+            get_scenario("realised_2026").pass_through,
+            lag_quarters=lag,
+            phase_in_profile=profile,
+            sustained_fraction=min(1.0, fraction),
+        ),
+    )
+    step = scenario.cap_step(scen.CAP_ANCHOR_QUARTER)
+    assert step.cap_pct_change == pytest.approx(scen.CAP_ANCHOR_PCT)
+    assert fraction * profile[index] == pytest.approx(
+        scen.REALISED_SUSTAINED_FRACTION * scen.CAP_PHASE_IN_PROFILE[index]
+    )
+
+
+def test_sustained_fraction_solver_refuses_a_quarter_with_no_pass_through():
+    with pytest.raises(ValueError, match="no pass-through"):
+        scen.sustained_fraction_for_cap_anchor(scen.REALISED_GAS_PCT_CHANGE, 0.0)
+
+
+def test_quarterly_consumption_weights_renormalise_a_partial_window():
+    weights = scen.quarterly_consumption_weights(
+        ("2026-01", "2026-02"), scen.MONTHLY_CONSUMPTION_WEIGHTS_GAS
+    )
+    assert sum(weights) == pytest.approx(1.0)
+    assert len(weights) == 1
+    with pytest.raises(ValueError, match="sum to zero"):
+        scen.quarterly_consumption_weights(("2026-01",), (0.0,) * 12)

@@ -1,0 +1,44 @@
+{
+  "note": "The decile burden ratio is an aggregate ratio and therefore scale-invariant, so a named scenario and a grid cell differ only in channel mix; every named scenario must land inside the grid's own range. Round-2 finding 7.",
+  "grid_d1_d10_ratio_min": 9.311577077695517,
+  "grid_d1_d10_ratio_max": 9.312362506645075,
+  "tolerance": 0.05,
+  "accepted_band": [
+    8.84599822381074,
+    9.777980631977329
+  ],
+  "scenarios": {
+    "niesr_baseline": {
+      "d1_d10_ratio": 9.356352546396787,
+      "d1_d10_ratio_domestic_only": 9.31157738104597,
+      "motor_fuel_share_of_loss": 0.7068526907022735,
+      "inside_grid_range": true
+    },
+    "niesr_adverse": {
+      "d1_d10_ratio": 9.362214651170655,
+      "d1_d10_ratio_domestic_only": 9.31157707769552,
+      "motor_fuel_share_of_loss": 0.7095076578818059,
+      "inside_grid_range": true
+    },
+    "realised_2026": {
+      "d1_d10_ratio": 9.216126620126548,
+      "d1_d10_ratio_domestic_only": 9.311577021993614,
+      "motor_fuel_share_of_loss": 0.7560490560446738,
+      "inside_grid_range": true
+    },
+    "realised_2026_peak_fuel": {
+      "d1_d10_ratio": 9.20709527723541,
+      "d1_d10_ratio_domestic_only": 9.311577021993614,
+      "motor_fuel_share_of_loss": 0.8266290197950772,
+      "inside_grid_range": true
+    },
+    "realised_2026_symmetric": {
+      "d1_d10_ratio": 9.250385998430922,
+      "d1_d10_ratio_domestic_only": 9.31157766246587,
+      "motor_fuel_share_of_loss": 0.4868493212713167,
+      "inside_grid_range": true
+    }
+  },
+  "all_named_scenarios_inside_grid_range": true,
+  "outside": []
+}

@@ -37,6 +37,13 @@ one appended key)::
     gini_baseline, gini_after, poverty_bhc_baseline, poverty_ahc_baseline,
     means_tested_share
 
+``results/sensitivity/policy_envelope.csv`` -- **four** rows per policy, keyed
+by ``envelope``: ``stated``, ``common_capped`` (the instrument at its feasible
+maximum), ``common_scaled`` (proportional scaling, which can be infeasible) and
+``common_eligibility`` (the envelope spent on widening eligibility). Carries
+``label_used, parameter, parameter_units, stated_parameter, implied_parameter,
+feasible_max_parameter, is_feasible, absorbable_envelope_bn, eligible_share``.
+
 ``results/<scenario>/<policy>.json`` (dataclass ``policies.PolicyScore``)::
 
     policy, label, cost_bn, stated_cost_bn, share_to_bottom_three,
@@ -48,12 +55,27 @@ one appended key)::
 
     aggregate_energy_spend_bn, aggregate_fuel_spend_bn
 
-Note on ``cost_per_pound_decile_one``: as stored it is *£bn of total cost per £1
-of mean decile-one gain*, which is not a readable unit. The paper's
-"cost per pound of bottom-decile gain" is recovered here as total cost divided
-by the total gain accruing to decile one, i.e.
+Note on ``cost_per_pound_decile_one``: the rebuilt scorecard stores it
+**dimensionless** — total exchequer cost divided by the aggregate gain reaching
+decile one, so it is >= 1 by construction — and records that in a companion
+``cost_per_pound_decile_one_units`` column. It is read straight through and must
+never be rendered with a pound sign; the old reconstruction from the mean gain
+and the decile-one household count is gone.
 
-    cost_bn * 1e9 / (mean decile-one gain * decile-one households).
+Post-rebuild additions read here
+-------------------------------
+* ``dispersion`` on every ``shock.json``: the within-decile p90-p10 range, its
+  mean, that mean excluding decile one, and a median-based measure, against the
+  between-decile range. The three disagree, and the prose now says so.
+* ``decile_domestic_only`` and ``domestic_only_d1_d10_ratio_*``: the gradient of
+  the domestic leg alone, which is invariant across specifications in a way the
+  all-channel gradient is not.
+* ``decile_concept``: how far ranking on unequivalised BHC income agrees with
+  ranking on the equivalised AHC income the burden is measured against.
+* ``results/robustness/cash_profiles.json``: the full ten-decile cash profile
+  under each calibration.
+* ``results/grid/reconciliation.json``: every named scenario against the grid's
+  own range of the decile ratio.
 
 Sensitivity sources
 -------------------
@@ -61,9 +83,13 @@ Sensitivity sources
 grid) -- ``spec, epsilon_mean, mean_loss_gbp, aggregate_loss_bn,
 share_of_upper_bound_shaved, decile1_loss_pct, decile10_loss_pct, ...``
 
-``results/sensitivity/cap_lag.csv``  (4 rows, one per lag) --
-``lag_quarters, annualised_mean_loss_gbp, cumulative_mean_loss_gbp,
-cumulative_loss_bn, motor_fuel_bn, ...``
+``results/sensitivity/cap_lag.csv``  (10 rows: five lags x two anchoring rules)
+-- ``lag_quarters, anchor, mean_loss_gbp, aggregate_loss_bn, domestic_loss_bn,
+motor_fuel_loss_bn, annual_phase_in_gas, annual_phase_in_electricity,
+is_central_specification, ...``. ``lag_quarters`` is a float
+(the central lag is 1.5) and there are no cumulative columns: the cumulative
+burden is reconstructed by undoing the phase-in leg by leg, and is invariant
+along the ``unanchored`` series.
 
 ``results/sensitivity/asymmetry.csv``  (3 rows: 0.70 / 0.85 paper / 1.00) --
 ``marginal_pricing_share, mean_loss_gbp, decile_ratio_pct,
@@ -149,6 +175,36 @@ POLICY_MACRO = {
     "ippr_rebate": "Rebate",
 }
 
+#: Small-integer -> English word. LaTeX macro names cannot contain digits and
+#: the prose reads better with the word anyway.
+NUMBER_WORD = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+)
+
+#: Decile index (0-based) -> the macro infix the paper already uses.
+DECILE_WORD = (
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+)
+
 lines: list[str] = []
 missing: list[str] = []
 
@@ -229,22 +285,27 @@ def decile_one_households_m(shock: dict) -> float:
     return float(decile_row(shock, "decile", 1)["households_m"])
 
 
-def cost_per_pound_decile_one(policy: dict, shock: dict) -> float:
-    """Total cost, in £, per £1 of gain reaching decile one.
+def cost_per_pound_decile_one(policy: dict, shock: dict | None = None) -> float:
+    """Total exchequer cost per £1 of gain reaching decile one.
 
-    ``cost_per_pound_decile_one`` in the JSON is £bn per £1 of *mean* decile-one
-    gain, so the mean gain is recovered from it and multiplied by the number of
-    decile-one households to get the gain actually delivered to that decile.
+    The rebuilt scorecard stores this **already dimensionless** — total cost
+    divided by the aggregate gain accruing to decile one, so it is >= 1 by
+    construction and carries no pound sign. ``cost_per_pound_decile_one_units``
+    records that in the file itself. The old reconstruction from the mean gain
+    and the decile-one household count is gone: it divided by the wrong thing
+    against the new schema. ``shock`` is retained only so existing call sites
+    keep working.
     """
-    stored = float(policy["cost_per_pound_decile_one"])
-    cost_bn = float(policy["cost_bn"])
-    if not stored:
-        raise ValueError("no decile-one gain")
-    mean_gain_d1 = cost_bn / stored
-    total_d1_gain = mean_gain_d1 * decile_one_households_m(shock) * 1e6
-    if total_d1_gain <= 0:
-        raise ValueError("non-positive decile-one gain")
-    return cost_bn * 1e9 / total_d1_gain
+    value = float(policy["cost_per_pound_decile_one"])
+    if not (value == value) or value <= 0:  # NaN or non-positive
+        raise ValueError(f"no usable decile-one cost ratio: {value!r}")
+    return value
+
+
+#: The units string the scorecard writes beside ``cost_per_pound_decile_one``.
+#: Asserted rather than assumed, so a future re-dimensioning back to pounds is
+#: caught here instead of silently reintroducing a "\pounds" in the prose.
+COST_PER_POUND_IS_DIMENSIONLESS = "dimensionless"
 
 
 # ---------------------------------------------------------------------------
@@ -295,12 +356,92 @@ def comparison_rows() -> dict[str, dict]:
     return {r["variant"]: r for r in cload(COMPARISON)}
 
 
+#: The rebuilt scorecard carries up to **four** rows per policy, distinguished
+#: by the ``envelope`` column. The distinction is load-bearing rather than
+#: presentational: VAT zero-rating cannot physically absorb the common envelope
+#: (removing 5 VAT points costs £1.96bn and there is no sixth point to remove),
+#: and two instruments are infeasible once scaled proportionally.
+#:
+#: ``stated``             the sponsor's own design, at the sponsor's own cost
+#: ``common_capped``      the instrument at its feasible maximum, spending
+#:                        whatever that absorbs (<= the envelope). Always
+#:                        feasible; this is the honest common-envelope row.
+#: ``common_scaled``      the old proportional scaling to the full envelope.
+#: ``common_eligibility`` the envelope spent by widening *eligibility* at the
+#:                        sponsor's own generosity, where that is defined.
+ENVELOPE_STATED = "stated"
+ENVELOPE_CAPPED = "common_capped"
+ENVELOPE_SCALED = "common_scaled"
+ENVELOPE_ELIGIBILITY = "common_eligibility"
+
+#: Macro infix per row type. ``Envelope`` (no infix qualifier) is kept as the
+#: name of the **capped** row, because that is the row the prose means when it
+#: says "at a common envelope" and the name is already in the manuscript.
+ENVELOPE_ROW_TAGS = (
+    (ENVELOPE_CAPPED, "Capped"),
+    (ENVELOPE_SCALED, "Scaled"),
+    (ENVELOPE_ELIGIBILITY, "Eligibility"),
+    (ENVELOPE_STATED, "Stated"),
+)
+
+
 def envelope_row(policy: str, envelope: str) -> dict:
-    """One row of the common-envelope scorecard (``stated`` or ``common``)."""
+    """One row of the common-envelope scorecard, by policy and row type."""
     for row in cload(ENVELOPE):
         if row["policy"].strip() == policy and row["envelope"].strip() == envelope:
             return row
     raise KeyError(f"{ENVELOPE}: no {policy}/{envelope} row")
+
+
+def envelope_has(policy: str, envelope: str) -> bool:
+    r"""True if this policy/row-type combination exists in the rebuilt file.
+
+    Not every instrument has every row: only the two means-tested schemes have
+    an eligibility-widening variant, and where scaling is already feasible the
+    scaled row coincides with the capped one. Macros are emitted only for rows
+    that exist, so an absent row is a silently-narrower macro set rather than a
+    ``\GENMISSING`` the prose would then have to work around.
+    """
+    try:
+        envelope_row(policy, envelope)
+    except Exception:  # noqa: BLE001 — absence is the answer, not an error
+        return False
+    return True
+
+
+def envelope_rows(envelope: str) -> list[dict]:
+    """Every policy's row of one type."""
+    return [r for r in cload(ENVELOPE) if r["envelope"].strip() == envelope]
+
+
+def is_true(text: str) -> bool:
+    return str(text).strip().lower() in {"true", "1", "yes"}
+
+
+def parameter_text(value: float) -> str:
+    """Render an instrument parameter at a readable precision.
+
+    The parameters span three orders of magnitude (5 VAT points, a 35 per cent
+    discount, a £1,083 payment), so a single format string either loses the
+    12.74 that makes the VAT scaling absurd or writes "35.0" for a round
+    number. Large values get thousands separators and no decimal; small ones
+    keep one decimal, trimmed when it is zero.
+    """
+    number = float(value)
+    if abs(number) >= 100:
+        return f"{number:,.0f}"
+    return f"{number:.1f}".removesuffix(".0")
+
+
+def parameter_suffix(row: dict) -> str:
+    """``Gbp`` or ``Pct``, from the row's own ``parameter_units`` string.
+
+    The instrument parameters are not commensurable — a bill discount in per
+    cent, a payment in pounds, VAT points — so the macro name has to say which,
+    and it is read off the file rather than hardcoded per policy.
+    """
+    units = row.get("parameter_units", "").strip()
+    return "Gbp" if units.startswith("£") else "Pct"
 
 
 def leg_rows(parameter: str) -> list[dict]:
@@ -321,7 +462,73 @@ def fuel_decile(decile: int) -> dict:
 #: The paper's calibrated lag, mirrored from
 #: ``uk_iran_conflict.scenarios.CAP_LAG_QUARTERS`` but written literally so this
 #: emitter stays importable without the package (CI runs it with no microdata).
-PAPER_CAP_LAG = "3"
+#: The rebuilt sweep re-anchors the cap at 1.5 quarters, not 3.
+PAPER_CAP_LAG = 1.5
+
+#: ``cap_lag.csv`` is now a *two-way* sweep: each lag appears once ``anchored``
+#: (the sustained fraction is re-solved so the Cornwall cap anchor still binds)
+#: and once ``unanchored`` (the sustained fraction is held at the central value).
+#: The paper's specification is the anchored central row; the unanchored series
+#: is the one over which the cumulative burden is invariant, because nothing
+#: about the shock's size changes along it.
+CAP_LAG_ANCHOR = "anchored"
+
+
+def lag_rows(anchor: str | None = CAP_LAG_ANCHOR) -> list[dict]:
+    """``cap_lag.csv`` rows, optionally restricted to one anchoring rule."""
+    rows = sload("cap_lag.csv")
+    if anchor is not None:
+        rows = [r for r in rows if r["anchor"].strip() == anchor]
+    if not rows:
+        raise KeyError(f"cap_lag.csv: no rows with anchor={anchor!r}")
+    return rows
+
+
+def lag_row(quarters: float, anchor: str | None = CAP_LAG_ANCHOR) -> dict:
+    """The single ``cap_lag.csv`` row for one lag.
+
+    ``lag_quarters`` is written as a float (``"1.0"``, ``"1.5"``) in the rebuilt
+    sweep, so it is matched numerically rather than as a string — the old
+    ``lag_quarters == "3"`` comparison silently matched nothing.
+    """
+    for row in lag_rows(anchor):
+        if abs(float(row["lag_quarters"]) - quarters) < 1e-9:
+            return row
+    raise KeyError(f"cap_lag.csv: no {anchor} row with lag_quarters={quarters}")
+
+
+def lag_central() -> dict:
+    """The row the sweep itself flags as the paper's central specification."""
+    for row in sload("cap_lag.csv"):
+        if row["is_central_specification"].strip().lower() == "true":
+            return row
+    raise KeyError("cap_lag.csv: no row flagged is_central_specification")
+
+
+def lag_cumulative_bn(row: dict) -> float:
+    """Cumulative (whole-shock) loss implied by one annualised cap-lag row.
+
+    The annualised figure is the cumulative one multiplied by the share of full
+    pass-through realised inside the modelled window, leg by leg. Undoing that
+    per leg — gas and electricity have different phase-in fractions, motor fuel
+    has none — recovers a quantity that is invariant along the *unanchored*
+    series to within a thousandth of a billion, which is the identity the
+    appendix asserts. It is not invariant along the anchored series, and should
+    not be: re-anchoring changes the size of the shock, not just its timing.
+    """
+    shock = jload(f"{CENTRAL_SCENARIO}/shock.json")
+    gas = float(shock["gas_share_of_loss"])
+    elec = float(shock["electricity_share_of_loss"])
+    if gas + elec <= 0:
+        raise ValueError("no domestic leg in the central scenario")
+    gas, elec = gas / (gas + elec), elec / (gas + elec)
+    domestic = float(row["domestic_loss_bn"])
+    phase_gas = float(row["annual_phase_in_gas"])
+    phase_elec = float(row["annual_phase_in_electricity"])
+    return domestic * (gas / phase_gas + elec / phase_elec) + float(
+        row["motor_fuel_loss_bn"]
+    )
+
 
 #: The marginal-pricing sweep endpoints and the paper's central value.
 ASYM_LOW, ASYM_CENTRAL, ASYM_HIGH = "0.7", "0.85", "1.0"
@@ -483,13 +690,373 @@ def main(draft: bool = False) -> None:
         central,
     )
 
-    def within_decile_range() -> float:
-        """Mean across deciles of the within-decile p90-p10 loss-share range."""
-        rows = jload(central)["intra_decile"]
-        spreads = [r["p90_loss_pct"] - r["p10_loss_pct"] for r in rows]
-        return sum(spreads) / len(spreads)
+    # The rebuilt runs carry a ``dispersion`` summary on every result, so the
+    # within-decile statistics are read from it rather than recomputed here.
+    # There are three of them and they disagree, which is the point: the mean
+    # p90-p10 range exceeds the between-decile range, the same mean excluding
+    # decile one does not, and a median-based measure is far below it. The
+    # Cronin-style claim survives on exactly one of the three.
+    def dispersion() -> dict:
+        return jload(central)["dispersion"]
 
-    emit("genWithinDecileRangePct", within_decile_range, "{:.2f}", central)
+    emit(
+        "genWithinDecileRangePct",
+        lambda: dispersion()["mean_within_decile_range_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileRangeExDOnePct",
+        lambda: dispersion()["mean_within_decile_range_excl_d1_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileMedianRangePct",
+        lambda: dispersion()["median_based_within_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileMedianOfRangesPct",
+        lambda: dispersion()["median_within_decile_range_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genDecileOneRangePct",
+        lambda: dispersion()["within_decile_range_by_decile_pp"][0],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileRangeMinExDOnePct",
+        lambda: min(dispersion()["within_decile_range_by_decile_pp"][1:]),
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileRangeMaxExDOnePct",
+        lambda: max(dispersion()["within_decile_range_by_decile_pp"][1:]),
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genDecilesBelowBetweenRange",
+        lambda: NUMBER_WORD[int(dispersion()["deciles_below_between_range"])],
+        source=f"{central}:dispersion",
+    )
+    emit(
+        "genWithinExceedsBetween",
+        lambda: "does" if dispersion()["within_exceeds_between"] else "does not",
+        source=f"{central}:dispersion",
+    )
+    emit(
+        "genWithinExceedsBetweenExDOne",
+        lambda: (
+            "does" if dispersion()["within_exceeds_between_excl_d1"] else "does not"
+        ),
+        source=f"{central}:dispersion",
+    )
+    # The same trio on the dispersion block's own between-decile range, so the
+    # comparison in the prose is like for like (the macro above computes it
+    # from the decile table; they agree, and this asserts that they do).
+    emit(
+        "genBetweenDecileRangeDispersionPct",
+        lambda: dispersion()["between_decile_range_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+
+    # ------------------------------------------------------------------
+    # the domestic-only gradient: the ratio that does not move
+    # ------------------------------------------------------------------
+    #
+    # The all-channel decile ratio moves with the gas/pump mix, because motor
+    # fuel is the channel the mix moves. The *domestic-only* ratio does not: it
+    # is 9.31 in every named scenario and every specification, to three
+    # significant figures, because the domestic leg is a common scaling of one
+    # consumption vector. That invariance is the finding, not the level.
+    emit(
+        "genDomesticOnlyDecileRatioPct",
+        lambda: jload(central)["domestic_only_d1_d10_ratio_pct"],
+        "{:.2f}",
+        central,
+    )
+    emit(
+        "genDomesticOnlyDecileRatioGbp",
+        lambda: jload(central)["domestic_only_d1_d10_ratio_gbp"],
+        "{:.2f}",
+        central,
+    )
+    emit(
+        "genAllChannelDecileRatioPct",
+        lambda: jload(central)["all_channel_d1_d10_ratio_pct"],
+        "{:.2f}",
+        central,
+    )
+    for tag, d in (("One", 1), ("Ten", 10)):
+        emit(
+            f"genDomesticOnlyDecile{tag}LossGbp",
+            lambda d=d: decile_row(jload(central), "decile_domestic_only", d)[
+                "mean_loss_gbp"
+            ],
+            "{:.0f}",
+            central,
+        )
+        emit(
+            f"genDomesticOnlyDecile{tag}LossPct",
+            lambda d=d: decile_row(jload(central), "decile_domestic_only", d)[
+                "mean_loss_pct"
+            ],
+            "{:.2f}",
+            central,
+        )
+
+    def _domestic_only_span(select):
+        """Span of the domestic-only ratio across the equivalised specifications.
+
+        The unequivalised run is excluded: it re-ranks households on a different
+        income concept, so its ratio is a different object rather than a
+        sensitivity of the same one. It is emitted separately below, which is
+        the honest way to show that the invariance is invariance *given the
+        denominator*, not invariance to the denominator.
+        """
+        values = [
+            float(r["domestic_only_d1_d10_ratio_pct"])
+            for r in cload(COMPARISON)
+            if r["domestic_only_d1_d10_ratio_pct"]
+            and r["variant"].strip() != "unequivalised"
+        ]
+        if not values:
+            raise ValueError("comparison.csv carries no domestic-only ratio")
+        return select(values)
+
+    emit(
+        "genDomesticOnlyRatioMin",
+        lambda: _domestic_only_span(min),
+        "{:.2f}",
+        COMPARISON,
+    )
+    emit(
+        "genDomesticOnlyRatioMax",
+        lambda: _domestic_only_span(max),
+        "{:.2f}",
+        COMPARISON,
+    )
+    emit(
+        "genDomesticOnlyRatioSpread",
+        lambda: _domestic_only_span(max) - _domestic_only_span(min),
+        "{:.3f}",
+        COMPARISON,
+    )
+    emit(
+        "genDomesticOnlyRatioUnequiv",
+        lambda: float(
+            crow(COMPARISON, "variant", "unequivalised")[
+                "domestic_only_d1_d10_ratio_pct"
+            ]
+        ),
+        "{:.2f}",
+        COMPARISON,
+    )
+    emit(
+        "genDomesticOnlyRatioEquivSpecCount",
+        lambda: NUMBER_WORD[
+            sum(1 for r in cload(COMPARISON) if r["variant"].strip() != "unequivalised")
+        ],
+        source=COMPARISON,
+    )
+    emit(
+        "genSpecificationCount",
+        lambda: NUMBER_WORD[len(cload(COMPARISON))],
+        source=COMPARISON,
+    )
+
+    # ------------------------------------------------------------------
+    # which decile concept: the ranking is not the same object as the burden
+    # ------------------------------------------------------------------
+    #
+    # Ranking households by unequivalised BHC income and by the equivalised AHC
+    # income the burden is measured against puts barely half of them in the same
+    # decile. The audit reports the agreement rate on each concept; the paper's
+    # own denominator is the best-matching one, which is the check that matters.
+    def concept() -> dict:
+        return jload(central)["decile_concept"]
+
+    emit(
+        "genDecileRankAgreementPct",
+        lambda: 100 * concept()["agreement"][concept()["best_match"]],
+        "{:.0f}",
+        f"{central}:decile_concept",
+    )
+    emit(
+        "genDecileRankAgreementUnequivPct",
+        lambda: 100 * concept()["agreement"]["unequivalised_bhc"],
+        "{:.0f}",
+        f"{central}:decile_concept",
+    )
+    emit(
+        "genDecileRankAgreementEquivBhcPct",
+        lambda: 100 * concept()["agreement"]["equivalised_bhc"],
+        "{:.0f}",
+        f"{central}:decile_concept",
+    )
+    emit(
+        "genDecileRankMeanGap",
+        lambda: concept()["mean_absolute_decile_gap"][concept()["best_match"]],
+        "{:.2f}",
+        f"{central}:decile_concept",
+    )
+    emit(
+        "genDecileRankMatchesDenominator",
+        lambda: "does" if concept()["matches_burden_denominator"] else "does not",
+        source=f"{central}:decile_concept",
+    )
+
+    # ------------------------------------------------------------------
+    # the cash profile under each calibration (the withdrawn non-monotonicity)
+    # ------------------------------------------------------------------
+    #
+    # The paper claimed the non-monotone cash profile — the decile-eight hump —
+    # was common to every specification. It is not: both ONS calibrations are
+    # strictly monotone and peak at decile ten. Only the raw PolicyEngine
+    # imputation humps, and the hump is in the leg the ONS calibration corrects.
+    CASH_PROFILES = "robustness/cash_profiles.json"
+    CASH_TAGS = (
+        ("Raw", "raw"),
+        ("OnsShape", "ons_fuel_shape"),
+        ("OnsLevels", "ons_both_levels"),
+    )
+
+    def profile(key: str) -> dict:
+        return jload(CASH_PROFILES)["profiles"][key]
+
+    for tag, key in CASH_TAGS:
+        for i, word in enumerate(DECILE_WORD):
+            emit(
+                f"gen{tag}CashDecile{word}Gbp",
+                lambda key=key, i=i: profile(key)["mean_loss_gbp"][i],
+                "{:.0f}",
+                CASH_PROFILES,
+            )
+        emit(
+            f"gen{tag}CashPeakDecile",
+            lambda key=key: DECILE_WORD[int(profile(key)["peak_decile"]) - 1].lower(),
+            source=CASH_PROFILES,
+        )
+        emit(
+            f"gen{tag}CashPeakDecileNum",
+            lambda key=key: int(profile(key)["peak_decile"]),
+            "{:d}",
+            CASH_PROFILES,
+        )
+        emit(
+            f"gen{tag}CashMonotone",
+            lambda key=key: (
+                "is" if profile(key)["is_monotone_increasing"] else "is not"
+            ),
+            source=CASH_PROFILES,
+        )
+        emit(
+            f"gen{tag}CashMonotoneWord",
+            lambda key=key: (
+                "monotone" if profile(key)["is_monotone_increasing"] else "non-monotone"
+            ),
+            source=CASH_PROFILES,
+        )
+        emit(
+            f"gen{tag}CashDecileOneOverTen",
+            lambda key=key: profile(key)["decile1_over_decile10_gbp"],
+            "{:.2f}",
+            CASH_PROFILES,
+        )
+        emit(
+            f"gen{tag}CashFallsAtDecileCount",
+            lambda key=key: NUMBER_WORD[len(profile(key)["deciles_where_cash_falls"])],
+            source=CASH_PROFILES,
+        )
+    emit(
+        "genCashProfileMonotoneCount",
+        lambda: NUMBER_WORD[
+            sum(1 for _, key in CASH_TAGS if profile(key)["is_monotone_increasing"])
+        ],
+        source=CASH_PROFILES,
+    )
+
+    # ------------------------------------------------------------------
+    # grid reconciliation: every named scenario sits inside the grid's range
+    # ------------------------------------------------------------------
+    RECON = "grid/reconciliation.json"
+
+    def recon() -> dict:
+        return jload(RECON)
+
+    emit(
+        "genGridReconRatioMin",
+        lambda: recon()["grid_d1_d10_ratio_min"],
+        "{:.2f}",
+        RECON,
+    )
+    emit(
+        "genGridReconRatioMax",
+        lambda: recon()["grid_d1_d10_ratio_max"],
+        "{:.2f}",
+        RECON,
+    )
+    emit(
+        "genGridReconTolerancePct",
+        lambda: 100 * recon()["tolerance"],
+        "{:.0f}",
+        RECON,
+    )
+    emit(
+        "genGridReconBandLow",
+        lambda: recon()["accepted_band"][0],
+        "{:.2f}",
+        RECON,
+    )
+    emit(
+        "genGridReconBandHigh",
+        lambda: recon()["accepted_band"][1],
+        "{:.2f}",
+        RECON,
+    )
+    emit(
+        "genGridReconScenarioCount",
+        lambda: NUMBER_WORD[len(recon()["scenarios"])],
+        source=RECON,
+    )
+    emit(
+        "genGridReconAllInside",
+        lambda: (
+            "every" if recon()["all_named_scenarios_inside_grid_range"] else "not every"
+        ),
+        source=RECON,
+    )
+    emit(
+        "genGridReconOutsideCount",
+        lambda: NUMBER_WORD[len(recon()["outside"])],
+        source=RECON,
+    )
+    emit(
+        "genGridReconDomesticOnlyMin",
+        lambda: min(
+            float(v["d1_d10_ratio_domestic_only"])
+            for v in recon()["scenarios"].values()
+        ),
+        "{:.2f}",
+        RECON,
+    )
+    emit(
+        "genGridReconDomesticOnlyMax",
+        lambda: max(
+            float(v["d1_d10_ratio_domestic_only"])
+            for v in recon()["scenarios"].values()
+        ),
+        "{:.2f}",
+        RECON,
+    )
 
     # ------------------------------------------------------------------
     # aggregate additional spend, by scenario
@@ -839,51 +1406,165 @@ def main(draft: bool = False) -> None:
         note(STALE_SWEEP_WARNING)
     # ------------------------------------------------------------------
     lag = "sensitivity/cap_lag.csv"
+
+    # The cumulative burden is invariant along the unanchored series (the
+    # phase-in weights only move the burden between calendar years), so it is
+    # read off that series rather than off one row.
+    def _cumulative_bn() -> float:
+        values = [lag_cumulative_bn(r) for r in lag_rows("unanchored")]
+        if max(values) - min(values) > 0.01:
+            raise ValueError(
+                "cumulative loss is not invariant along the unanchored series "
+                f"(spread {max(values) - min(values):.3f}bn)"
+            )
+        return sum(values) / len(values)
+
+    emit("genCapLagCumulativeBn", _cumulative_bn, "{:.2f}", lag)
     emit(
         "genCapLagCumulativeMean",
-        lambda: snum(
-            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG),
-            "cumulative_mean_loss_gbp",
+        lambda: (
+            _cumulative_bn()
+            * float(lag_central()["mean_loss_gbp"])
+            / float(lag_central()["aggregate_loss_bn"])
         ),
         "{:.0f}",
         lag,
     )
-    emit(
-        "genCapLagCumulativeBn",
-        lambda: snum(
-            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG), "cumulative_loss_bn"
-        ),
-        "{:.2f}",
-        lag,
+
+    #: Lag -> macro infix. LaTeX macro names cannot contain digits, so the
+    #: half-quarter lags are spelled out (``OnePointFive``).
+    LAG_TAGS = (
+        ("LagOne", 1.0),
+        ("LagOnePointFive", 1.5),
+        ("LagTwo", 2.0),
+        ("LagThree", 3.0),
+        ("LagFour", 4.0),
     )
-    for tag, which in (("LagOne", "1"), ("LagFour", "4"), ("Paper", PAPER_CAP_LAG)):
+    for tag, quarters in LAG_TAGS:
         emit(
             f"genCapLagAnnualised{tag}",
-            lambda which=which: snum(
-                srow("cap_lag.csv", "lag_quarters", which), "annualised_mean_loss_gbp"
+            lambda quarters=quarters: snum(lag_row(quarters), "mean_loss_gbp"),
+            "{:.0f}",
+            lag,
+        )
+        emit(
+            f"genCapLagAnnualised{tag}Unanchored",
+            lambda quarters=quarters: snum(
+                lag_row(quarters, "unanchored"), "mean_loss_gbp"
             ),
             "{:.0f}",
             lag,
         )
+    emit(
+        "genCapLagAnnualisedPaper",
+        lambda: float(lag_central()["mean_loss_gbp"]),
+        "{:.0f}",
+        lag,
+    )
+    emit("genCapLagPaperQuarters", lambda: PAPER_CAP_LAG, "{:g}", lag)
+
     # The spread of the annualised figure across the plausible 1-4 quarter lag
     # range: the paper's "roughly £40" understates it (docs/FIXES.md D17).
+    # Reported on both anchoring rules, because they disagree at the long lags.
+    def _range(anchor: str) -> float:
+        values = [float(r["mean_loss_gbp"]) for r in lag_rows(anchor)]
+        return max(values) - min(values)
+
+    emit("genCapLagRangeGbp", lambda: _range("anchored"), "{:.0f}", lag)
+    emit("genCapLagRangeUnanchoredGbp", lambda: _range("unanchored"), "{:.0f}", lag)
+    # ... and as a share of the paper's own annualised mean, which is the form
+    # the prose needs to say whether the windowing choice is material.
     emit(
-        "genCapLagRangeGbp",
-        lambda: (
-            max(float(r["annualised_mean_loss_gbp"]) for r in sload("cap_lag.csv"))
-            - min(float(r["annualised_mean_loss_gbp"]) for r in sload("cap_lag.csv"))
-        ),
+        "genCapLagSpreadPct",
+        lambda: 100 * _range("anchored") / float(lag_central()["mean_loss_gbp"]),
+        "{:.0f}",
+        lag,
+    )
+    emit(
+        "genCapLagSpreadUnanchoredPct",
+        lambda: 100 * _range("unanchored") / float(lag_central()["mean_loss_gbp"]),
         "{:.0f}",
         lag,
     )
     # the annualised 2026 total is almost purely the fast pump channel
     emit(
         "genMotorFuelAnnualisedBn",
-        lambda: snum(
-            srow("cap_lag.csv", "lag_quarters", PAPER_CAP_LAG), "motor_fuel_bn"
-        ),
+        lambda: float(lag_central()["motor_fuel_loss_bn"]),
         "{:.1f}",
         lag,
+    )
+    emit(
+        "genDomesticAnnualisedBn",
+        lambda: float(lag_central()["domestic_loss_bn"]),
+        "{:.1f}",
+        lag,
+    )
+
+    # ------------------------------------------------------------------
+    # the Resolution Foundation's window: calendar 2026, both legs
+    # ------------------------------------------------------------------
+    #
+    # The paper's window is the twelve months from the shock (March 2026 to
+    # February 2027). The RF £11bn comparator is calendar 2026, which opens two
+    # months before the shock and closes before the cap has fully moved. Both
+    # legs are therefore re-annualised on the RF window here, from the pure
+    # scenario data (no microdata): the domestic leg by the ratio of the
+    # consumption-weighted cap phase-in over the two windows, leg by leg, and
+    # the motor-fuel leg by the ratio of the pump damping fractions. Every
+    # component is linear in the price change, so rescaling the totals is exact.
+    def _calendar_legs() -> tuple[float, float]:
+        """(domestic £bn, motor fuel £bn) re-annualised on calendar 2026."""
+        from uk_iran_conflict import scenarios as scen  # noqa: PLC0415
+
+        shock = jload(central)
+        agg = float(shock["aggregate_cost_bn"])
+        gas_share = float(shock["gas_share_of_loss"])
+        elec_share = float(shock["electricity_share_of_loss"])
+        fuel_share = float(shock["motor_fuel_share_of_loss"])
+
+        months = scen.CALENDAR_2026_MONTHS
+        quarters = scen.quarters_of(months)
+        profile = scen.cap_phase_in_profile(scen.CAP_LAG_QUARTERS, quarters)
+
+        def annual_phase_in(weights_by_month) -> float:
+            weights = scen.quarterly_consumption_weights(months, weights_by_month)
+            return sum(p * w for p, w in zip(profile, weights, strict=True))
+
+        cal_gas = annual_phase_in(scen.MONTHLY_CONSUMPTION_WEIGHTS_GAS)
+        cal_elec = annual_phase_in(scen.MONTHLY_CONSUMPTION_WEIGHTS_ELECTRICITY)
+        own_gas = float(shock["annual_phase_in_gas"])
+        own_elec = float(shock["annual_phase_in_electricity"])
+
+        domestic = agg * (
+            gas_share * cal_gas / own_gas + elec_share * cal_elec / own_elec
+        )
+        fuel = (
+            agg
+            * fuel_share
+            * scen.PUMP_SUSTAINED_FRACTION_CALENDAR_2026
+            / scen.REALISED_PUMP_SUSTAINED_FRACTION
+        )
+        return domestic, fuel
+
+    cal_src = f"{central} + uk_iran_conflict.scenarios (calendar 2026 window)"
+    emit("genCalendarAggBn", lambda: sum(_calendar_legs()), "{:.1f}", cal_src)
+    emit(
+        "genCalendarMotorFuelShareOfLoss",
+        lambda: 100 * _calendar_legs()[1] / sum(_calendar_legs()),
+        "{:.0f}",
+        cal_src,
+    )
+    emit("genCalendarDomesticBn", lambda: _calendar_legs()[0], "{:.1f}", cal_src)
+    emit("genCalendarMotorFuelBn", lambda: _calendar_legs()[1], "{:.1f}", cal_src)
+    emit(
+        "genCalendarPumpFraction",
+        lambda: (
+            __import__(
+                "uk_iran_conflict.scenarios", fromlist=["x"]
+            ).PUMP_SUSTAINED_FRACTION_CALENDAR_2026
+        ),
+        "{:.2f}",
+        "uk_iran_conflict.scenarios",
     )
 
     # ------------------------------------------------------------------
@@ -1325,75 +2006,23 @@ def main(draft: bool = False) -> None:
     )
 
     # ------------------------------------------------------------------
-    # the common-envelope scorecard (B7): all five instruments at £5bn
+    # the common-envelope scorecard (B7), rebuilt: four row types per policy
     # ------------------------------------------------------------------
+    #
+    # The headline of the rebuild is a withdrawal. "VAT zero-rating wins at a
+    # common envelope" was an artefact of scaling every instrument
+    # proportionally to £5bn regardless of whether the instrument could reach
+    # that spend: zero-rating tops out at the £1.96bn that removing all five VAT
+    # points costs, and the scaled row got there by removing 12.7 points of a
+    # 5-point tax. Two instruments are infeasible when scaled. The capped rows
+    # are therefore the comparison, and they compare *at different spends*,
+    # which is exactly the finding.
     emit(
         "genEnvelopeBn",
-        lambda: snum(envelope_row("vat_zero", "common"), "envelope_bn"),
+        lambda: snum(envelope_row("vat_zero", ENVELOPE_CAPPED), "envelope_bn"),
         "{:.0f}",
         ENVELOPE,
     )
-    for policy, tag in POLICY_MACRO.items():
-        emit(
-            f"gen{tag}EnvelopeOffsetPct",
-            lambda policy=policy: (
-                100
-                * snum(envelope_row(policy, "common"), "share_of_aggregate_loss_offset")
-            ),
-            "{:.1f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeResidualMeanGbp",
-            lambda policy=policy: snum(
-                envelope_row(policy, "common"), "mean_residual_loss_gbp"
-            ),
-            "{:.0f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeResidualMedianGbp",
-            lambda policy=policy: snum(
-                envelope_row(policy, "common"), "median_residual_loss_gbp"
-            ),
-            "{:.0f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeResidualDecileOneGbp",
-            lambda policy=policy: snum(
-                envelope_row(policy, "common"), "mean_residual_loss_d1"
-            ),
-            "{:.0f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeMeanGainGbp",
-            lambda policy=policy: snum(envelope_row(policy, "common"), "mean_gain_gbp"),
-            "{:.0f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeUncompensatedPct",
-            lambda policy=policy: (
-                100
-                * snum(envelope_row(policy, "common"), "uncompensated_share_overall")
-            ),
-            "{:.0f}",
-            ENVELOPE,
-        )
-        emit(
-            f"gen{tag}EnvelopeScale",
-            lambda policy=policy: snum(
-                envelope_row(policy, "common"), "envelope_scale"
-            ),
-            "{:.2f}",
-            ENVELOPE,
-        )
-
-    def envelope_best(select, column: str) -> dict:
-        rows = [r for r in cload(ENVELOPE) if r["envelope"].strip() == "common"]
-        return select(rows, key=lambda r: float(r[column]))
 
     #: Short, LaTeX-safe prose names. The CSV ``label`` carries "%" and "->",
     #: which would break the build, so it is never emitted verbatim.
@@ -1404,6 +2033,220 @@ def main(draft: bool = False) -> None:
         "vat_zero": "VAT zero-rating",
         "ippr_rebate": "the flat rebate",
     }
+
+    def env_pct(policy: str, envelope: str, column: str) -> float:
+        return 100 * snum(envelope_row(policy, envelope), column)
+
+    for policy, tag in POLICY_MACRO.items():
+        # --- the instrument's own design parameters, whatever their units ---
+        for name, column in (
+            ("Stated", "stated_parameter"),
+            ("FeasibleMax", "feasible_max_parameter"),
+        ):
+            if not envelope_has(policy, ENVELOPE_CAPPED):
+                continue
+            row = envelope_row(policy, ENVELOPE_CAPPED)
+            suffix = parameter_suffix(row)
+            emit(
+                f"gen{tag}{name}Parameter{suffix}",
+                lambda row=row, column=column: parameter_text(row[column]),
+                source=ENVELOPE,
+            )
+            emit(
+                f"gen{tag}{name}Parameter",
+                lambda row=row, column=column: parameter_text(row[column]),
+                source=ENVELOPE,
+            )
+
+        # --- the ceiling: what this instrument can actually absorb ---
+        if envelope_has(policy, ENVELOPE_CAPPED):
+            emit(
+                f"gen{tag}AbsorbableBn",
+                lambda policy=policy: snum(
+                    envelope_row(policy, ENVELOPE_CAPPED), "absorbable_envelope_bn"
+                ),
+                "{:.2f}",
+                ENVELOPE,
+            )
+            emit(
+                f"gen{tag}AbsorbableEnvelopeBn",
+                lambda policy=policy: snum(
+                    envelope_row(policy, ENVELOPE_CAPPED), "absorbable_envelope_bn"
+                ),
+                "{:.2f}",
+                ENVELOPE,
+            )
+            emit(
+                f"gen{tag}AbsorbsFullEnvelope",
+                lambda policy=policy: (
+                    "yes"
+                    if snum(
+                        envelope_row(policy, ENVELOPE_CAPPED), "absorbable_envelope_bn"
+                    )
+                    >= snum(envelope_row(policy, ENVELOPE_CAPPED), "envelope_bn") - 1e-6
+                    else "no"
+                ),
+                source=ENVELOPE,
+            )
+
+        # --- one block of outcome macros per row type that exists ---
+        for envelope, row_tag in ENVELOPE_ROW_TAGS:
+            if not envelope_has(policy, envelope):
+                continue
+            row = envelope_row(policy, envelope)
+            suffix = parameter_suffix(row)
+
+            #: ``Envelope`` with no row qualifier means the **capped** row: the
+            #: name predates the rebuild and the prose already carries it.
+            aliases = [row_tag] + (["Envelope"] if envelope == ENVELOPE_CAPPED else [])
+            for alias in aliases:
+                emit(
+                    f"gen{tag}{alias}OffsetPct",
+                    lambda policy=policy, envelope=envelope: env_pct(
+                        policy, envelope, "share_of_aggregate_loss_offset"
+                    ),
+                    "{:.1f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}CostBn",
+                    lambda row=row: float(row["cost_bn"]),
+                    "{:.2f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}ResidualMeanGbp",
+                    lambda row=row: float(row["mean_residual_loss_gbp"]),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}ResidualMedianGbp",
+                    lambda row=row: float(row["median_residual_loss_gbp"]),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}ResidualDecileOneGbp",
+                    lambda row=row: float(row["mean_residual_loss_d1"]),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}MeanGainGbp",
+                    lambda row=row: float(row["mean_gain_gbp"]),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}UncompensatedPct",
+                    lambda policy=policy, envelope=envelope: env_pct(
+                        policy, envelope, "uncompensated_share_overall"
+                    ),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}ShareToBottomThreePct",
+                    lambda policy=policy, envelope=envelope: env_pct(
+                        policy, envelope, "share_to_bottom_three"
+                    ),
+                    "{:.1f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}CostPerPound",
+                    lambda row=row: float(row["cost_per_pound_decile_one"]),
+                    "{:.1f}",
+                    ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}Scale",
+                    lambda row=row: float(row["envelope_scale"]),
+                    "{:.2f}",
+                    ENVELOPE,
+                )
+                # The implied setting of the instrument's own dial. This is
+                # where infeasibility becomes visible: 12.7 VAT points, a 143
+                # per cent bill discount, a £1,083 WHD payment.
+                emit(
+                    f"gen{tag}{alias}Parameter{suffix}",
+                    lambda row=row: parameter_text(row["implied_parameter"]),
+                    source=ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}Parameter",
+                    lambda row=row: parameter_text(row["implied_parameter"]),
+                    source=ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}Feasible",
+                    lambda row=row: "yes" if is_true(row["is_feasible"]) else "no",
+                    source=ENVELOPE,
+                )
+                emit(
+                    f"gen{tag}{alias}IsFeasible",
+                    lambda row=row: (
+                        "feasible" if is_true(row["is_feasible"]) else "infeasible"
+                    ),
+                    source=ENVELOPE,
+                )
+
+            if envelope == ENVELOPE_ELIGIBILITY:
+                emit(
+                    f"gen{tag}EligibleSharePct",
+                    lambda policy=policy: env_pct(
+                        policy, ENVELOPE_ELIGIBILITY, "eligible_share"
+                    ),
+                    "{:.0f}",
+                    ENVELOPE,
+                )
+
+    # --- how many instruments the proportional scaling actually breaks -------
+    def _infeasible_scaled() -> list[str]:
+        return [
+            r["policy"].strip()
+            for r in envelope_rows(ENVELOPE_SCALED)
+            if not is_true(r["is_feasible"])
+        ]
+
+    NUMBER_WORDS = (
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+    )
+    emit(
+        "genEnvelopeInfeasibleScaledCount",
+        lambda: NUMBER_WORDS[len(_infeasible_scaled())],
+        source=ENVELOPE,
+    )
+    emit(
+        "genEnvelopeInfeasibleScaledLabels",
+        lambda: " and ".join(envelope_names[p] for p in _infeasible_scaled()),
+        source=ENVELOPE,
+    )
+    emit(
+        "genEnvelopeFeasibleCappedCount",
+        lambda: NUMBER_WORDS[
+            sum(1 for r in envelope_rows(ENVELOPE_CAPPED) if is_true(r["is_feasible"]))
+        ],
+        source=ENVELOPE,
+    )
+
+    # --- best and worst, scored on the *capped* rows only -------------------
+    #
+    # Restricting to the capped rows is the substantive change: on the scaled
+    # rows VAT zero-rating offsets the most, but only by removing more VAT than
+    # exists. The comparison below is between instruments that could be built.
+    def envelope_best(select, column: str) -> dict:
+        rows = envelope_rows(ENVELOPE_CAPPED)
+        if not rows:
+            raise ValueError(f"{ENVELOPE}: no {ENVELOPE_CAPPED} rows")
+        return select(rows, key=lambda r: float(r[column]))
+
     emit(
         "genEnvelopeBestLabel",
         lambda: envelope_names[
@@ -1447,6 +2290,38 @@ def main(draft: bool = False) -> None:
                 envelope_best(min, "share_of_aggregate_loss_offset")[
                     "share_of_aggregate_loss_offset"
                 ]
+            )
+        ),
+        "{:.1f}",
+        ENVELOPE,
+    )
+    emit(
+        "genEnvelopeWorstLabel",
+        lambda: envelope_names[
+            envelope_best(min, "share_of_aggregate_loss_offset")["policy"].strip()
+        ],
+        source=ENVELOPE,
+    )
+    # The eligibility rows are the ones that actually spend the envelope, and
+    # they beat every capped row: at a fixed budget, who is *in* the scheme
+    # dominates how generous the scheme is to those already in it.
+    emit(
+        "genEnvelopeBestEligibilityLabel",
+        lambda: envelope_names[
+            max(
+                envelope_rows(ENVELOPE_ELIGIBILITY),
+                key=lambda r: float(r["share_of_aggregate_loss_offset"]),
+            )["policy"].strip()
+        ],
+        source=ENVELOPE,
+    )
+    emit(
+        "genEnvelopeBestEligibilityOffsetPct",
+        lambda: (
+            100
+            * max(
+                float(r["share_of_aggregate_loss_offset"])
+                for r in envelope_rows(ENVELOPE_ELIGIBILITY)
             )
         ),
         "{:.1f}",

@@ -45,6 +45,7 @@ documented here rather than filtered.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -241,6 +242,22 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
         "d1_d10_ratio": _nan_if_degenerate(
             d1.mean_loss_pct / d10.mean_loss_pct if d10.mean_loss_pct else float("nan")
         ),
+        # Round-2 finding 7: the grid's decile ratios were reported (11.77-12.73)
+        # outside the range of every specification in the paper (4.41-9.25), with
+        # no reconciliation. The ratio is scale-invariant — ``mean_loss_pct`` is
+        # an aggregate ratio — so an undamped cell cannot move it, and a
+        # weighted sum of two channels must lie between the two channels' own
+        # ratios. The published grid therefore could not be reconciled with the
+        # published headline because it was a stale artefact of the pre-D1
+        # unequivalised denominator. Both channel ratios are now emitted beside
+        # the total so the bracketing is checkable cell by cell, and
+        # ``reconcile_named_scenarios`` asserts it.
+        "d1_d10_ratio_domestic_only": _nan_if_degenerate(
+            result.domestic_only_d1_d10_ratio_pct
+        ),
+        "domestic_share_of_loss": _nan_if_degenerate(
+            result.gas_share_of_loss + result.electricity_share_of_loss
+        ),
         "decile1_loss_gbp": d1.mean_loss_gbp,
         "decile10_loss_gbp": d10.mean_loss_gbp,
         "share_losing_over_5pct": float(
@@ -251,6 +268,57 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
         ),
         "gini_after": result.gini_after,
         "gini_change_pp": 100 * (result.gini_after - result.gini_baseline),
+    }
+
+
+def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
+    """Check every named scenario's decile ratio lies inside the grid's range.
+
+    Round-2 finding 7 asked for a reconciliation or for the ratio to stop being
+    emitted. This is the reconciliation, and it is a *test*, not a note: the
+    burden ratio is scale-invariant, so a named scenario differs from a grid
+    cell only in its channel mix, and any mix must produce a ratio bracketed by
+    the two pure-channel cells. If a named scenario falls outside the live
+    grid's range, the grid and the headline were produced by different code and
+    the file says so instead of leaving a reader to notice.
+    """
+    lo = float(live["d1_d10_ratio"].min())
+    hi = float(live["d1_d10_ratio"].max())
+    # The live grid's range can be a near-degenerate point: after the round-2
+    # revision every cell returns 9.31x, because the domestic and motor-fuel
+    # channels turn out to have almost the same decile gradient in this
+    # imputation — which is itself the ``docs/VALIDATION.md`` Check 2d finding
+    # (the fuel imputation gives deciles one and ten the same purchasing rate)
+    # showing up from a different direction. A 5% band is therefore allowed:
+    # the test is "the named scenarios and the grid come from the same
+    # pipeline", not "the ratio is identical to the last decimal".
+    tol = 0.05
+    lo_band, hi_band = lo * (1 - tol), hi * (1 + tol)
+    scenarios: dict[str, dict] = {}
+    for key, scenario in scen.SCENARIOS.items():
+        result, _ = run_scenario(base, scenario)
+        ratio = result.all_channel_d1_d10_ratio_pct
+        scenarios[key] = {
+            "d1_d10_ratio": ratio,
+            "d1_d10_ratio_domestic_only": result.domestic_only_d1_d10_ratio_pct,
+            "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
+            "inside_grid_range": bool(lo_band <= ratio <= hi_band),
+        }
+    outside = [k for k, v in scenarios.items() if not v["inside_grid_range"]]
+    return {
+        "note": (
+            "The decile burden ratio is an aggregate ratio and therefore "
+            "scale-invariant, so a named scenario and a grid cell differ only "
+            "in channel mix; every named scenario must land inside the grid's "
+            "own range. Round-2 finding 7."
+        ),
+        "grid_d1_d10_ratio_min": lo,
+        "grid_d1_d10_ratio_max": hi,
+        "tolerance": tol,
+        "accepted_band": [lo_band, hi_band],
+        "scenarios": scenarios,
+        "all_named_scenarios_inside_grid_range": not outside,
+        "outside": outside,
     }
 
 
@@ -295,6 +363,27 @@ def main() -> None:
     ]:
         lo, hi = live[col].min(), live[col].max()
         print(f"  {col:22} {fmt.format(lo)} to {fmt.format(hi)}")
+
+    reconciliation = reconcile_named_scenarios(base, live)
+    (OUT / "reconciliation.json").write_text(json.dumps(reconciliation, indent=2))
+    print(
+        f"\nnamed-scenario ratios inside the grid range "
+        f"[{reconciliation['grid_d1_d10_ratio_min']:.2f}x, "
+        f"{reconciliation['grid_d1_d10_ratio_max']:.2f}x]: "
+        f"{reconciliation['all_named_scenarios_inside_grid_range']}"
+    )
+    for key, payload in reconciliation["scenarios"].items():
+        print(
+            f"  {key:26} {payload['d1_d10_ratio']:6.2f}x "
+            f"(domestic only {payload['d1_d10_ratio_domestic_only']:6.2f}x) "
+            f"{'ok' if payload['inside_grid_range'] else 'OUTSIDE'}"
+        )
+    if reconciliation["outside"]:
+        raise SystemExit(
+            "grid and named scenarios disagree on the decile ratio for "
+            f"{reconciliation['outside']}; they are not the same pipeline. "
+            "Re-run analysis/run_variants.py and analysis/run_grid.py together."
+        )
 
     flip = live[live["motor_fuel_share_pct"] < 50]
     print(
