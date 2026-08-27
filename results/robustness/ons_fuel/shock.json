@@ -1,0 +1,480 @@
+{
+  "scenario": "realised_2026",
+  "aggregate_cost_bn": 11.134441804620133,
+  "mean_loss_gbp": 377.81544487276307,
+  "mean_loss_pct": 0.8347946684469056,
+  "gas_share_of_loss": 0.24666541100069994,
+  "electricity_share_of_loss": 0.20011825425100585,
+  "motor_fuel_share_of_loss": 0.5532163397775121,
+  "decile": [
+    {
+      "decile": 1,
+      "mean_loss_gbp": 222.34236191666488,
+      "mean_loss_pct": 2.2746041189560127,
+      "share_of_total_loss": 0.05630720335551387,
+      "households_m": 2.799045,
+      "mean_income_gbp": 5865.28125,
+      "median_income_gbp": 7589.599609375,
+      "zero_or_negative_income_share": 0.20054621994495392
+    },
+    {
+      "decile": 2,
+      "mean_loss_gbp": 228.5454189408779,
+      "mean_loss_pct": 1.4061861734593102,
+      "share_of_total_loss": 0.06586515933577798,
+      "households_m": 3.1853075,
+      "mean_income_gbp": 15796.0966796875,
+      "median_income_gbp": 16861.001953125,
+      "zero_or_negative_income_share": 0.02625640295445919
+    },
+    {
+      "decile": 3,
+      "mean_loss_gbp": 264.83756000472465,
+      "mean_loss_pct": 1.1830182740061388,
+      "share_of_total_loss": 0.06862718824234579,
+      "households_m": 2.8640775,
+      "mean_income_gbp": 22067.67578125,
+      "median_income_gbp": 22815.76171875,
+      "zero_or_negative_income_share": 0.010484546422958374
+    },
+    {
+      "decile": 4,
+      "mean_loss_gbp": 305.95816107146067,
+      "mean_loss_pct": 1.1239335185472477,
+      "share_of_total_loss": 0.0720397521190693,
+      "households_m": 2.6024255,
+      "mean_income_gbp": 27018.751953125,
+      "median_income_gbp": 27076.939453125,
+      "zero_or_negative_income_share": 0.006083413492888212
+    },
+    {
+      "decile": 5,
+      "mean_loss_gbp": 335.5002025042396,
+      "mean_loss_pct": 1.0258846232443029,
+      "share_of_total_loss": 0.08943791388420717,
+      "households_m": 2.946436,
+      "mean_income_gbp": 32698.00390625,
+      "median_income_gbp": 33107.1796875,
+      "zero_or_negative_income_share": 0.0009721357491798699
+    },
+    {
+      "decile": 6,
+      "mean_loss_gbp": 353.565789582947,
+      "mean_loss_pct": 0.9102179966560456,
+      "share_of_total_loss": 0.09478784676224279,
+      "households_m": 2.963129,
+      "mean_income_gbp": 38832.7109375,
+      "median_income_gbp": 39479.1796875,
+      "zero_or_negative_income_share": 0.0001883028307929635
+    },
+    {
+      "decile": 7,
+      "mean_loss_gbp": 400.5545925519598,
+      "mean_loss_pct": 0.9137259763961448,
+      "share_of_total_loss": 0.10226594638729744,
+      "households_m": 2.821873,
+      "mean_income_gbp": 43769.921875,
+      "median_income_gbp": 44428.42578125,
+      "zero_or_negative_income_share": 0.0023574535734951496
+    },
+    {
+      "decile": 8,
+      "mean_loss_gbp": 509.8783542824061,
+      "mean_loss_pct": 0.9538339299599473,
+      "share_of_total_loss": 0.12645340438734412,
+      "households_m": 2.7411455,
+      "mean_income_gbp": 53455.671875,
+      "median_income_gbp": 53736.234375,
+      "zero_or_negative_income_share": 0.0
+    },
+    {
+      "decile": 9,
+      "mean_loss_gbp": 544.5846244396662,
+      "mean_loss_pct": 0.8034963194595709,
+      "share_of_total_loss": 0.15158432638359243,
+      "households_m": 3.076501,
+      "mean_income_gbp": 67776.8671875,
+      "median_income_gbp": 66768.4765625,
+      "zero_or_negative_income_share": 0.0
+    },
+    {
+      "decile": 10,
+      "mean_loss_gbp": 590.5599064006101,
+      "mean_loss_pct": 0.4679195033808021,
+      "share_of_total_loss": 0.17263125914260907,
+      "households_m": 3.23090075,
+      "mean_income_gbp": 126209.71875,
+      "median_income_gbp": 105101.5703125,
+      "zero_or_negative_income_share": 0.0
+    }
+  ],
+  "intra_decile": [
+    {
+      "decile": 1,
+      "p10_loss_pct": 0.4380733370189472,
+      "p50_loss_pct": 1.2576007721577451,
+      "p90_loss_pct": 9.671920072183617,
+      "share_above_5pct": 0.17387834191322327,
+      "share_above_10pct": 0.09570268541574478
+    },
+    {
+      "decile": 2,
+      "p10_loss_pct": 0.22652544244155123,
+      "p50_loss_pct": 0.736229766393587,
+      "p90_loss_pct": 3.69339791033617,
+      "share_above_5pct": 0.06935644894838333,
+      "share_above_10pct": 0.02733764611184597
+    },
+    {
+      "decile": 3,
+      "p10_loss_pct": 0.21692134189537027,
+      "p50_loss_pct": 0.5411423937350137,
+      "p90_loss_pct": 2.6710043797577607,
+      "share_above_5pct": 0.06467866152524948,
+      "share_above_10pct": 0.01180625893175602
+    },
+    {
+      "decile": 4,
+      "p10_loss_pct": 0.13455991545149157,
+      "p50_loss_pct": 0.6055516855604515,
+      "p90_loss_pct": 2.339970647379735,
+      "share_above_5pct": 0.03803420811891556,
+      "share_above_10pct": 0.005551913287490606
+    },
+    {
+      "decile": 5,
+      "p10_loss_pct": 0.14505935999343028,
+      "p50_loss_pct": 0.409449490850675,
+      "p90_loss_pct": 2.90285427473215,
+      "share_above_5pct": 0.04742323234677315,
+      "share_above_10pct": 0.007408584002405405
+    },
+    {
+      "decile": 6,
+      "p10_loss_pct": 0.10326826533674308,
+      "p50_loss_pct": 0.3785943204510583,
+      "p90_loss_pct": 2.0950678382646655,
+      "share_above_5pct": 0.03447013348340988,
+      "share_above_10pct": 0.005517514888197184
+    },
+    {
+      "decile": 7,
+      "p10_loss_pct": 0.11191805080481937,
+      "p50_loss_pct": 0.33700763422553653,
+      "p90_loss_pct": 2.3178345381687127,
+      "share_above_5pct": 0.04599462077021599,
+      "share_above_10pct": 0.006206050980836153
+    },
+    {
+      "decile": 8,
+      "p10_loss_pct": 0.08823806560382288,
+      "p50_loss_pct": 0.3744690609365356,
+      "p90_loss_pct": 2.712318448868197,
+      "share_above_5pct": 0.058515459299087524,
+      "share_above_10pct": 0.0010938051855191588
+    },
+    {
+      "decile": 9,
+      "p10_loss_pct": 0.05504735015745468,
+      "p50_loss_pct": 0.25716921445812646,
+      "p90_loss_pct": 2.2679883424263707,
+      "share_above_5pct": 0.061172448098659515,
+      "share_above_10pct": 0.0
+    },
+    {
+      "decile": 10,
+      "p10_loss_pct": 0.03961120526417264,
+      "p50_loss_pct": 0.14286317507264173,
+      "p90_loss_pct": 1.678115133263661,
+      "share_above_5pct": 0.009854448959231377,
+      "share_above_10pct": 0.0
+    }
+  ],
+  "region": [
+    {
+      "name": "EAST_MIDLANDS",
+      "mean_loss_gbp": 443.12570940479645,
+      "mean_loss_pct": 1.0883887441568276,
+      "households_m": 2.146576
+    },
+    {
+      "name": "EAST_OF_ENGLAND",
+      "mean_loss_gbp": 371.61187713083035,
+      "mean_loss_pct": 0.9278111475432351,
+      "households_m": 2.879245
+    },
+    {
+      "name": "LONDON",
+      "mean_loss_gbp": 254.54745943273315,
+      "mean_loss_pct": 0.4112780053739537,
+      "households_m": 4.1532195
+    },
+    {
+      "name": "NORTHERN_IRELAND",
+      "mean_loss_gbp": 271.0669314384518,
+      "mean_loss_pct": 0.7467969040332837,
+      "households_m": 0.66100525
+    },
+    {
+      "name": "NORTH_EAST",
+      "mean_loss_gbp": 669.0925308593519,
+      "mean_loss_pct": 1.5941124373386932,
+      "households_m": 1.18729375
+    },
+    {
+      "name": "NORTH_WEST",
+      "mean_loss_gbp": 371.6459025568413,
+      "mean_loss_pct": 0.8962804198529853,
+      "households_m": 3.58135675
+    },
+    {
+      "name": "SCOTLAND",
+      "mean_loss_gbp": 413.3578180825765,
+      "mean_loss_pct": 1.034928653995264,
+      "households_m": 1.7354785
+    },
+    {
+      "name": "SOUTH_EAST",
+      "mean_loss_gbp": 302.7986326972185,
+      "mean_loss_pct": 0.5685565149366908,
+      "households_m": 4.398359
+    },
+    {
+      "name": "SOUTH_WEST",
+      "mean_loss_gbp": 335.1315739035216,
+      "mean_loss_pct": 0.7671974795037729,
+      "households_m": 2.67289
+    },
+    {
+      "name": "WALES",
+      "mean_loss_gbp": 571.1424237602341,
+      "mean_loss_pct": 1.4419802778703987,
+      "households_m": 1.043868625
+    },
+    {
+      "name": "WEST_MIDLANDS",
+      "mean_loss_gbp": 433.20759540513666,
+      "mean_loss_pct": 1.1136687997516481,
+      "households_m": 2.5518315
+    },
+    {
+      "name": "YORKSHIRE",
+      "mean_loss_gbp": 449.23379465046514,
+      "mean_loss_pct": 1.1304584344747233,
+      "households_m": 2.459459
+    }
+  ],
+  "gini_baseline": 0.41037046097245244,
+  "gini_after": 0.41216534099886404,
+  "poverty_bhc_baseline": 0.2114015817642212,
+  "poverty_ahc_baseline": 0.24135252833366394,
+  "income_basis": "equivalised_ahc",
+  "domestic_basis": "annual",
+  "calibration": "ons_fuel_shape",
+  "zero_or_negative_income_share": 0.03191826865077019,
+  "mean_income_gbp": 43928.57421875,
+  "median_income_gbp": 35570.34765625,
+  "mean_loss_pct_equivalised_both": 0.8313300522685128,
+  "annual_phase_in_gas": 0.529625,
+  "annual_phase_in_electricity": 0.516625,
+  "coverage": {
+    "households_m": 0.2397425,
+    "share_of_households": 0.008134976218998578,
+    "loss_bn": 0.081748022589345,
+    "share_of_loss": 0.007341905775233783,
+    "zero_or_negative_income_share": 1.0,
+    "covered_households_m": 29.23084,
+    "covered_loss_bn": 11.052693782030788
+  },
+  "modelled_window": "March 2026 - February 2027 (twelve months from the shock)",
+  "gas_sustained_fraction": 0.7652831230509421,
+  "pump_sustained_fraction": 0.65,
+  "cap_lag_quarters": 1.5,
+  "dispersion": {
+    "mean_within_decile_range_pp": 3.0791249251413233,
+    "median_within_decile_range_pp": 2.3335120150656534,
+    "mean_within_decile_range_excl_d1_pp": 2.3952669462498406,
+    "median_within_decile_range_excl_d1_pp": 2.212940992268916,
+    "between_decile_range_pp": 1.8066846155752105,
+    "within_decile_range_by_decile_pp": [
+      9.23384673516467,
+      3.466872467894619,
+      2.4540830378623903,
+      2.2054107319282434,
+      2.7577949147387195,
+      1.9917995729279223,
+      2.2059164873638935,
+      2.624080383264374,
+      2.212940992268916,
+      1.6385039279994884
+    ],
+    "deciles_below_between_range": 1,
+    "within_exceeds_between": true,
+    "within_exceeds_between_excl_d1": true,
+    "median_based_within_pp": 1.106470496134458
+  },
+  "decile_concept": {
+    "agreement": {
+      "unequivalised_bhc": 0.3000214976602793,
+      "equivalised_ahc": 0.5612009364024404,
+      "equivalised_bhc": 0.9989633138387786
+    },
+    "best_match": "equivalised_bhc",
+    "burden_denominator": "equivalised_ahc",
+    "matches_burden_denominator": false,
+    "mean_absolute_decile_gap": {
+      "unequivalised_bhc": 1.3293362636191335,
+      "equivalised_ahc": 0.5412256598487973,
+      "equivalised_bhc": 0.0010366861612214583
+    },
+    "documented_truth": "equivalised_bhc",
+    "best_match_is_documented_truth": true,
+    "person_weighted": true,
+    "negative_sentinel_share": 0.008134976029396057,
+    "unavailable": []
+  },
+  "decile_domestic_only": [
+    {
+      "decile": 1,
+      "mean_loss_gbp": 136.57948303222656,
+      "mean_loss_pct": 1.4402354452977506,
+      "share_of_total_loss": 0.07729948355845154,
+      "households_m": 2.799045,
+      "mean_income_gbp": 5865.28125,
+      "median_income_gbp": 7589.599609375,
+      "zero_or_negative_income_share": 0.20054621994495392
+    },
+    {
+      "decile": 2,
+      "mean_loss_gbp": 133.2813720703125,
+      "mean_loss_pct": 0.8161606543769878,
+      "share_of_total_loss": 0.0858424384820128,
+      "households_m": 3.1853075,
+      "mean_income_gbp": 15796.0966796875,
+      "median_income_gbp": 16861.001953125,
+      "zero_or_negative_income_share": 0.02625640295445919
+    },
+    {
+      "decile": 3,
+      "mean_loss_gbp": 147.8709259033203,
+      "mean_loss_pct": 0.6603086059614245,
+      "share_of_total_loss": 0.08563450566651862,
+      "households_m": 2.8640775,
+      "mean_income_gbp": 22067.67578125,
+      "median_income_gbp": 22815.76171875,
+      "zero_or_negative_income_share": 0.010484546422958374
+    },
+    {
+      "decile": 4,
+      "mean_loss_gbp": 167.2565460205078,
+      "mean_loss_pct": 0.6133271936628324,
+      "share_of_total_loss": 0.08801215814281883,
+      "households_m": 2.6024255,
+      "mean_income_gbp": 27018.751953125,
+      "median_income_gbp": 27076.939453125,
+      "zero_or_negative_income_share": 0.006083413492888212
+    },
+    {
+      "decile": 5,
+      "mean_loss_gbp": 166.45413208007812,
+      "mean_loss_pct": 0.508979545117188,
+      "share_of_total_loss": 0.09916828814922712,
+      "households_m": 2.946436,
+      "mean_income_gbp": 32698.00390625,
+      "median_income_gbp": 33107.1796875,
+      "zero_or_negative_income_share": 0.0009721357491798699
+    },
+    {
+      "decile": 6,
+      "mean_loss_gbp": 160.0703125,
+      "mean_loss_pct": 0.4120961148880966,
+      "share_of_total_loss": 0.09590529713635568,
+      "households_m": 2.963129,
+      "mean_income_gbp": 38832.7109375,
+      "median_income_gbp": 39479.1796875,
+      "zero_or_negative_income_share": 0.0001883028307929635
+    },
+    {
+      "decile": 7,
+      "mean_loss_gbp": 163.684326171875,
+      "mean_loss_pct": 0.37315498709622624,
+      "share_of_total_loss": 0.09339546730273299,
+      "households_m": 2.821873,
+      "mean_income_gbp": 43769.921875,
+      "median_income_gbp": 44428.42578125,
+      "zero_or_negative_income_share": 0.0023574535734951496
+    },
+    {
+      "decile": 8,
+      "mean_loss_gbp": 219.52987670898438,
+      "mean_loss_pct": 0.41067647080528497,
+      "share_of_total_loss": 0.12167656896878368,
+      "households_m": 2.7411455,
+      "mean_income_gbp": 53455.671875,
+      "median_income_gbp": 53736.234375,
+      "zero_or_negative_income_share": 0.0
+    },
+    {
+      "decile": 9,
+      "mean_loss_gbp": 201.7877655029297,
+      "mean_loss_pct": 0.297723655712811,
+      "share_of_total_loss": 0.12552583657112212,
+      "households_m": 3.076501,
+      "mean_income_gbp": 67776.8671875,
+      "median_income_gbp": 66768.4765625,
+      "zero_or_negative_income_share": 0.0
+    },
+    {
+      "decile": 10,
+      "mean_loss_gbp": 195.2275848388672,
+      "mean_loss_pct": 0.1546850623656702,
+      "share_of_total_loss": 0.1275398913179638,
+      "households_m": 3.23090075,
+      "mean_income_gbp": 126209.71875,
+      "median_income_gbp": 105101.5703125,
+      "zero_or_negative_income_share": 0.0
+    }
+  ],
+  "domestic_only_d1_d10_ratio_pct": 9.310759702789422,
+  "domestic_only_d1_d10_ratio_gbp": 0.6995911112917452,
+  "all_channel_d1_d10_ratio_pct": 4.861101327304357,
+  "d2_d10_ratio_pct": 3.005188207158205,
+  "d2_d10_ratio_gbp": 0.3869978582424162,
+  "income_treatment": "drop",
+  "decile1_loss_pct_winsorised": 2.76961266054897,
+  "decile2_loss_pct_winsorised": 1.4230872966058754,
+  "decile10_loss_pct_winsorised": 0.4679195033808021,
+  "d1_d10_ratio_pct_winsorised": 5.91899384517641,
+  "d2_d10_ratio_pct_winsorised": 3.0413079307953934,
+  "mean_loss_pct_winsorised": 0.8523604770893096,
+  "motor_fuel_margins": {
+    "means_tested_mean_fuel_gbp": 176.262013529105,
+    "non_means_tested_mean_fuel_gbp": 1403.9837422348141,
+    "means_tested_fuel_ratio": 7.965322272929689,
+    "means_tested_zero_share": 0.8085233569145203,
+    "non_means_tested_zero_share": 0.5253023505210876,
+    "zero_fuel_share_overall": 0.5696579217910767,
+    "zero_fuel_share_by_decile": [
+      0.6204599738121033,
+      0.6265355944633484,
+      0.62545245885849,
+      0.533866286277771,
+      0.5664995908737183,
+      0.549056351184845,
+      0.5516172051429749,
+      0.45732581615448,
+      0.5267549753189087,
+      0.6203031539916992
+    ],
+    "zero_share_d1_minus_d10_pp": 0.015681982040405273,
+    "means_tested_share_of_loss": 0.04910799215744525,
+    "d1_means_tested_mean_fuel_gbp": 122.35641929652076,
+    "d1_non_means_tested_mean_fuel_gbp": 710.2076865495029,
+    "d1_means_tested_zero_share": 0.8427165150642395,
+    "d1_non_means_tested_zero_share": 0.5146772861480713
+  },
+  "means_tested_share": 0.15661116121505503,
+  "specification": "Robustness: ONS motor-fuel decile shape, national fuel total preserved",
+  "variant": "ons_shape",
+  "sustained_fraction": 0.7652831230509421
+}

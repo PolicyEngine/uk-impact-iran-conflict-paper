@@ -1,5 +1,32 @@
 name: CI
 
+# WHAT A GREEN BADGE ON THIS WORKFLOW MEANS — and what it does not.
+#
+# CI has NO Hugging Face token and NO microdata, by design. The PolicyEngine UK
+# enhanced microdata is a private, non-redistributable dataset
+# (policyengine/populace-uk-private), so it cannot be placed in a public runner
+# and no job here downloads it.
+#
+#   COVERED     Lint and format. Scenario construction and price-path
+#               arithmetic; retail/pump factors and cap levels; the elasticity
+#               module's welfare bounds; the grid and sweep logic; the five
+#               policy instruments and every scorecard metric; and the
+#               incidence arithmetic — all exercised against SYNTHETIC
+#               FIXTURES built in the tests.
+#
+#   NOT COVERED Any execution against the real microdata. Nothing here
+#               validates the imputation quality, the survey weighting, the
+#               household-level cuts, or the committed contents of results/.
+#               The suite finishes in well under a second, which is the tell:
+#               no simulation is running.
+#
+# So this badge attests "the arithmetic is internally consistent and the code
+# runs", NOT "the pipeline has been validated against data". The data-side
+# validation is a separate manual exercise, written up in docs/VALIDATION.md.
+#
+# If you add a test that needs the dataset, mark it so it SKIPS without a
+# token — do not add a token to this workflow.
+
 on:
   push:
     branches: [main]
@@ -7,6 +34,7 @@ on:
 
 jobs:
   test:
+    name: Lint and test (no microdata, no token)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +50,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      # No microdata and no HUGGING_FACE_TOKEN are available in CI.
-      # Tests must exercise scenario, shock and pass-through logic only.
       - name: Lint
         run: uv run ruff check .
 
       - name: Format check
         run: uv run ruff format --check .
 
-      - name: Test
+      # Runs without HUGGING_FACE_TOKEN. Tests exercise scenario, price-path,
+      # incidence, policy and elasticity logic on synthetic fixtures only; the
+      # real microdata is never loaded here. See the note at the top of this
+      # file before reading a pass as a validated pipeline.
+      - name: Test (synthetic fixtures only — no microdata is loaded)
         run: uv run pytest tests/ -v

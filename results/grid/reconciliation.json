@@ -1,0 +1,241 @@
+{
+  "note": "Round-3 finding 5. The previous \u00b15% range-membership check could not fail: the grid's D1/D10 ratio spans 0.0008 across 36 cells because both pure-channel ratios are ~9.31 and every mix is a convex combination of them. Replaced by (a) an explicit statement that the grid shows INVARIANCE of the decile gradient to the channel mix, which is itself evidence about the fuel imputation, and (b) the exact convex-combination identity, asserted at 1e-6.",
+  "grid_d1_d10_ratio_min": 9.310759698078042,
+  "grid_d1_d10_ratio_max": 9.312362506645075,
+  "grid_d1_d10_ratio_spread": 0.001602808567032099,
+  "grid_shows_invariance": true,
+  "check_is_informative": false,
+  "informative_spread_threshold": 0.46553798490390214,
+  "identity_tolerance": 1e-06,
+  "scenarios": {
+    "niesr_baseline": {
+      "d1_d10_ratio": 9.361313474535322,
+      "d1_d10_ratio_domestic_only": 9.310759456400934,
+      "d1_d10_ratio_motor_fuel_only": 9.375377085404615,
+      "domestic_share_of_decile10_loss": 0.21765567473546055,
+      "d1_d10_ratio_implied_by_channel_mix": 9.361312691764013,
+      "identity_residual": 7.827713091046462e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.7864197890489357,
+      "inside_grid_range": false,
+      "sub_channels": {
+        "channels": [
+          "gas",
+          "electricity",
+          "petrol",
+          "diesel"
+        ],
+        "d1_d10_ratio_by_channel": {
+          "gas": 9.2640091727041,
+          "electricity": 9.36762008371773,
+          "petrol": 12.65156391146011,
+          "diesel": 6.874751692579098
+        },
+        "share_of_decile10_loss_by_channel": {
+          "gas": 0.11944496005446138,
+          "electricity": 0.09821070823515402,
+          "petrol": 0.33865565084735405,
+          "diesel": 0.4436886808630306
+        },
+        "d1_d10_ratio_implied": 9.361312928891303,
+        "identity_residual": 5.456440188567058e-07,
+        "sub_channel_ratio_min": 6.874751692579098,
+        "sub_channel_ratio_max": 12.65156391146011,
+        "inside_sub_channel_span": true,
+        "petrol_share_of_motor_fuel_loss": 0.43287288872787627
+      }
+    },
+    "niesr_adverse": {
+      "d1_d10_ratio": 9.367791768323196,
+      "d1_d10_ratio_domestic_only": 9.310760168010903,
+      "d1_d10_ratio_motor_fuel_only": 9.383461963210399,
+      "domestic_share_of_decile10_loss": 0.21553113783483638,
+      "d1_d10_ratio_implied_by_channel_mix": 9.367792462568417,
+      "identity_residual": 6.942452213110073e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.788569672242823,
+      "inside_grid_range": false,
+      "sub_channels": {
+        "channels": [
+          "gas",
+          "electricity",
+          "petrol",
+          "diesel"
+        ],
+        "d1_d10_ratio_by_channel": {
+          "gas": 9.264008864788236,
+          "electricity": 9.367618926251508,
+          "petrol": 12.651563675234735,
+          "diesel": 6.8747523078802315
+        },
+        "share_of_decile10_loss_by_channel": {
+          "gas": 0.11827906028932936,
+          "electricity": 0.09725208323462795,
+          "petrol": 0.3406730644416314,
+          "diesel": 0.4437957920344113
+        },
+        "d1_d10_ratio_implied": 9.367791831302007,
+        "identity_residual": 6.297881149919249e-08,
+        "sub_channel_ratio_min": 6.8747523078802315,
+        "sub_channel_ratio_max": 12.651563675234735,
+        "inside_sub_channel_span": true,
+        "petrol_share_of_motor_fuel_loss": 0.4342722615808974
+      }
+    },
+    "realised_2026": {
+      "d1_d10_ratio": 9.2417905802918,
+      "d1_d10_ratio_domestic_only": 9.310759702789422,
+      "d1_d10_ratio_motor_fuel_only": 9.184816958937294,
+      "domestic_share_of_decile10_loss": 0.4523771645105597,
+      "d1_d10_ratio_implied_by_channel_mix": 9.2417905802918,
+      "identity_residual": 0.0,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.5516755646953685,
+      "inside_grid_range": false,
+      "sub_channels": {
+        "channels": [
+          "gas",
+          "electricity",
+          "petrol",
+          "diesel"
+        ],
+        "d1_d10_ratio_by_channel": {
+          "gas": 9.26400924171071,
+          "electricity": 9.3676202736669,
+          "petrol": 12.651565382734987,
+          "diesel": 6.874753272343939
+        },
+        "share_of_decile10_loss_by_channel": {
+          "gas": 0.24825529950945163,
+          "electricity": 0.204121873197336,
+          "petrol": 0.21898660547845766,
+          "diesel": 0.3286362218147547
+        },
+        "d1_d10_ratio_implied": 9.24179188510708,
+        "identity_residual": 1.3048152798234014e-06,
+        "sub_channel_ratio_min": 6.874753272343939,
+        "sub_channel_ratio_max": 12.651565382734987,
+        "inside_sub_channel_span": true,
+        "petrol_share_of_motor_fuel_loss": 0.3998858238997517
+      }
+    },
+    "realised_2026_peak_fuel": {
+      "d1_d10_ratio": 9.228816250791649,
+      "d1_d10_ratio_domestic_only": 9.310759702789422,
+      "d1_d10_ratio_motor_fuel_only": 9.184816857754525,
+      "domestic_share_of_decile10_loss": 0.3493600055241733,
+      "d1_d10_ratio_implied_by_channel_mix": 9.228816250791647,
+      "identity_residual": 1.7763568394002505e-15,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.6543523177450936,
+      "inside_grid_range": false,
+      "sub_channels": {
+        "channels": [
+          "gas",
+          "electricity",
+          "petrol",
+          "diesel"
+        ],
+        "d1_d10_ratio_by_channel": {
+          "gas": 9.26400924171071,
+          "electricity": 9.3676202736669,
+          "petrol": 12.651564667381304,
+          "diesel": 6.874752560615848
+        },
+        "share_of_decile10_loss_by_channel": {
+          "gas": 0.1917216016339417,
+          "electricity": 0.15763841712641335,
+          "petrol": 0.26018170823908154,
+          "diesel": 0.3904582730005634
+        },
+        "d1_d10_ratio_implied": 9.228817240735305,
+        "identity_residual": 9.899436559379637e-07,
+        "sub_channel_ratio_min": 6.874752560615848,
+        "sub_channel_ratio_max": 12.651564667381304,
+        "inside_sub_channel_span": true,
+        "petrol_share_of_motor_fuel_loss": 0.39988582893932384
+      }
+    },
+    "realised_2026_symmetric": {
+      "d1_d10_ratio": 9.236747459495497,
+      "d1_d10_ratio_domestic_only": 9.310759485557146,
+      "d1_d10_ratio_motor_fuel_only": 9.184816958937294,
+      "domestic_share_of_decile10_loss": 0.41232940010991215,
+      "d1_d10_ratio_implied_by_channel_mix": 9.236746765386783,
+      "identity_residual": 6.941087136169699e-07,
+      "identity_holds": true,
+      "motor_fuel_share_of_loss": 0.5916320608692553,
+      "inside_grid_range": false,
+      "sub_channels": {
+        "channels": [
+          "gas",
+          "electricity",
+          "petrol",
+          "diesel"
+        ],
+        "d1_d10_ratio_by_channel": {
+          "gas": 9.26400850690111,
+          "electricity": 9.36761978410679,
+          "petrol": 12.651565382734987,
+          "diesel": 6.874753272343939
+        },
+        "share_of_decile10_loss_by_channel": {
+          "gas": 0.22627791534857913,
+          "electricity": 0.18605149059800138,
+          "petrol": 0.23500113968470818,
+          "diesel": 0.35266945436871133
+        },
+        "d1_d10_ratio_implied": 9.236747926116855,
+        "identity_residual": 4.666213584414436e-07,
+        "sub_channel_ratio_min": 6.874753272343939,
+        "sub_channel_ratio_max": 12.651565382734987,
+        "inside_sub_channel_span": true,
+        "petrol_share_of_motor_fuel_loss": 0.3998858238997517
+      }
+    }
+  },
+  "all_named_scenarios_inside_grid_range": false,
+  "channel_mix_identity_holds": true,
+  "identity_broken": [],
+  "outside": [],
+  "grid_scope": {
+    "range_check_enforced": false,
+    "why_the_range_check_is_not_enforced": "It carries no information on this grid. The D1/D10 burden ratio spans 0.001603 across all live cells, against the 0.47 it would need for membership to discriminate between pipelines. A test that every value passes is not a test, and enforcing it would give the paper a guarantee it does not have. The paper must not claim this script raises on range membership: it does not, and it should not.",
+    "what_the_grid_shows": [
+      "the aggregate cost, mean loss and channel split of the shock across a 6x6 sweep of the two independent wholesale drivers",
+      "that the modelled D1/D10 burden gradient is INVARIANT to the domestic-versus-motor-fuel mix, because in this imputation the two channels have almost the same decile gradient \u2014 which is the motor-fuel imputation defect seen from a third direction",
+      "where in (gas, oil) space motor fuel stops being the majority of the loss"
+    ],
+    "what_the_grid_does_not_show": [
+      "any test of mix-invariance with power: the range is degenerate, so invariance is measured, not tested, and the paper may cite the measured spread but not a passed test",
+      "the petrol-versus-diesel margin. Every cell maps the oil move to the pump with the SAME fixed coefficients (0.353 petrol, 0.58 diesel, ratio 1.643), so the petrol:diesel mix is constant across all cells. The named scenarios carry their own mixes, which is why their ratios fall outside the grid's range \u2014 not an inconsistency, a margin the grid does not sweep",
+      "the gas-versus-electricity margin, which is likewise fixed by the cap pass-through assumptions in every cell",
+      "anything about damped scenarios at their headline coordinates: every cell is undamped, which is why named_points reports damped-equivalent coordinates"
+    ],
+    "enforced_checks": [
+      "the convex-combination identity on the domestic/motor-fuel split, at 1e-6 \u2014 raises",
+      "sub-channel bracketing: every named scenario's all-channel ratio must lie between the smallest and largest of its own four sub-channel ratios \u2014 raises"
+    ],
+    "live_cells": 35
+  },
+  "named_scenarios_outside_grid_range": [
+    "niesr_baseline",
+    "niesr_adverse",
+    "realised_2026",
+    "realised_2026_peak_fuel",
+    "realised_2026_symmetric"
+  ],
+  "why_named_scenarios_fall_outside_grid_range": "Not an inconsistency. Every grid cell maps the oil move to the pump with the same fixed coefficients (0.353 petrol, 0.58 diesel), so the petrol:diesel mix is identical in all thirty-six cells, and the cap pass-through fixes the gas:electricity mix likewise. The grid therefore traces a one-dimensional curve through a four-channel space. The named scenarios carry their own petrol/diesel mixes and sit off that curve. See each scenario's `sub_channels` block, and `grid_scope.what_the_grid_does_not_show`.",
+  "sub_channel_gradients": {
+    "scenario": "realised_2026",
+    "d1_d10_ratio_by_channel": {
+      "gas": 9.26400924171071,
+      "electricity": 9.3676202736669,
+      "petrol": 12.651565382734987,
+      "diesel": 6.874753272343939
+    },
+    "note": "Motor fuel is not one channel. Petrol and diesel have materially different D1/D10 burden gradients in this imputation, and every grid cell mixes them in the same fixed proportion, so the grid cannot vary the margin that separates the named scenarios from it. The near-invariance the grid reports is invariance to the DOMESTIC-versus-FUEL mix only."
+  },
+  "sub_channel_bracketing_holds": true,
+  "sub_channel_bracketing_broken": []
+}

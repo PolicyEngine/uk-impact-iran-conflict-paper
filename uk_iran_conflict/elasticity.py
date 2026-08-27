@@ -156,6 +156,12 @@ __all__ = [
     "LABANDEIRA_2017_SHORT_RUN",
     "LABANDEIRA_2017_LONG_RUN",
     "LABANDEIRA_2017_RESIDENTIAL_SHORT_RUN",
+    "LABANDEIRA_2017_DIESEL_SHORT_RUN",
+    "LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN",
+    "ROAD_FUELS",
+    "CARRIER_FALLBACK",
+    "blend_motor_fuel",
+    "diesel_share_of_spend",
     "PRIESMANN_2025_SHORT_RUN_ENDPOINTS",
     "PRIESMANN_2025_LONG_RUN_ENDPOINTS",
     "PRIOR_REPO_ELASTICITY_BY_DECILE",
@@ -168,15 +174,38 @@ __all__ = [
     "static_spend_change",
     "consumption_reduction",
     "deadweight_share",
+    "laspeyres_cv",
+    "paasche_cv",
+    "cv_bounds",
+    "welfare_shaved_share",
+    "resolve_elasticity_spec",
+    "basket_spend_change",
 ]
 
 # --------------------------------------------------------------------------
 # Carriers
 # --------------------------------------------------------------------------
 
-Carrier = Literal["gas", "electricity", "motor_fuel"]
+Carrier = Literal["gas", "electricity", "motor_fuel", "petrol", "diesel"]
 
 CARRIERS: Final[tuple[Carrier, ...]] = ("gas", "electricity", "motor_fuel")
+"""The three carriers every spec must define."""
+
+ROAD_FUELS: Final[tuple[Carrier, ...]] = ("petrol", "diesel")
+"""The two road fuels, which the 2026 shock moves by very different amounts.
+
+``motor_fuel`` remains the aggregate carrier. A spec may define ``petrol`` and
+``diesel`` separately (see
+:meth:`ElasticitySpec.labandeira_road_fuel_split`); one that does not resolves
+either of them through :data:`CARRIER_FALLBACK` to ``motor_fuel``, so callers
+can always ask for the road fuel they are actually pricing.
+"""
+
+CARRIER_FALLBACK: Final[dict[str, Carrier]] = {
+    "petrol": "motor_fuel",
+    "diesel": "motor_fuel",
+}
+"""Resolution fallback for a carrier a spec does not define explicitly."""
 
 N_DECILES: Final[int] = 10
 
@@ -226,7 +255,28 @@ sensitivity band.
 """
 
 LABANDEIRA_2017_DIESEL_SHORT_RUN: Final[float] = -0.153
+"""Labandeira et al. (2017) Table 6 short-run mean for **diesel**.
+
+Half the magnitude of the gasoline figure (-0.293), and it is the fuel that
+carries the larger price move in this shock (diesel +36% against petrol +20% in
+the realised 2026 path) and roughly a third to a half of household motor-fuel
+spend. Pricing the diesel leg with the gasoline elasticity — which is what
+happened while this constant was defined and never used — overstates the demand
+response on the larger half of the shock, and so understates the loss under
+every non-zero elasticity variant.
+"""
+
 LABANDEIRA_2017_HEATING_OIL_SHORT_RUN: Final[float] = -0.017
+
+LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN: Final[dict[Carrier, float]] = {
+    "petrol": -0.293,  # Table 6, "Gasoline"
+    "diesel": LABANDEIRA_2017_DIESEL_SHORT_RUN,  # Table 6, "Diesel"
+}
+"""Short-run road-fuel elasticities, kept apart rather than blended away.
+
+Only the short run is split: Table 6's long-run column is not reproduced here
+for diesel, so a long-run split spec is refused rather than invented.
+"""
 
 LABANDEIRA_2017_RESIDENTIAL_SHORT_RUN: Final[float] = -0.215
 """Labandeira et al. (2017) Table 4, residential consumers, all products.
@@ -348,6 +398,52 @@ def priesmann_by_decile(
     return interpolate_by_decile(low, high, n_deciles=n_deciles)
 
 
+def diesel_share_of_spend(petrol_spend: float, diesel_spend: float) -> float:
+    """Diesel's share of motor-fuel spend, from the data — never assumed.
+
+    There is no default: the split is a property of the microdata (or of the
+    decile being priced), not a constant this module is entitled to invent.
+
+    >>> round(diesel_share_of_spend(600.0, 400.0), 3)
+    0.4
+    """
+    if petrol_spend < 0.0 or diesel_spend < 0.0:
+        raise ValueError("spends must be non-negative")
+    total = petrol_spend + diesel_spend
+    if total <= 0.0:
+        raise ValueError("no motor-fuel spend to split")
+    return diesel_spend / total
+
+
+def blend_motor_fuel(
+    diesel_share: float,
+    petrol_epsilon: float = LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN["petrol"],
+    diesel_epsilon: float = LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN["diesel"],
+) -> float:
+    """Spend-weighted motor-fuel elasticity for a diesel-weighted basket.
+
+    Labandeira et al. give gasoline and diesel separately and the module has
+    always said "for a diesel-weighted basket, blend the two". This is that
+    blend, made callable, so the aggregate carrier can carry a basket that is
+    not 100% petrol.
+
+    Prefer the split spec (:meth:`ElasticitySpec.labandeira_road_fuel_split`)
+    where petrol and diesel face *different price ratios*, as they do in every
+    scenario in this paper: blending elasticities and then applying one ratio
+    is only exact when the two ratios coincide.
+
+    >>> round(blend_motor_fuel(0.0), 3)
+    -0.293
+    >>> round(blend_motor_fuel(1.0), 3)
+    -0.153
+    >>> round(blend_motor_fuel(0.5), 3)
+    -0.223
+    """
+    if not 0.0 <= diesel_share <= 1.0:
+        raise ValueError(f"diesel_share must be in [0, 1], got {diesel_share}")
+    return (1.0 - diesel_share) * petrol_epsilon + diesel_share * diesel_epsilon
+
+
 @dataclass(frozen=True, slots=True)
 class ElasticitySpec:
     """A complete, self-describing elasticity specification for one run.
@@ -397,20 +493,57 @@ class ElasticitySpec:
 
     @classmethod
     def labandeira_flat(
-        cls, horizon: Literal["short_run", "long_run"] = "short_run"
+        cls,
+        horizon: Literal["short_run", "long_run"] = "short_run",
+        diesel_share: float | None = None,
     ) -> ElasticitySpec:
-        """Robustness variant: flat per-carrier meta-analytic elasticities."""
+        """Robustness variant: flat per-carrier meta-analytic elasticities.
+
+        ``diesel_share`` (short run only) replaces the aggregate ``motor_fuel``
+        value — the *gasoline* figure — with a spend-weighted blend of the
+        gasoline and diesel figures (:func:`blend_motor_fuel`). Passing it makes
+        the spec name carry the share, so a blended run can never be mistaken
+        for the unblended one.
+        """
+        flat = (
+            LABANDEIRA_2017_SHORT_RUN
+            if horizon == "short_run"
+            else LABANDEIRA_2017_LONG_RUN
+        )
+        name = f"labandeira_2017_{horizon}"
+        source = (
+            "Labandeira, Labeaga & Lopez-Otero (2017), Energy Policy "
+            "102:549-568, Table 6."
+        )
+        if diesel_share is not None:
+            if horizon != "short_run":
+                raise ValueError(
+                    "no long-run diesel elasticity is recorded in this module; "
+                    "blending is defined for the short run only"
+                )
+            flat = {**flat, "motor_fuel": blend_motor_fuel(diesel_share)}
+            name = f"{name}_diesel_share_{diesel_share:.3f}"
+            source += " Motor fuel blended gasoline/diesel by spend share."
+        return cls(name=name, source=source, flat=flat)
+
+    @classmethod
+    def labandeira_road_fuel_split(cls) -> ElasticitySpec:
+        """Short-run Labandeira with **petrol and diesel priced separately**.
+
+        The two road fuels move by very different amounts in this shock (diesel
+        +36% against petrol +20% on the realised 2026 path), so applying one
+        elasticity to both is not a rounding matter: it prices the larger price
+        move with the more elastic of the two published estimates. ``petrol``
+        takes -0.293 and ``diesel`` -0.153; ``motor_fuel`` is retained at the
+        gasoline value for any caller that still asks for the aggregate.
+        """
         return cls(
-            name=f"labandeira_2017_{horizon}",
+            name="labandeira_2017_short_run_road_fuel_split",
             source=(
                 "Labandeira, Labeaga & Lopez-Otero (2017), Energy Policy "
-                "102:549-568, Table 6."
+                "102:549-568, Table 6, gasoline and diesel rows kept apart."
             ),
-            flat=(
-                LABANDEIRA_2017_SHORT_RUN
-                if horizon == "short_run"
-                else LABANDEIRA_2017_LONG_RUN
-            ),
+            flat={**LABANDEIRA_2017_SHORT_RUN, **LABANDEIRA_2017_ROAD_FUEL_SHORT_RUN},
         )
 
     @classmethod
@@ -476,16 +609,20 @@ def elasticity_for(
     -0.64
     """
     if spec.flat is not None:
-        try:
+        if carrier in spec.flat:
             return float(spec.flat[carrier])
-        except KeyError as exc:
-            raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}") from exc
+        fallback = CARRIER_FALLBACK.get(str(carrier))
+        if fallback is not None and fallback in spec.flat:
+            return float(spec.flat[fallback])
+        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}")
 
     assert spec.by_decile is not None
-    try:
-        table = spec.by_decile[carrier]
-    except KeyError as exc:
-        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}") from exc
+    table = spec.by_decile.get(carrier)
+    if table is None:
+        fallback = CARRIER_FALLBACK.get(str(carrier))
+        table = spec.by_decile.get(fallback) if fallback is not None else None
+    if table is None:
+        raise KeyError(f"spec {spec.name!r} has no carrier {carrier!r}")
 
     if decile is None:
         raise ValueError(
@@ -623,6 +760,152 @@ def deadweight_share(price_ratio: float, epsilon: float) -> float:
     if static == 0.0:
         return 0.0
     return 1.0 - (spend_factor(price_ratio, epsilon) - 1.0) / static
+
+
+# --------------------------------------------------------------------------
+# Money-metric welfare: bounds on the compensating variation
+# --------------------------------------------------------------------------
+#
+# ``spend_change`` measures the change in EXPENDITURE, not in welfare. At
+# eps = -0.8 it reports a household that stops heating its home as barely worse
+# off, because it stopped spending the money -- the "heat or eat" fallacy this
+# module's own preamble criticises. Expenditure change is the wrong object for
+# a distributional welfare statement and must never be reported as the cost of
+# the shock under a non-zero elasticity.
+#
+# The right object is the compensating variation (CV): the transfer that would
+# restore pre-shock utility at post-shock prices. It is not identified without
+# the full demand system, but it is tightly bracketed by two index numbers that
+# need nothing beyond q0, q1 and dp:
+#
+#     q1 . dp  <=  CV  <=  q0 . dp
+#     (Paasche)          (Laspeyres)
+#
+# The upper bound is exactly the paper's zero-elasticity headline. The lower
+# bound values the POST-adjustment bundle at the price change, i.e. it credits
+# the household only with the money it saves on units it no longer buys, while
+# still charging it for everything it does buy. Both are money-metric; the
+# spend change is not. See Deaton & Muellbauer (1980), ch. 7, on the
+# Laspeyres/Paasche bracket for the cost-of-living index.
+#
+# The width of the bracket is ``1 - (p1/p0)**eps``, which is exactly
+# :func:`consumption_reduction`: the maximum share of the static loss that
+# demand response can remove is the share of consumption it removes. At a
+# +14% price move and eps = -0.8 that is 9.9%, not the 81% that the spend
+# change implies. Demand response is therefore a SMALL source of uncertainty
+# once measured in welfare rather than in spending.
+
+
+def laspeyres_cv(baseline_spend: float, price_ratio: float) -> float:
+    """Upper bound on the compensating variation: ``q0 . dp``.
+
+    Independent of the elasticity by construction -- this is the paper's
+    zero-elasticity headline, restated as a welfare bound.
+
+    >>> round(laspeyres_cv(1000.0, 1.14), 4)
+    140.0
+    """
+    if baseline_spend < 0.0:
+        raise ValueError("baseline_spend must be non-negative")
+    _check_price_ratio(price_ratio)
+    return baseline_spend * (price_ratio - 1.0)
+
+
+def paasche_cv(
+    baseline_spend: float, price_ratio: float, epsilon: float = 0.0
+) -> float:
+    """Lower bound on the compensating variation: ``q1 . dp``.
+
+    ``q1 = q0 * (p1/p0)**eps`` is the post-adjustment quantity, so this is
+    ``baseline_spend * (p1/p0)**eps * (p1/p0 - 1)``.
+
+    At ``epsilon = 0`` it coincides with :func:`laspeyres_cv`.
+
+    >>> round(paasche_cv(1000.0, 1.14), 4)
+    140.0
+    >>> round(paasche_cv(1000.0, 1.14, -0.8), 2)   # ~10% below the upper bound
+    126.07
+    """
+    if baseline_spend < 0.0:
+        raise ValueError("baseline_spend must be non-negative")
+    return baseline_spend * quantity_factor(price_ratio, epsilon) * (price_ratio - 1.0)
+
+
+def cv_bounds(
+    baseline_spend: float, price_ratio: float, epsilon: float = 0.0
+) -> tuple[float, float]:
+    """``(lower, upper)`` money-metric bounds on the compensating variation.
+
+    Use this, never :func:`spend_change`, whenever a number is going to be
+    described as a cost, a loss or a burden under a non-zero elasticity.
+
+    >>> lo, hi = cv_bounds(1000.0, 1.14, -0.8)
+    >>> round(lo, 2), round(hi, 2)
+    (126.07, 140.0)
+    >>> lo <= hi
+    True
+    """
+    return (
+        paasche_cv(baseline_spend, price_ratio, epsilon),
+        laspeyres_cv(baseline_spend, price_ratio),
+    )
+
+
+def welfare_shaved_share(price_ratio: float, epsilon: float) -> float:
+    """Maximum share of the static loss that demand response can remove.
+
+    ``1 - (p1/p0)**eps`` -- identically :func:`consumption_reduction`, and the
+    welfare analogue of :func:`deadweight_share`. The two differ by an order of
+    magnitude at plausible elasticities, and the difference is the whole of
+    fix A5: ``deadweight_share`` is a statement about spending, this is a
+    statement about welfare.
+
+    >>> round(welfare_shaved_share(1.14, -0.8), 4)
+    0.0995
+    >>> round(deadweight_share(1.14, -0.8), 4)     # the spending measure
+    0.8103
+    """
+    return consumption_reduction(price_ratio, epsilon)
+
+
+def resolve_elasticity_spec(spec: object = "main") -> ElasticitySpec:
+    """Resolve an :class:`ElasticitySpec` from a name, or pass one through.
+
+    Names: ``"main"`` / ``"zero"`` (the paper's main specification: no
+    substitution, the Deaton first-order approximation and an explicit upper
+    bound on the loss), ``"labandeira_short_run"``, ``"labandeira_long_run"``,
+    ``"priesmann_short_run"``, ``"priesmann_long_run"``, ``"prior_repo"``.
+
+    Lives here rather than in a runner module so that resolving a spec never
+    requires PolicyEngine or microdata. (Moved from the deleted
+    ``uk_iran_conflict.runner``; see docs/FIXES.md C14.)
+
+    >>> resolve_elasticity_spec("zero").is_main_specification
+    True
+    """
+    if isinstance(spec, ElasticitySpec):
+        return spec
+    if not isinstance(spec, str):
+        raise TypeError(f"expected a name or an ElasticitySpec, got {type(spec)!r}")
+    builders = {
+        "main": ElasticitySpec.main,
+        "zero": ElasticitySpec.main,
+        "labandeira_short_run": lambda: ElasticitySpec.labandeira_flat("short_run"),
+        "labandeira_long_run": lambda: ElasticitySpec.labandeira_flat("long_run"),
+        "labandeira_short_run_road_fuel_split": (
+            ElasticitySpec.labandeira_road_fuel_split
+        ),
+        "priesmann_short_run": lambda: ElasticitySpec.priesmann_income_varying(
+            "short_run"
+        ),
+        "priesmann_long_run": lambda: ElasticitySpec.priesmann_income_varying(
+            "long_run"
+        ),
+        "prior_repo": ElasticitySpec.prior_repo_replication,
+    }
+    if spec not in builders:
+        raise KeyError(f"unknown elasticity spec {spec!r}; known: {sorted(builders)}")
+    return builders[spec]()
 
 
 def basket_spend_change(

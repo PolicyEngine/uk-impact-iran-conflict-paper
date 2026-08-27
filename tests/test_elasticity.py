@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from uk_iran_conflict import elasticity as ela
 from uk_iran_conflict.elasticity import (
     CARRIERS,
     LABANDEIRA_2017_LONG_RUN,
@@ -21,12 +22,17 @@ from uk_iran_conflict.elasticity import (
     ZERO_ELASTICITY,
     ElasticitySpec,
     consumption_reduction,
+    cv_bounds,
     deadweight_share,
     elasticity_for,
+    laspeyres_cv,
+    paasche_cv,
     quantity_factor,
+    resolve_elasticity_spec,
     spend_change,
     spend_factor,
     static_spend_change,
+    welfare_shaved_share,
 )
 
 SPECS = {
@@ -274,30 +280,168 @@ def test_elasticity_past_minus_one_is_rejected():
         spend_factor(1.6, -1.5)
 
 
-# --- the contract with the runner ----------------------------------------
+# --- spec resolution ------------------------------------------------------
+#
+# ``resolve_elasticity_spec`` used to live in ``uk_iran_conflict.runner``,
+# deleted with the second pipeline (docs/FIXES.md C14). It is now part of the
+# elasticity module and needs neither PolicyEngine nor microdata.
 
 
 @pytest.mark.parametrize(
     "name",
     ["main", "zero", "labandeira_short_run", "priesmann_short_run", "prior_repo"],
 )
-def test_runner_resolves_every_named_spec(name):
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_resolves_every_named_spec(name):
     spec = resolve_elasticity_spec(name)
     assert isinstance(spec, ElasticitySpec)
     assert spec.is_main_specification == (name in ("main", "zero"))
 
 
-def test_runner_rejects_an_unknown_spec_name():
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_rejects_an_unknown_spec_name():
     with pytest.raises(KeyError, match="unknown elasticity spec"):
         resolve_elasticity_spec("not_a_spec")
 
 
-def test_runner_passes_through_a_spec_object():
-    from uk_iran_conflict.runner import resolve_elasticity_spec
-
+def test_passes_through_a_spec_object():
     spec = ElasticitySpec.main()
     assert resolve_elasticity_spec(spec) is spec
+
+
+# --- A5: money-metric welfare bounds --------------------------------------
+#
+# The bug this guards: ``spend_change`` is a change in EXPENDITURE. Reporting
+# it as the cost of the shock counts foregone heating as costless. The CV is
+# bracketed by the Paasche and Laspeyres terms, and that bracket is an order of
+# magnitude narrower than the spend change implies.
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+@pytest.mark.parametrize("eps", [0.0, -0.1, -0.3, -0.5, -0.8])
+def test_cv_bounds_bracket_and_order(ratio, eps):
+    lo, hi = cv_bounds(1000.0, ratio, eps)
+    assert lo <= hi + 1e-12
+    assert hi == pytest.approx(laspeyres_cv(1000.0, ratio))
+    assert lo == pytest.approx(paasche_cv(1000.0, ratio, eps))
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+def test_zero_elasticity_collapses_the_bracket_to_the_headline(ratio):
+    lo, hi = cv_bounds(1000.0, ratio, 0.0)
+    assert lo == pytest.approx(hi)
+    assert hi == pytest.approx(static_spend_change(1000.0, ratio))
+
+
+@pytest.mark.parametrize("eps", [-0.1, -0.3, -0.5, -0.8])
+def test_upper_bound_is_elasticity_invariant(eps):
+    """The Laspeyres bound is the static headline whatever epsilon is."""
+    assert laspeyres_cv(1000.0, 1.14) == pytest.approx(140.0)
+    assert cv_bounds(1000.0, 1.14, eps)[1] == pytest.approx(140.0)
+
+
+@pytest.mark.parametrize("eps", [-0.1, -0.3, -0.5, -0.8])
+def test_spend_change_understates_the_welfare_loss(eps):
+    """The whole of fix A5, as an assertion."""
+    lo, _ = cv_bounds(1000.0, 1.14, eps)
+    assert spend_change(1000.0, 1.14, eps) < lo
+
+
+def test_the_uncertainty_ranking_inverts_at_the_realised_gas_move():
+    """At +14% and eps = -0.8 demand response can shave at most ~10%."""
+    assert welfare_shaved_share(1.14, -0.8) == pytest.approx(0.0995, abs=5e-4)
+    assert deadweight_share(1.14, -0.8) == pytest.approx(0.8103, abs=5e-4)
+    # An order of magnitude apart: the spending measure overstates the
+    # uncertainty demand response contributes by a factor of eight.
+    assert deadweight_share(1.14, -0.8) > 8 * welfare_shaved_share(1.14, -0.8)
+
+
+def test_welfare_shaving_is_identically_the_consumption_cut():
+    for ratio in RATIOS:
+        for eps in (0.0, -0.2, -0.64):
+            assert welfare_shaved_share(ratio, eps) == pytest.approx(
+                consumption_reduction(ratio, eps)
+            )
+
+
+def test_cv_bounds_reject_negative_spend():
+    with pytest.raises(ValueError, match="non-negative"):
+        cv_bounds(-1.0, 1.1, -0.2)
+
+
+# ==========================================================================
+# Round 3, finding 7: diesel was priced with the gasoline elasticity
+# ==========================================================================
+
+
+def test_the_diesel_constant_is_actually_wired_up():
+    """It was defined, documented and never used."""
+    spec = ela.ElasticitySpec.labandeira_road_fuel_split()
+    assert ela.elasticity_for(spec, "diesel") == ela.LABANDEIRA_2017_DIESEL_SHORT_RUN
+    assert ela.elasticity_for(spec, "petrol") == pytest.approx(-0.293)
+    assert ela.elasticity_for(spec, "diesel") != ela.elasticity_for(spec, "petrol")
+    assert ela.resolve_elasticity_spec("labandeira_short_run_road_fuel_split") == spec
+
+
+def test_a_spec_without_a_road_fuel_split_falls_back_to_motor_fuel():
+    """Callers may always ask for the fuel they are actually pricing."""
+    flat = ela.ElasticitySpec.labandeira_flat("short_run")
+    assert ela.elasticity_for(flat, "diesel") == ela.elasticity_for(flat, "motor_fuel")
+    varying = ela.ElasticitySpec.priesmann_income_varying()
+    assert ela.elasticity_for(varying, "diesel", 1) == ela.elasticity_for(
+        varying, "motor_fuel", 1
+    )
+    assert ela.elasticity_for(ela.ElasticitySpec.main(), "petrol") == 0.0
+
+
+def test_an_unknown_carrier_still_raises():
+    with pytest.raises(KeyError):
+        ela.elasticity_for(ela.ElasticitySpec.main(), "heating_oil")
+
+
+def test_pricing_diesel_as_gasoline_understates_the_loss():
+    """Diesel carries the larger price move, so the elasticity choice bites."""
+    split = ela.ElasticitySpec.labandeira_road_fuel_split()
+    flat = ela.ElasticitySpec.labandeira_flat("short_run")
+    spend, ratio = 500.0, 1.36  # the realised 2026 diesel move
+    correct = ela.spend_change(spend, ratio, ela.elasticity_for(split, "diesel"))
+    as_gasoline = ela.spend_change(spend, ratio, ela.elasticity_for(flat, "diesel"))
+    assert correct > as_gasoline
+    # And the money-metric bound moves the same way.
+    assert ela.paasche_cv(spend, ratio, ela.elasticity_for(split, "diesel")) > (
+        ela.paasche_cv(spend, ratio, ela.elasticity_for(flat, "diesel"))
+    )
+
+
+def test_blending_is_a_spend_weighted_average_of_the_two_published_figures():
+    assert ela.blend_motor_fuel(0.0) == pytest.approx(-0.293)
+    assert ela.blend_motor_fuel(1.0) == pytest.approx(-0.153)
+    assert ela.blend_motor_fuel(0.4) == pytest.approx(0.6 * -0.293 + 0.4 * -0.153)
+    with pytest.raises(ValueError):
+        ela.blend_motor_fuel(1.2)
+
+
+def test_the_diesel_share_comes_from_the_data_not_from_a_constant():
+    assert ela.diesel_share_of_spend(600.0, 400.0) == pytest.approx(0.4)
+    with pytest.raises(ValueError):
+        ela.diesel_share_of_spend(0.0, 0.0)
+
+
+def test_a_blended_spec_says_so_in_its_name():
+    blended = ela.ElasticitySpec.labandeira_flat("short_run", diesel_share=0.45)
+    assert "diesel_share" in blended.name
+    assert blended.epsilon("motor_fuel") == pytest.approx(ela.blend_motor_fuel(0.45))
+    assert blended.epsilon("gas") == ela.LABANDEIRA_2017_SHORT_RUN["gas"]
+    with pytest.raises(ValueError, match="long-run diesel"):
+        ela.ElasticitySpec.labandeira_flat("long_run", diesel_share=0.45)
+
+
+def test_a_split_basket_prices_each_road_fuel_at_its_own_ratio():
+    split = ela.ElasticitySpec.labandeira_road_fuel_split()
+    out = ela.basket_spend_change(
+        {"petrol": 400.0, "diesel": 300.0},
+        {"petrol": 1.20, "diesel": 1.36},
+        spec=split,
+    )
+    assert set(out) == {"petrol", "diesel"}
+    assert out["diesel"] == pytest.approx(
+        ela.spend_change(300.0, 1.36, ela.LABANDEIRA_2017_DIESEL_SHORT_RUN)
+    )
