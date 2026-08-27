@@ -27,6 +27,7 @@ scatter.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -70,6 +71,73 @@ POLICY_COLORS = {
     "ippr_rebate": fs.TEAL_DARK,
 }
 CACHE = Path(tempfile.gettempdir()) / "uk_iran_conflict_micro_cache.json"
+
+#: Every source file the cached micro cuts are derived from.
+#:
+#: ROUND 4, item 5: the cache had no version stamp at all, so a figure could be
+#: -- and in this round, elsewhere in the tree, was -- built from an artefact
+#: predating the code that was supposed to have produced it, with no signal of
+#: any kind. The cut is a pure function of these modules plus the central
+#: scenario, so the cache now carries a fingerprint of exactly that and is
+#: discarded, loudly, whenever the fingerprint moves.
+CACHE_INPUTS = (
+    Path(__file__).resolve(),
+    Path(__file__).resolve().parent / "run_incidence.py",
+    ROOT / "uk_iran_conflict" / "incidence.py",
+    ROOT / "uk_iran_conflict" / "policies.py",
+    ROOT / "uk_iran_conflict" / "scenarios.py",
+)
+
+#: Bumped by hand when the *shape* of the cached dict changes in a way the
+#: content hash would not catch (a renamed key read by a figure, say).
+CACHE_SCHEMA_VERSION = 1
+
+
+def cache_fingerprint() -> str:
+    """A hash of every input the cached micro cuts derive from.
+
+    Content-hashing the source files rather than stamping a version by hand is
+    the point: a cache that survives an edit to the code that produced it is the
+    failure this guards against, and no one remembers to bump a manual counter.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"schema={CACHE_SCHEMA_VERSION};scenario={CENTRAL}".encode())
+    for path in CACHE_INPUTS:
+        digest.update(path.name.encode())
+        try:
+            digest.update(path.read_bytes())
+        except OSError as exc:  # a missing input is itself a change
+            raise RuntimeError(
+                f"cannot fingerprint the micro cache: {path} is unreadable ({exc})"
+            ) from exc
+    return digest.hexdigest()
+
+
+#: Exception types that mean "the private microdata is not available here",
+#: which is an expected state (CI, and any checkout without a Hugging Face
+#: token) rather than a bug. Anything else is a real failure and is re-raised.
+MICRO_ABSENT_ERRORS = (FileNotFoundError, PermissionError, ImportError, OSError)
+
+#: Substrings that mark an otherwise-generic exception as the same absence.
+MICRO_ABSENT_MARKERS = (
+    "hugging_face_token",
+    "huggingface",
+    "hf_token",
+    "401",
+    "403",
+    "authenticat",
+    "unauthorized",
+    "gated",
+    "not found",
+    "no such file",
+)
+
+
+def _is_microdata_absent(exc: BaseException) -> bool:
+    if isinstance(exc, MICRO_ABSENT_ERRORS):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in MICRO_ABSENT_MARKERS)
 
 
 # --------------------------------------------------------------------------
@@ -200,17 +268,47 @@ def _micro_compute() -> dict:
 
 
 def micro(refresh: bool = False) -> dict | None:
-    """Cached micro cuts, or ``None`` if the microdata is unavailable."""
+    """Cached micro cuts, or ``None`` if the microdata is genuinely unavailable.
+
+    Two round-4 corrections live here (item 5).
+
+    **The cache is versioned against its inputs.** A cached payload is used only
+    if it carries the current :func:`cache_fingerprint`. A cache written by
+    different code is reported and recomputed rather than silently returned, so
+    a figure can no longer be drawn from an artefact that predates the code
+    meant to have produced it.
+
+    **Only the expected failure is swallowed.** Absence of the private
+    PolicyEngine UK microdata is a normal state in CI and in any checkout
+    without a Hugging Face token, and it still degrades to ``None`` with a
+    printed reason. Every other exception -- a ``KeyError`` on a renamed column,
+    a shape mismatch, a bug in the cut itself -- now propagates, because a
+    broken cut that prints one line and produces no figures is indistinguishable
+    from an absent token, and that is exactly how a stale artefact survives.
+    """
+    fingerprint = cache_fingerprint()
     if not refresh and CACHE.exists():
         try:
-            return json.loads(CACHE.read_text())
-        except json.JSONDecodeError:
-            pass
+            cached = json.loads(CACHE.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"  !! micro cache is unreadable, recomputing ({exc})")
+        else:
+            stamp = cached.get("_fingerprint") if isinstance(cached, dict) else None
+            if stamp == fingerprint:
+                return cached
+            print(
+                "  !! micro cache is stale — it was written by different code "
+                f"(cache {str(stamp)[:12] or 'unstamped'}, "
+                f"current {fingerprint[:12]}); recomputing"
+            )
     try:
         data = _micro_compute()
-    except Exception as exc:  # noqa: BLE001 — absence of microdata is expected
+    except Exception as exc:
+        if not _is_microdata_absent(exc):
+            raise
         print(f"  !! microdata unavailable ({type(exc).__name__}: {exc})")
         return None
+    data["_fingerprint"] = fingerprint
     CACHE.write_text(json.dumps(data, indent=1))
     return data
 

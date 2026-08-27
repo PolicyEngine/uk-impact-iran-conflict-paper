@@ -348,6 +348,14 @@ class Policy:
     )
     generic_template: str = "generic instrument scaled to {p:.4g}"
     means_tested: bool = False
+    #: What the ceiling in :attr:`feasible_max` **is**, in one sentence, so the
+    #: prose can describe the rule rather than guess at it. Round-4 finding 2:
+    #: the Warm Home Discount's ceiling was described in the paper as "the
+    #: payment that exhausts the eligible population's entire loss" when the
+    #: code used the mean domestic *bill* of that population — about six and a
+    #: half times the mean loss. A ceiling rule that is not written down gets
+    #: described wrongly.
+    feasible_max_rule: str = ""
     #: Reference quantity the instrument is defined against, where it has one
     #: (the JRF block's typical consumption). Persisted on every row so the
     #: quantity being subsidised is never implicit.
@@ -491,6 +499,244 @@ def jrf_reference_quantities(
             "Ofgem basis; a block set on it is not the sponsor's block and its "
             "cost is not comparable with the sponsor's costing."
         ),
+    }
+
+
+#: The JRF block's three parameters, and which of them the sponsor actually
+#: published. **Round-4 finding 6.** JRF state the block SIZE ("50% of typical
+#: consumption"), the per-child allowance's existence, and the total (~£5bn).
+#: They do **not** publish the discount rate — their proposal is "a discounted
+#: rate on the first 50% of typical consumption", with the rate unstated (see
+#: docs/RESEARCH_BRIEF.md, Moore & Cook, JRF, 9 Apr 2026). The 50% discount and
+#: the £60 per child modelled here are *this paper's* assumptions, and they are
+#: the whole of the costing gap: see :func:`jrf_costing_gap`.
+JRF_BLOCK_SHARE: float = 0.50
+JRF_BLOCK_DISCOUNT: float = 0.50
+JRF_PER_CHILD_GBP: float = 60.0
+JRF_STATED_COST_BN: float = 5.0
+
+#: Which JRF block parameters are the sponsor's and which are ours.
+JRF_PARAMETER_PROVENANCE: dict[str, str] = {
+    "block_share": "sponsor: 50 per cent of typical consumption",
+    "reference_quantity": (
+        "sponsor: Ofgem typical consumption (the default reference basis, so "
+        "the modelled block and JRF's are on the SAME basis and their costings "
+        "are directly comparable)"
+    ),
+    "discount": (
+        "OURS. JRF say 'a discounted rate' and do not publish the rate. 50 per "
+        "cent is this paper's assumption, chosen by analogy with the social "
+        "tariff, and it is not attributable to JRF"
+    ),
+    "per_child_gbp": (
+        "OURS. JRF propose a per-child allowance without publishing its value; "
+        "£60 is this paper's assumption"
+    ),
+    "eligibility": (
+        "sponsor: universal. JRF describe the block as universal by design, "
+        "which is the feature they contrast with a social tariff"
+    ),
+    "total_cost_bn": "sponsor: ~£5bn",
+}
+
+
+def jrf_costing_gap(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    block_share: float = JRF_BLOCK_SHARE,
+    discount: float = JRF_BLOCK_DISCOUNT,
+    per_child: float = JRF_PER_CHILD_GBP,
+    sponsor_cost_bn: float = JRF_STATED_COST_BN,
+    reference_basis: str = JRF_DEFAULT_REFERENCE_BASIS,
+) -> dict[str, Any]:
+    """Decompose the gap between the modelled JRF block and JRF's own £5bn.
+
+    **Round-4 finding 6, resolved rather than re-worded.** The block defaults to
+    JRF's own reference basis (:data:`OFGEM_TYPICAL_ANNUAL_BILL_GBP`), so the
+    two costings *are* directly comparable and the paper may not decline the
+    comparison on the grounds that the bases differ. The modelled cost is about
+    £10.9bn against JRF's ~£5bn — a factor of 2.19 — and this function says
+    where it comes from.
+
+    The decomposition
+    -----------------
+    Write ``W`` for weighted households, ``B = block_share x typical`` for the
+    block's cash value and ``bill_i`` for each household's modelled domestic
+    bill. Then
+
+    ``universal_ceiling`` = ``discount x B x W`` + the per-child allowance
+        what the instrument costs if **every** household's bill covers the whole
+        block. This depends on nothing in the microdata except the household
+        count.
+    ``block_truncation`` = the reduction from households whose whole bill is
+        smaller than the block and so cannot use all of it — the only channel
+        through which the modelled bill distribution can move the cost at all.
+    ``modelled_cost`` = ``universal_ceiling - block_truncation``.
+
+    The result
+    ----------
+    The truncation term is genuinely present (the modelled domestic bill is
+    about a quarter low, docs/VALIDATION.md) but it works in the **wrong
+    direction to explain the gap**: it makes the modelled block *cheaper* than
+    the mechanical ceiling, and it is only about a fifth of the difference. The
+    residual is not a microdata artefact at all — it is visible with no
+    microdata whatsoever, because JRF's own £5bn over ~29.5m households is about
+    £170 a household, while a 50 per cent discount on 50 per cent of a £1,723
+    typical bill is £431 a household before any allowance. **£5bn cannot buy the
+    instrument as modelled, on JRF's own basis, for any distribution of bills.**
+
+    So the gap is in the parameters, and exactly one of them is unpublished:
+    the discount rate (:data:`JRF_PARAMETER_PROVENANCE`). Holding the per-child
+    allowance fixed, JRF's own total pins the discount at about 20 per cent, not
+    the 50 per cent modelled here. ``implied_discount`` is that number. The two
+    other single-parameter reconciliations are reported beside it —
+    ``implied_block_share`` and ``implied_eligible_share`` — so a reader can see
+    that any one of the three closes the gap alone and that JRF's publication
+    does not say which.
+
+    ``netting_off_existing_support`` is ruled out arithmetically: the only
+    existing instrument of the five that actually exists in UK policy is the
+    Warm Home Discount, whose modelled cost at £150 is an order of magnitude
+    below the residual.
+    """
+    typical = jrf_reference_quantity(base, reference_basis)
+    block_value = block_share * typical
+    w = base.weight
+    households = float(w.sum())
+    children_bn = per_child * wsum(child_counts(base), w) / 1e9
+    ceiling_block_bn = discount * block_value * households / 1e9
+    covered = np.minimum(base.energy, block_value)
+    modelled_block_bn = discount * wsum(covered, w) / 1e9
+    truncation_bn = ceiling_block_bn - modelled_block_bn
+    modelled_bn = modelled_block_bn + children_bn
+    gap_bn = modelled_bn - sponsor_cost_bn
+    # The truncation term works in the OPPOSITE direction to the gap: it makes
+    # the modelled block cheaper. None of the gap is explained by it, so the
+    # residual the microdata cannot account for is the whole gap.
+    residual_bn = gap_bn
+
+    implied_discount = (
+        (sponsor_cost_bn * 1e9 - children_bn * 1e9) / wsum(covered, w)
+        if wsum(covered, w) > 0
+        else float("nan")
+    )
+    # Block share that would cost the sponsor's total at the modelled discount.
+    # Only defined if the modelled instrument costs MORE than the sponsor's
+    # total at the modelled block share; on a small synthetic baseline it may
+    # not, and a bisection that cannot bracket the target must say so rather
+    # than return its own lower bound.
+    reachable = modelled_bn >= sponsor_cost_bn >= children_bn
+    lo, hi = 0.0, block_share
+    for _ in range(200 if reachable else 0):
+        mid = 0.5 * (lo + hi)
+        trial = (
+            discount * wsum(np.minimum(base.energy, mid * typical), w) / 1e9
+            + children_bn
+        )
+        if trial > sponsor_cost_bn:
+            hi = mid
+        else:
+            lo = mid
+    implied_block_share = 0.5 * (lo + hi) if reachable else float("nan")
+    # Eligible share, admitting poorest-first at the modelled parameters.
+    gain = discount * covered + per_child * child_counts(base)
+    order = np.argsort(base.equiv_income_ahc, kind="stable")
+    running = np.cumsum(gain[order] * w[order])
+    cum_w = np.cumsum(w[order])
+    idx = int(np.searchsorted(running, sponsor_cost_bn * 1e9))
+    implied_eligible_share = (
+        float(cum_w[min(idx, len(cum_w) - 1)] / households)
+        if households
+        else float("nan")
+    )
+    whd_bn = POLICIES["whd_expansion"].stated_cost_simulated_bn(base, cost, mt)
+
+    return {
+        "comparable": True,
+        "why_comparable": (
+            "The modelled block is pegged to JRF's own reference quantity "
+            f"({reference_basis}, £{typical:,.0f}), which is what "
+            "JRF_DEFAULT_REFERENCE_BASIS selects. The two costings are on the "
+            "same basis and the comparison may not be declined."
+        ),
+        "sponsor_cost_bn": sponsor_cost_bn,
+        "modelled_cost_bn": modelled_bn,
+        "gap_bn": gap_bn,
+        "ratio": (modelled_bn / sponsor_cost_bn if sponsor_cost_bn else float("nan")),
+        "decomposition": {
+            "universal_ceiling_block_bn": ceiling_block_bn,
+            "per_child_allowance_bn": children_bn,
+            "universal_ceiling_total_bn": ceiling_block_bn + children_bn,
+            "block_truncation_bn": truncation_bn,
+            "block_truncation_share_of_ceiling": (
+                truncation_bn / ceiling_block_bn if ceiling_block_bn else float("nan")
+            ),
+            "modelled_block_bn": modelled_block_bn,
+            "residual_unexplained_by_microdata_bn": residual_bn,
+            "note": (
+                "The modelled bill distribution enters through ONE channel: "
+                "households whose whole bill is below the block cannot use all "
+                "of it. That channel makes the modelled block CHEAPER, so it "
+                "cannot explain a modelled cost above the sponsor's. The whole "
+                "of the gap survives it."
+            ),
+        },
+        "per_household": {
+            "households_m": households / 1e6,
+            "sponsor_implied_gbp": sponsor_cost_bn * 1e9 / households,
+            "modelled_gbp": modelled_bn * 1e9 / households,
+            "mechanical_full_block_gbp": discount * block_value,
+            "microdata_free": (
+                "These four numbers use no microdata beyond the household "
+                "count. A 50 per cent discount on 50 per cent of a "
+                f"£{typical:,.0f} typical bill is £{discount * block_value:,.0f} "
+                "a household; JRF's own total is "
+                f"£{sponsor_cost_bn * 1e9 / households:,.0f}. The gap is "
+                "arithmetic in the sponsor's published figures, not an artefact "
+                "of this model."
+            ),
+        },
+        "single_parameter_reconciliations": {
+            "implied_discount": implied_discount,
+            "modelled_discount": discount,
+            "implied_block_share": implied_block_share,
+            "implied_block_share_is_defined": bool(reachable),
+            "modelled_block_share": block_share,
+            "implied_eligible_share_poorest_first": implied_eligible_share,
+            "modelled_eligible_share": 1.0,
+            "note": (
+                "Each of these three, alone, reproduces the sponsor's total. "
+                "Only one of the three is unpublished by the sponsor."
+            ),
+        },
+        "parameter_provenance": JRF_PARAMETER_PROVENANCE,
+        "netting_off_existing_support": {
+            "warm_home_discount_modelled_bn": whd_bn,
+            "share_of_gap_it_could_close": (
+                whd_bn / gap_bn if gap_bn else float("nan")
+            ),
+            "can_close_gap": bool(whd_bn >= gap_bn),
+            "note": (
+                "Netting off existing support is the third candidate "
+                "explanation and it does not survive: the Warm Home Discount is "
+                "the only one of the five instruments that presently exists, "
+                "and its modelled cost is far below the gap."
+            ),
+        },
+        "resolution": (
+            "RESOLVED. The gap is not a difference of basis, not a difference "
+            "of eligible set that JRF state, and not netting off. It is the "
+            "discount rate: JRF publish the block SIZE and the total but not "
+            "the RATE, and the 50 per cent modelled here is this paper's own "
+            "assumption. JRF's own total implies a discount of about "
+            f"{100 * implied_discount:.0f} per cent on the same block. The "
+            "paper should report the modelled block as a 50 per cent discount "
+            "costing £{:.1f}bn, state that JRF's £5bn corresponds to a "
+            "{:.0f} per cent discount on the same block, and stop describing "
+            "the difference as generosity, as incomparable bases, or as "
+            "unexplained."
+        ).format(modelled_bn, 100 * implied_discount),
     }
 
 
@@ -639,6 +885,182 @@ def _mean_eligible_domestic_bill(
     return float(wmean(shocked[sel], w)) if w.sum() > 0 else float("nan")
 
 
+#: Named ceiling rules for a flat per-household payment, so a rule is never
+#: implicit. Round-4 finding 2.
+FLAT_PAYMENT_CEILING_RULES: tuple[str, ...] = (
+    "mean_eligible_domestic_bill",
+    "mean_eligible_loss",
+)
+
+#: Which rule the Warm Home Discount expansion is scored on. The **bill** rule,
+#: deliberately, because the instrument-internal question is "at what payment
+#: does this stop being energy-bill support?", not "at what payment is nobody
+#: left short?". Both are computed and persisted by
+#: :func:`flat_payment_ceilings`; the paper must describe the one it uses.
+WHD_CEILING_RULE: str = "mean_eligible_domestic_bill"
+
+
+def _mean_eligible_loss(base: Baseline, cost: ShockCost, mt: np.ndarray) -> float:
+    """Mean **total shock loss** of the means-tested population, £/yr.
+
+    The loss-exhausting flat payment: paid to every eligible household it
+    spends exactly the eligible population's aggregate loss, so in aggregate
+    the group is made whole (individually it is not — a flat payment
+    overcompensates the below-mean losers and undercompensates the rest, which
+    is what the overcompensation fields measure).
+
+    This is the ceiling the paper's prose describes. It is **not** the ceiling
+    the scorecard uses: see :func:`_mean_eligible_domestic_bill` and
+    :data:`WHD_CEILING_RULE`.
+    """
+    sel = np.asarray(mt, dtype=bool)
+    w = base.weight[sel]
+    return float(wmean(cost.total[sel], w)) if w.sum() > 0 else float("nan")
+
+
+def flat_payment_ceilings(
+    base: Baseline, cost: ShockCost, mt: np.ndarray
+) -> dict[str, Any]:
+    """Both admissible ceilings for a flat means-tested payment, side by side.
+
+    **Round-4 finding 2.** The scorecard's Warm Home Discount ceiling is
+    :func:`_mean_eligible_domestic_bill` — the mean shocked domestic *bill* of
+    the eligible population. The paper described that number as "the payment
+    that exhausts the eligible population's entire loss", which is a different
+    quantity entirely: the mean loss among eligibles is roughly a sixth of
+    their mean bill, because most of the modelled loss sits in motor fuel and
+    the means-tested population is imputed almost none of it. That is why the
+    same row discloses a £835 payment against a £125 mean loss and reads as a
+    contradiction — it is not a contradiction, it is two different rules, one
+    of which was never written down.
+
+    Both are returned, with the ratio, so the prose can say which rule it
+    imposed and what the other one would have given.
+    """
+    bill = _mean_eligible_domestic_bill(base, cost, mt)
+    loss = _mean_eligible_loss(base, cost, mt)
+    sel = np.asarray(mt, dtype=bool)
+    w = base.weight
+    eligible_w = float(w[sel].sum())
+    return {
+        "rule_used": WHD_CEILING_RULE,
+        "rules": list(FLAT_PAYMENT_CEILING_RULES),
+        "mean_eligible_domestic_bill_gbp": bill,
+        "mean_eligible_loss_gbp": loss,
+        "bill_over_loss": (bill / loss) if loss else float("nan"),
+        "cost_at_bill_rule_bn": bill * eligible_w / 1e9,
+        "cost_at_loss_rule_bn": loss * eligible_w / 1e9,
+        "eligible_households_m": eligible_w / 1e6,
+        "what_each_rule_is": {
+            "mean_eligible_domestic_bill": (
+                "the mean shocked domestic energy bill of the eligible "
+                "population: the point beyond which a payment is no longer "
+                "energy-bill support of any kind, because it exceeds the bill "
+                "it is meant to help pay. This is the rule the scorecard uses."
+            ),
+            "mean_eligible_loss": (
+                "the mean TOTAL shock loss of the eligible population: the flat "
+                "payment that, paid to all of them, spends exactly their "
+                "aggregate loss. This is the rule the paper's prose described. "
+                "It is far smaller, because the means-tested population is "
+                "imputed very little motor fuel and motor fuel carries most of "
+                "the loss."
+            ),
+        },
+        "note": (
+            "The paper may describe the ceiling as bill-exhausting or as "
+            "loss-exhausting, but not as both, and the number it quotes must "
+            "match the rule it names."
+        ),
+    }
+
+
+def feasible_max_identity(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    policies: dict[str, Policy] | None = None,
+    tolerance: float = 1e-6,
+) -> dict[str, Any]:
+    """Which instruments have the **same** feasible maximum by construction.
+
+    **Round-4 finding 1.** The social tariff's ceiling is a 100% discount on the
+    means-tested population's shocked domestic bill. The Warm Home Discount's
+    ceiling is :func:`_mean_eligible_domestic_bill` — the *mean* shocked
+    domestic bill of the *same* population. Aggregated over that population the
+    two are the same sum:
+
+        sum_i w_i x 1.00 x bill_i
+          == (sum_i w_i) x mean_w(bill)
+          == sum_i w_i x bill_i
+
+    so their feasible-maximum costs are equal to floating point (£3.76bn each),
+    not by coincidence and not as independent confirmation of anything. The
+    paper presented them as two instruments independently establishing that
+    means-tested support saturates below the envelope, which doubles the
+    apparent evidence for a single arithmetic fact.
+
+    This function detects the coincidence from the numbers themselves rather
+    than asserting it, groups the instruments that share a feasible maximum,
+    and sets ``report_as_one_result`` so a table builder or a prose writer
+    cannot treat a group of size two as two results.
+    """
+    chosen = POLICIES if policies is None else policies
+    costs = {
+        key: policy.feasible_max_cost_bn(base, cost, mt)
+        for key, policy in chosen.items()
+    }
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key, value in costs.items():
+        if key in seen or not np.isfinite(value):
+            continue
+        members = [
+            other
+            for other, other_value in costs.items()
+            if np.isfinite(other_value)
+            and abs(other_value - value) <= tolerance * max(abs(value), 1.0)
+        ]
+        seen.update(members)
+        if len(members) > 1:
+            values = [costs[m] for m in members]
+            groups.append(
+                {
+                    "policies": members,
+                    "feasible_max_cost_bn": value,
+                    "max_absolute_difference_bn": max(values) - min(values),
+                    "distinct_results": 1,
+                    "reported_as_distinct_results": len(members),
+                }
+            )
+    identical: dict[str, list[str]] = {}
+    for group in groups:
+        for member in group["policies"]:
+            identical[member] = [m for m in group["policies"] if m != member]
+    return {
+        "tolerance": tolerance,
+        "feasible_max_cost_bn": costs,
+        "identical_groups": groups,
+        "identical_to": identical,
+        "any_identical": bool(groups),
+        "report_as_one_result": bool(groups),
+        "distinct_feasible_maxima": len(costs)
+        - sum(len(g["policies"]) - 1 for g in groups),
+        "proof": (
+            "A 100% discount on every eligible household's shocked domestic "
+            "bill and a flat payment equal to the WEIGHTED MEAN of those same "
+            "bills, paid to the same population, are the same aggregate sum by "
+            "the definition of a weighted mean. The equality is an identity, "
+            "not a finding, and the two rows are one result."
+        ),
+        "note": (
+            "Round-4 finding 1. Any group listed here must be reported as ONE "
+            "result. Two instruments whose ceilings are the same number by "
+            "construction do not independently confirm saturation."
+        ),
+    }
+
+
 POLICIES: dict[str, Policy] = {
     "social_tariff": Policy(
         "social_tariff",
@@ -653,6 +1075,12 @@ POLICIES: dict[str, Policy] = {
         # A discount cannot exceed the bill: 100% is free energy, and anything
         # above it is a payment for consuming, not a discount.
         feasible_max=100.0,
+        feasible_max_rule=(
+            "a 100 per cent discount: the whole shocked domestic bill of the "
+            "means-tested population, i.e. free energy. Aggregated this is the "
+            "SAME sum as the Warm Home Discount's bill-based ceiling — see "
+            "feasible_max_identity"
+        ),
         generic_template=(
             "proportional domestic-bill subsidy at {p:.1f} per cent, "
             "means-tested population"
@@ -670,6 +1098,10 @@ POLICIES: dict[str, Policy] = {
         stated_parameter=50.0,
         # The block can at most be free; the per-child allowance scales with it.
         feasible_max=100.0,
+        feasible_max_rule=(
+            "a 100 per cent discount on the block: the first 50 per cent of "
+            "typical consumption supplied free, plus the per-child allowance"
+        ),
         generic_template=(
             "discounted first block at {p:.1f} per cent off 50 per cent of "
             "typical use, universal"
@@ -687,6 +1119,12 @@ POLICIES: dict[str, Policy] = {
         parameter_units="£ per eligible household per year",
         stated_parameter=150.0,
         feasible_max=_mean_eligible_domestic_bill,
+        feasible_max_rule=(
+            "the MEAN SHOCKED DOMESTIC BILL of the eligible population "
+            "(_mean_eligible_domestic_bill), NOT the payment that exhausts "
+            "their loss: the mean loss among eligibles is several times "
+            "smaller. Both rules are computed by flat_payment_ceilings"
+        ),
         generic_template=(
             "flat payment of £{p:.0f} a year to the means-tested population"
         ),
@@ -706,6 +1144,10 @@ POLICIES: dict[str, Policy] = {
         # already says this in prose while its own scorecard crowned the
         # instrument at x2.47 of it.
         feasible_max=5.0,
+        feasible_max_rule=(
+            "the reduced rate itself: removing more than five percentage "
+            "points is a negative VAT rate"
+        ),
         generic_template=(
             "proportional domestic-bill subsidy at {p:.1f} per cent, universal"
         ),
@@ -724,6 +1166,11 @@ POLICIES: dict[str, Policy] = {
         # the instrument already spends its funding source; there is no headroom
         # above it and the common envelope scales it *down*, never up.
         feasible_max=183.0,
+        feasible_max_rule=(
+            "the sponsor's own parameter: the instrument is funded by the "
+            "network-company windfall and £183 already spends it, so there is "
+            "no headroom above the stated value"
+        ),
         generic_template="flat universal payment of £{p:.0f} a year",
     ),
 }
@@ -858,6 +1305,18 @@ class PolicyScore:
     # --- reference quantity (round-3 finding 5) ---------------------------
     reference_basis: str = ""
     reference_quantity_gbp: float = float("nan")
+    # --- admission rule (round-4 finding 3) -------------------------------
+    #: For a ``common_eligibility`` row: which observable the state ranked
+    #: non-claimants on to admit them (:data:`ADMISSION_RULES`). Empty for
+    #: every other row type.
+    admission_rule: str = ""
+    #: Whether that rule is the perfect-observability rule: the state ranking
+    #: every non-claimant by equivalised AHC income without error. A row for
+    #: which this is true is the eligibility arm's BEST case on targeting and
+    #: the prose may not report it as *the* eligibility-arm result. It is an
+    #: upper bound on what the state can observe, not on every metric — see
+    #: :func:`eligibility_admission_range`.
+    admission_rule_is_upper_bound: bool = False
 
 
 #: What each row type actually is, in one sentence. Emitted with every row.
@@ -929,6 +1388,8 @@ def score_policy(
     label_used: str | None = None,
     eligible_share: float | None = None,
     feasible_max_cost_bn: float = float("nan"),
+    admission_rule: str = "",
+    admission_rule_is_upper_bound: bool = False,
 ) -> tuple[PolicyScore, np.ndarray]:
     """Score ``policy`` against the shock, returning the gain array too.
 
@@ -1142,6 +1603,8 @@ def score_policy(
             ),
             reference_basis=policy.reference_basis,
             reference_quantity_gbp=policy.reference_quantity_gbp(base),
+            admission_rule=admission_rule,
+            admission_rule_is_upper_bound=admission_rule_is_upper_bound,
         ),
         gain,
     )
@@ -1280,6 +1743,95 @@ def score_policy_at_feasible_max(
     )
 
 
+#: How the state decides **who** to admit when it widens eligibility, ordered
+#: from perfect income observability to none.
+#:
+#: **Round-4 finding 3.** The original rule — and still the default, because it
+#: is the right upper bound — admits non-claimant households in ascending order
+#: of equivalised after-housing-costs income. That assumes the state can rank
+#: every household *outside* the benefit system by AHC-equivalised income,
+#: poorest first, with no error. It cannot: AHC income requires housing costs
+#: and household composition it does not hold for non-claimants, which is
+#: precisely the administrative capability this paper argues does not exist and
+#: the reason a social tariff is hard to deliver at all. Running only that rule
+#: reports the eligibility arm at its **best case** and compares it against a
+#: generosity arm with no corresponding idealisation.
+#:
+#: ``"equivalised_ahc_income"``
+#:     Perfect observability, poorest first. **Upper bound.**
+#: ``"unequivalised_net_income"``
+#:     Household net income, poorest first, with no AHC deduction and no
+#:     equivalisation — closer to what an income-based screen could actually run
+#:     off administrative income data, and wrong in a way that is correlated
+#:     with household size and housing costs.
+#: ``"highest_domestic_bill"``
+#:     Largest shocked domestic bill first. Not an income test at all: it is the
+#:     observable the *supplier* holds, and it is the only ranking a scheme
+#:     administered through energy accounts could apply without new data.
+#: ``"random"``
+#:     No observability whatsoever. Admission by lottery among non-claimants.
+#:     **Lower bound**, and the right benchmark for what "widening eligibility"
+#:     achieves when the state cannot see who is poor.
+ADMISSION_RULES: tuple[str, ...] = (
+    "equivalised_ahc_income",
+    "unequivalised_net_income",
+    "highest_domestic_bill",
+    "random",
+)
+
+#: What the state has to be able to see, per rule. Round-4 finding 3.
+ADMISSION_RULE_REQUIREMENTS: dict[str, str] = {
+    "equivalised_ahc_income": (
+        "after-housing-costs income and household composition for every "
+        "household OUTSIDE the benefit system, ranked without error — the "
+        "capability this paper argues does not exist"
+    ),
+    "unequivalised_net_income": (
+        "household net income only: no housing costs, no equivalisation. "
+        "Closer to administrative income data, and mis-ranks large households "
+        "and high-rent households"
+    ),
+    "highest_domestic_bill": (
+        "nothing the state does not already have: the energy account's own "
+        "bill. Not an income test — it admits big users, who are not the poor"
+    ),
+    "random": "nothing at all: admission by lottery among non-claimants",
+}
+
+#: The rule the headline eligibility arm uses. Deliberately the upper bound, so
+#: the paper's comparison is stated as the best case and labelled as one.
+DEFAULT_ADMISSION_RULE: str = "equivalised_ahc_income"
+
+#: Seed for ``"random"`` admission, so the row is reproducible.
+ADMISSION_RANDOM_SEED: int = 20260826
+
+
+def admission_order(
+    base: Baseline,
+    cost: ShockCost,
+    candidates: np.ndarray,
+    rule: str = DEFAULT_ADMISSION_RULE,
+    seed: int | None = None,
+) -> np.ndarray:
+    """Order ``candidates`` (household indices) for admission under ``rule``.
+
+    Separated from :func:`widen_eligibility` so a new rule is a change in one
+    place and so the ordering itself is testable without scoring anything.
+    """
+    if rule == "equivalised_ahc_income":
+        key = np.asarray(base.equiv_income_ahc, dtype=float)[candidates]
+    elif rule == "unequivalised_net_income":
+        key = np.asarray(base.net_income, dtype=float)[candidates]
+    elif rule == "highest_domestic_bill":
+        key = -(base.energy + cost.domestic)[candidates]
+    elif rule == "random":
+        rng = np.random.default_rng(ADMISSION_RANDOM_SEED if seed is None else seed)
+        key = rng.random(len(candidates))
+    else:
+        raise ValueError(f"unknown admission rule {rule!r}; expected {ADMISSION_RULES}")
+    return candidates[np.argsort(key, kind="stable")]
+
+
 def widen_eligibility(
     base: Baseline,
     cost: ShockCost,
@@ -1287,8 +1839,10 @@ def widen_eligibility(
     policy: Policy,
     envelope_bn: float,
     max_eligible_share: float = 1.0,
+    admission_rule: str = DEFAULT_ADMISSION_RULE,
+    seed: int | None = None,
 ) -> np.ndarray:
-    """Extend eligibility down the income ranking until the envelope is spent.
+    """Extend eligibility to non-claimants until the envelope is spent.
 
     The margin a real policymaker uses. A social tariff that has to spend more
     money does not discount 138% of the bill; it lets more households in — and
@@ -1300,9 +1854,16 @@ def widen_eligibility(
     means-tested instrument, and it is the comparison the scaled row was
     standing in for.
 
-    Households outside the modelled means-tested population are added in
-    ascending order of equivalised AHC income until the next household would
-    take the total past ``envelope_bn``. Returns a new eligibility mask.
+    ``admission_rule`` (round-4 finding 3)
+    --------------------------------------
+    **Who gets let in, and what the state has to be able to see to let them
+    in.** The default ranks non-claimants by equivalised AHC income, poorest
+    first — perfect income observability outside the benefit system, which is
+    the capability this paper argues does not exist. It is retained as the
+    default because it is the correct **upper bound** on what widening can
+    achieve, and it is labelled as one; :data:`ADMISSION_RULES` documents the
+    weaker rules, and :func:`eligibility_admission_range` runs all of them so
+    the paper reports a range rather than the best case.
 
     ``max_eligible_share`` caps how far the widening may go, as a share of
     weighted households. It defaults to 1.0 — no cap — because the finding is
@@ -1321,7 +1882,7 @@ def widen_eligibility(
     if remaining <= 0:
         return out
     candidates = np.flatnonzero(~already)
-    order = candidates[np.argsort(base.equiv_income_ahc[candidates], kind="stable")]
+    order = admission_order(base, cost, candidates, admission_rule, seed)
     running = np.cumsum(gain_if_eligible[order] * w[order])
     take = order[running <= remaining]
     if max_eligible_share < 1.0:
@@ -1340,6 +1901,8 @@ def score_policy_by_eligibility(
     policy: Policy,
     envelope_bn: float = COMMON_ENVELOPE_BN,
     max_eligible_share: float = 1.0,
+    admission_rule: str = DEFAULT_ADMISSION_RULE,
+    seed: int | None = None,
 ) -> tuple[PolicyScore, np.ndarray]:
     """Reach the common envelope by widening eligibility, not by scaling generosity.
 
@@ -1347,13 +1910,25 @@ def score_policy_by_eligibility(
     have no eligibility margin to widen. The generosity parameter is left at the
     sponsor's own value, so the row is always feasible and keeps the policy's
     real name.
+
+    ``admission_rule`` says what the state has to be able to observe to run the
+    widening (:data:`ADMISSION_RULES`). The default is the perfect-observability
+    upper bound and the row is labelled as such; use
+    :func:`eligibility_admission_range` for the whole range.
     """
     if not policy.means_tested:
         raise ValueError(
             f"policy {policy.key!r} is universal; it has no eligibility margin"
         )
     widened = widen_eligibility(
-        base, cost, mt, policy, envelope_bn, max_eligible_share=max_eligible_share
+        base,
+        cost,
+        mt,
+        policy,
+        envelope_bn,
+        max_eligible_share=max_eligible_share,
+        admission_rule=admission_rule,
+        seed=seed,
     )
     gain = policy.gain(base, cost, widened)
     w = base.weight
@@ -1371,6 +1946,17 @@ def score_policy_by_eligibility(
             f"({policy.parameter_units}) and paid to every household — "
             "no means test remains at this envelope"
         )
+    # Round-4 finding 3: the admission rule is part of what the row IS, so it
+    # travels with the label. A row admitted poorest-first on equivalised AHC
+    # income is an upper bound and must say so wherever it is read.
+    if admission_rule == DEFAULT_ADMISSION_RULE:
+        label_used += (
+            " [admission: poorest-first on equivalised AHC income — assumes "
+            "perfect income observability outside the benefit system; UPPER "
+            "BOUND]"
+        )
+    else:
+        label_used += f" [admission: {admission_rule}]"
     return score_policy(
         base,
         cost,
@@ -1387,7 +1973,134 @@ def score_policy_by_eligibility(
         eligible_share=share,
         label_used=label_used,
         feasible_max_cost_bn=policy.feasible_max_cost_bn(base, cost, mt),
+        admission_rule=admission_rule,
+        admission_rule_is_upper_bound=(admission_rule == DEFAULT_ADMISSION_RULE),
     )
+
+
+def eligibility_admission_range(
+    base: Baseline,
+    cost: ShockCost,
+    mt: np.ndarray,
+    policy: Policy,
+    envelope_bn: float = COMMON_ENVELOPE_BN,
+    rules: tuple[str, ...] = ADMISSION_RULES,
+    random_seeds: tuple[int, ...] = (20260826, 7, 101, 2718, 31415),
+) -> dict[str, Any]:
+    """Score the eligibility arm under **every** admission rule, not the best one.
+
+    **Round-4 finding 3.** The paper reported the eligibility arm offsetting
+    26.6% of aggregate loss against the generosity arm's 5.2%, and that number
+    is produced by admitting non-claimants in ascending order of equivalised
+    AHC income — the state ranking every household outside the benefit system,
+    poorest first, without error. The paper's own argument is that this
+    capability does not exist. Reporting the arm at that rule alone states the
+    upper bound as the result.
+
+    Every rule in :data:`ADMISSION_RULES` is run here at the same envelope and
+    the same generosity, and the spread is reported. ``"random"`` is additionally
+    run over several seeds and its mean and range recorded, so the lower bound
+    is not one lucky draw.
+
+    Returns the per-rule statistics plus ``range`` — the min and max across
+    rules of each headline measure — so the paper can write "between x and y,
+    depending on what the state can observe" instead of "y".
+    """
+    per_rule: dict[str, Any] = {}
+    for rule in rules:
+        score = score_policy_by_eligibility(
+            base, cost, mt, policy, envelope_bn, admission_rule=rule
+        )[0]
+        entry: dict[str, Any] = {
+            "admission_rule": rule,
+            "is_upper_bound": rule == DEFAULT_ADMISSION_RULE,
+            "what_the_state_must_observe": ADMISSION_RULE_REQUIREMENTS[rule],
+            "cost_bn": score.cost_bn,
+            "eligible_share": score.eligible_share,
+            "share_of_aggregate_loss_offset": score.share_of_aggregate_loss_offset,
+            "share_to_bottom_three": score.share_to_bottom_three,
+            "uncompensated_share_overall": score.uncompensated_share_overall,
+            "mean_residual_loss_gbp": score.mean_residual_loss_gbp,
+            "cost_per_pound_decile_one": score.cost_per_pound_decile_one,
+        }
+        if rule == "random":
+            draws = [
+                score_policy_by_eligibility(
+                    base, cost, mt, policy, envelope_bn, admission_rule=rule, seed=seed
+                )[0].share_of_aggregate_loss_offset
+                for seed in random_seeds
+            ]
+            entry["random_draws"] = {
+                "seeds": list(random_seeds),
+                "share_of_aggregate_loss_offset": draws,
+                "mean": float(np.mean(draws)),
+                "min": float(np.min(draws)),
+                "max": float(np.max(draws)),
+                "std": float(np.std(draws)),
+            }
+        per_rule[rule] = entry
+
+    measures = (
+        "share_of_aggregate_loss_offset",
+        "share_to_bottom_three",
+        "uncompensated_share_overall",
+        "eligible_share",
+        "cost_bn",
+    )
+    ranges = {
+        measure: {
+            "min": min(v[measure] for v in per_rule.values()),
+            "max": max(v[measure] for v in per_rule.values()),
+            "upper_bound_rule_value": per_rule[DEFAULT_ADMISSION_RULE][measure],
+            "argmin": min(per_rule, key=lambda k: per_rule[k][measure]),
+            "argmax": max(per_rule, key=lambda k: per_rule[k][measure]),
+        }
+        for measure in measures
+    }
+    # Round-4: the default rule is the upper bound on OBSERVABILITY, and hence
+    # on targeting — it admits the poorest first. It is NOT automatically the
+    # best rule on every measure, and the paper should say so: most of the
+    # modelled loss is motor fuel, which is not what a domestic-bill instrument
+    # pays out on, so a rule that admits the biggest BILLS can offset more
+    # aggregate loss than a rule that admits the lowest incomes. Which measures
+    # the default actually wins is computed, not assumed.
+    best_on = [
+        measure
+        for measure in ("share_of_aggregate_loss_offset", "share_to_bottom_three")
+        if ranges[measure]["argmax"] == DEFAULT_ADMISSION_RULE
+    ]
+    return {
+        "policy": policy.key,
+        "envelope_bn": envelope_bn,
+        "default_rule": DEFAULT_ADMISSION_RULE,
+        "default_rule_maximises": best_on,
+        "default_rule_does_not_maximise": [
+            measure
+            for measure in ("share_of_aggregate_loss_offset", "share_to_bottom_three")
+            if measure not in best_on
+        ],
+        "upper_bound_is_on_observability_not_on_every_measure": (
+            "The default rule assumes perfect income observability and so "
+            "bounds what widening can achieve as TARGETING. It does not "
+            "dominate every metric: most of the modelled loss is motor fuel, "
+            "which a domestic-bill instrument does not pay out on, so a rule "
+            "that admits the largest bills can offset more aggregate loss "
+            "while reaching fewer poor households. Report the range, and say "
+            "which measure is being ranked."
+        ),
+        "rules": list(rules),
+        "by_rule": per_rule,
+        "range": ranges,
+        "note": (
+            "Round-4 finding 3. The headline eligibility arm uses "
+            f"{DEFAULT_ADMISSION_RULE!r}, which assumes the state can rank "
+            "every non-claimant household by equivalised after-housing-costs "
+            "income. That is the capability this paper argues does not exist, "
+            "so that row is an UPPER BOUND. The paper must report the range "
+            "across admission rules, with the default labelled as the best "
+            "case and 'random' as the no-observability benchmark."
+        ),
+    }
 
 
 def scorecard(
@@ -1457,6 +2170,13 @@ def scorecard(
             )[0]
         )
         if policy.means_tested:
+            # One row, on the default admission rule, so the scorecard's shape
+            # is unchanged. That rule is the perfect-observability UPPER BOUND
+            # (round-4 finding 3): the row says so in ``label_used`` and in
+            # ``admission_rule_is_upper_bound``, and the weaker rules are
+            # scored and persisted by :func:`eligibility_admission_range`, which
+            # ``policy_diagnostics`` writes out. A range belongs in a
+            # diagnostics file, not in a table with one row per instrument.
             out.append(
                 score_policy_by_eligibility(base, cost, mt, policy, envelope_bn)[0]
             )
@@ -1567,6 +2287,7 @@ def policy_diagnostics(
             "saturates_below_envelope": bool(feasible_bn < envelope_bn),
             "means_tested": policy.means_tested,
         }
+        entry["feasible_max_rule"] = policy.feasible_max_rule
         arms: dict[str, float] = {
             "generosity_arm_spend_bn": min(envelope_bn, feasible_bn),
         }
@@ -1575,6 +2296,13 @@ def policy_diagnostics(
             arms["eligibility_arm_spend_bn"] = elig.cost_bn
             arms["eligibility_arm_eligible_share"] = elig.eligible_share
             arms["eligibility_arm_is_universal"] = elig.eligibility_is_universal
+            arms["eligibility_arm_admission_rule"] = elig.admission_rule
+            arms["eligibility_arm_admission_rule_is_upper_bound"] = (
+                elig.admission_rule_is_upper_bound
+            )
+            entry["admission_rules"] = eligibility_admission_range(
+                base, cost, mt, policy, envelope_bn
+            )
         arms["envelope_bn"] = envelope_bn
         arms["arms_spend_the_same"] = bool(
             all(
@@ -1591,6 +2319,10 @@ def policy_diagnostics(
         "row_semantics": ROW_SEMANTICS,
         "by_policy": per_policy,
         "jrf_reference_quantities": jrf_reference_quantities(base),
+        # Round-4 findings 1, 2 and 6.
+        "feasible_max_identity": feasible_max_identity(base, cost, mt, chosen),
+        "flat_payment_ceilings": flat_payment_ceilings(base, cost, mt),
+        "jrf_costing_gap": jrf_costing_gap(base, cost, mt),
         "large_loser_outside_means_test": large_loser_outside_means_test(
             base, cost, mt
         ),

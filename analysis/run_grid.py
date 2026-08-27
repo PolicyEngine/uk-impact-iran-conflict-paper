@@ -277,6 +277,156 @@ def cell_row(base, gas_pct: float, oil_pct: float) -> dict:
     }
 
 
+#: The four sub-channels every shock in this paper is built from. Each one's
+#: D1/D10 burden ratio is a fixed property of the *baseline* — ``mean_loss_pct``
+#: is an aggregate ratio, so scaling a channel's price move cannot change its own
+#: decile gradient — and every scenario's all-channel ratio is an exact convex
+#: combination of the four, weighted by each channel's share of decile ten's
+#: loss. That is what makes the check below able to fail.
+SUB_CHANNELS: tuple[str, ...] = ("gas", "electricity", "petrol", "diesel")
+
+
+def _sub_channel_costs(base, scenario) -> dict[str, np.ndarray]:
+    """Per-household cost of each of the four sub-channels, £/yr."""
+    from uk_iran_conflict.incidence import (  # noqa: PLC0415
+        domestic_retail_factors,
+        sustained_pump_factors,
+    )
+
+    gas_factor, elec_factor = domestic_retail_factors(scenario)
+    petrol_factor, diesel_factor = sustained_pump_factors(scenario)
+    return {
+        "gas": base.gas * (gas_factor - 1.0),
+        "electricity": base.electricity * (elec_factor - 1.0),
+        "petrol": base.petrol * (petrol_factor - 1.0),
+        "diesel": base.diesel * (diesel_factor - 1.0),
+    }
+
+
+def _sub_channel_decomposition(base, scenario, ratio: float) -> dict:
+    """Decompose a scenario's D1/D10 ratio onto the four sub-channels.
+
+    **Round-4 finding 5.** The two-channel identity in
+    :func:`reconcile_named_scenarios` holds by construction and is worth
+    asserting, but it cannot explain why every named scenario sits *outside* the
+    grid's range. This does.
+
+    The grid varies exactly two things — the gas move and the oil move — and
+    maps the oil move to the pump with **fixed** coefficients
+    (:data:`PETROL_PASS_THROUGH`, :data:`DIESEL_PASS_THROUGH`). So across all
+    thirty-six cells the gas:electricity mix and the petrol:diesel mix are both
+    held constant, and only the domestic-versus-fuel mix moves. Petrol and
+    diesel have materially different decile gradients in this imputation, and
+    the named scenarios each carry their own petrol/diesel mix, so their
+    all-channel ratios land off the one-dimensional curve the grid traces. The
+    named scenarios are not outside the grid because anything is inconsistent;
+    they are outside it because the grid does not sweep the margin that
+    separates them from it.
+
+    Returns each sub-channel's own ratio, its share of decile-ten loss, the
+    convex combination they imply, and ``inside_sub_channel_span`` — a **real**
+    bracketing test: an aggregate ratio that is not between the smallest and
+    largest of its own components' ratios is arithmetically impossible and means
+    the pipeline is broken.
+    """
+    w = base.weight
+    d10 = base.decile == 10
+    costs = _sub_channel_costs(base, scenario)
+    ratios = {name: _decile_ratio(decile_table(base, c)) for name, c in costs.items()}
+    d10_loss = {name: wsum(c[d10], w[d10]) for name, c in costs.items()}
+    total_d10 = sum(d10_loss.values())
+    shares = {
+        name: (value / total_d10 if total_d10 else float("nan"))
+        for name, value in d10_loss.items()
+    }
+    implied = sum(shares[name] * ratios[name] for name in SUB_CHANNELS)
+    finite = [ratios[name] for name in SUB_CHANNELS if np.isfinite(ratios[name])]
+    lo = min(finite) if finite else float("nan")
+    hi = max(finite) if finite else float("nan")
+    return {
+        "channels": list(SUB_CHANNELS),
+        "d1_d10_ratio_by_channel": ratios,
+        "share_of_decile10_loss_by_channel": shares,
+        "d1_d10_ratio_implied": implied,
+        "identity_residual": abs(ratio - implied),
+        "sub_channel_ratio_min": lo,
+        "sub_channel_ratio_max": hi,
+        "inside_sub_channel_span": bool(
+            np.isfinite(lo) and np.isfinite(hi) and lo - 1e-9 <= ratio <= hi + 1e-9
+        ),
+        "petrol_share_of_motor_fuel_loss": (
+            d10_loss["petrol"] / (d10_loss["petrol"] + d10_loss["diesel"])
+            if (d10_loss["petrol"] + d10_loss["diesel"])
+            else float("nan")
+        ),
+    }
+
+
+def _grid_scope(live: pd.DataFrame, spread: float, informative: float) -> dict:
+    """What the grid does and does not show, stated plainly. Round-4 finding 5.
+
+    The appendix advertised that this script "checks every named scenario
+    against the live grid's range and raises if one falls outside it". It never
+    did: range membership was recorded and never enforced, and
+    ``inside_grid_range`` is in fact ``false`` for all five named scenarios
+    while ``check_is_informative`` is ``false`` too. A guarantee that does not
+    run must not be advertised, and this block exists so the paper cannot
+    advertise it: ``range_check_enforced`` is ``false``, permanently and by
+    design, with the reason attached.
+
+    What *is* enforced is the sub-channel bracketing and the convex-combination
+    identity, both of which can fail and neither of which is a range-membership
+    test.
+    """
+    petrol_diesel_ratio = DIESEL_PASS_THROUGH / PETROL_PASS_THROUGH
+    return {
+        "range_check_enforced": False,
+        "why_the_range_check_is_not_enforced": (
+            "It carries no information on this grid. The D1/D10 burden ratio "
+            f"spans {spread:.6f} across all live cells, against the "
+            f"{informative:.2f} it would need for membership to discriminate "
+            "between pipelines. A test that every value passes is not a test, "
+            "and enforcing it would give the paper a guarantee it does not "
+            "have. The paper must not claim this script raises on range "
+            "membership: it does not, and it should not."
+        ),
+        "what_the_grid_shows": [
+            "the aggregate cost, mean loss and channel split of the shock "
+            "across a 6x6 sweep of the two independent wholesale drivers",
+            "that the modelled D1/D10 burden gradient is INVARIANT to the "
+            "domestic-versus-motor-fuel mix, because in this imputation the "
+            "two channels have almost the same decile gradient — which is the "
+            "motor-fuel imputation defect seen from a third direction",
+            "where in (gas, oil) space motor fuel stops being the majority of the loss",
+        ],
+        "what_the_grid_does_not_show": [
+            "any test of mix-invariance with power: the range is degenerate, "
+            "so invariance is measured, not tested, and the paper may cite the "
+            "measured spread but not a passed test",
+            "the petrol-versus-diesel margin. Every cell maps the oil move to "
+            f"the pump with the SAME fixed coefficients ({PETROL_PASS_THROUGH} "
+            f"petrol, {DIESEL_PASS_THROUGH} diesel, ratio "
+            f"{petrol_diesel_ratio:.3f}), so the petrol:diesel mix is constant "
+            "across all cells. The named scenarios carry their own mixes, "
+            "which is why their ratios fall outside the grid's range — not an "
+            "inconsistency, a margin the grid does not sweep",
+            "the gas-versus-electricity margin, which is likewise fixed by the "
+            "cap pass-through assumptions in every cell",
+            "anything about damped scenarios at their headline coordinates: "
+            "every cell is undamped, which is why named_points reports "
+            "damped-equivalent coordinates",
+        ],
+        "enforced_checks": [
+            "the convex-combination identity on the domestic/motor-fuel split, "
+            "at 1e-6 — raises",
+            "sub-channel bracketing: every named scenario's all-channel ratio "
+            "must lie between the smallest and largest of its own four "
+            "sub-channel ratios — raises",
+        ],
+        "live_cells": int(len(live)),
+    }
+
+
 def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
     """Reconcile each named scenario's decile ratio with the grid, meaningfully.
 
@@ -330,6 +480,7 @@ def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
         ratio = result.all_channel_d1_d10_ratio_pct
         domestic_ratio = result.domestic_only_d1_d10_ratio_pct
         implied = share * domestic_ratio + (1.0 - share) * fuel_ratio
+        sub = _sub_channel_decomposition(base, scenario, ratio)
         scenarios[key] = {
             "d1_d10_ratio": ratio,
             "d1_d10_ratio_domestic_only": domestic_ratio,
@@ -340,8 +491,17 @@ def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
             "identity_holds": bool(abs(ratio - implied) < identity_tol),
             "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
             "inside_grid_range": bool(lo <= ratio <= hi),
+            # Round-4 finding 5: WHY it falls outside, decomposed on the four
+            # sub-channels the grid holds partly fixed.
+            "sub_channels": sub,
         }
     broken = [k for k, v in scenarios.items() if not v["identity_holds"]]
+    unbracketed = [
+        k
+        for k, v in scenarios.items()
+        if not v["sub_channels"]["inside_sub_channel_span"]
+    ]
+    outside_range = [k for k, v in scenarios.items() if not v["inside_grid_range"]]
     return {
         "note": (
             "Round-3 finding 5. The previous ±5% range-membership check could "
@@ -366,6 +526,22 @@ def reconcile_named_scenarios(base, live: pd.DataFrame) -> dict:
         "channel_mix_identity_holds": not broken,
         "identity_broken": broken,
         "outside": broken,
+        # --- round-4 finding 5 -------------------------------------------
+        "grid_scope": _grid_scope(live, spread, informative_spread),
+        "named_scenarios_outside_grid_range": outside_range,
+        "why_named_scenarios_fall_outside_grid_range": (
+            "Not an inconsistency. Every grid cell maps the oil move to the "
+            f"pump with the same fixed coefficients ({PETROL_PASS_THROUGH} "
+            f"petrol, {DIESEL_PASS_THROUGH} diesel), so the petrol:diesel mix "
+            "is identical in all thirty-six cells, and the cap pass-through "
+            "fixes the gas:electricity mix likewise. The grid therefore traces "
+            "a one-dimensional curve through a four-channel space. The named "
+            "scenarios carry their own petrol/diesel mixes and sit off that "
+            "curve. See each scenario's `sub_channels` block, and "
+            "`grid_scope.what_the_grid_does_not_show`."
+        ),
+        "sub_channel_bracketing_holds": not unbracketed,
+        "sub_channel_bracketing_broken": unbracketed,
     }
 
 
@@ -441,6 +617,15 @@ def main() -> None:
             f"channel-mix identity residual {payload['identity_residual']:.2e} "
             f"{'ok' if payload['identity_holds'] else 'BROKEN'}"
         )
+    if reconciliation["sub_channel_bracketing_broken"]:
+        raise SystemExit(
+            "the all-channel D1/D10 ratio falls outside the span of its own "
+            "four sub-channel ratios for "
+            f"{reconciliation['sub_channel_bracketing_broken']}. That is "
+            "arithmetically impossible for a weighted sum of those channels, "
+            "so the decile table and the shock cost are not being computed off "
+            "the same baseline."
+        )
     if reconciliation["identity_broken"]:
         raise SystemExit(
             "the decile ratio is not the convex combination of its own channel "
@@ -448,6 +633,22 @@ def main() -> None:
             "named scenarios are not the same pipeline. Re-run "
             "analysis/run_variants.py and analysis/run_grid.py together."
         )
+
+    scope = reconciliation["grid_scope"]
+    print(
+        "\nrange check: "
+        + ("ENFORCED" if scope["range_check_enforced"] else "NOT enforced, by design")
+        + f" — {len(reconciliation['named_scenarios_outside_grid_range'])} of "
+        f"{len(reconciliation['scenarios'])} named scenarios fall outside the "
+        "grid's range, because the grid holds the petrol:diesel and "
+        "gas:electricity mixes fixed in every cell"
+    )
+    print(
+        "  enforced instead: sub-channel bracketing "
+        + ("ok" if reconciliation["sub_channel_bracketing_holds"] else "BROKEN")
+        + ", convex-combination identity "
+        + ("ok" if reconciliation["channel_mix_identity_holds"] else "BROKEN")
+    )
 
     flip = live[live["motor_fuel_share_pct"] < 50]
     print(

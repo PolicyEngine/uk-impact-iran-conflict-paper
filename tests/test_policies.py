@@ -235,7 +235,13 @@ def test_a_means_tested_instrument_can_reach_the_envelope_by_widening_eligibilit
     # Generosity is untouched; only the eligible population moved.
     assert widened.implied_parameter == pytest.approx(policy.stated_parameter)
     assert widened.eligible_share > float(base.weight[mt].sum() / base.weight.sum())
-    assert widened.label_used == policy.label
+    # Round-4 finding 3: the row is produced by the perfect-observability
+    # admission rule, so it is an upper bound and must say so wherever it is
+    # read. The policy keeps its real name; the rule is appended to it.
+    assert widened.label_used.startswith(policy.label)
+    assert widened.admission_rule == pol.DEFAULT_ADMISSION_RULE
+    assert widened.admission_rule_is_upper_bound is True
+    assert "UPPER BOUND" in widened.label_used
 
 
 def test_eligibility_widening_adds_the_poorest_first(world):
@@ -925,3 +931,297 @@ def test_the_audit_separates_contributing_from_resolving(monkeypatch):
     # The two sets are different objects and the audit says so.
     assert audit["n_contributing"] < audit["n_resolved"]
     pol._CHILD_COUNTS.pop(n, None)
+
+
+# ==========================================================================
+# Round-4 finding 1: the two "feasible maximum" means-tested rows are one row
+# ==========================================================================
+
+
+def test_the_two_means_tested_feasible_maxima_are_the_same_number(world):
+    """A 100% bill discount and a payment equal to the mean bill are one result.
+
+    The social tariff's ceiling discounts 100% of every eligible household's
+    shocked domestic bill. The Warm Home Discount's ceiling is the weighted
+    *mean* of those same bills, paid to the same households. Summed over that
+    population the two are the same number by the definition of a weighted
+    mean, so the paper may not cite them as two instruments independently
+    confirming that means-tested support saturates.
+    """
+    base, cost, mt = world
+    social = pol.POLICIES["social_tariff"].feasible_max_cost_bn(base, cost, mt)
+    whd = pol.POLICIES["whd_expansion"].feasible_max_cost_bn(base, cost, mt)
+    assert social == pytest.approx(whd, rel=1e-12)
+
+
+def test_feasible_max_identity_detects_the_group_and_flags_it(world):
+    base, cost, mt = world
+    out = pol.feasible_max_identity(base, cost, mt)
+    assert out["any_identical"] is True
+    assert out["report_as_one_result"] is True
+    groups = [set(g["policies"]) for g in out["identical_groups"]]
+    assert {"social_tariff", "whd_expansion"} in groups
+    assert out["identical_to"]["whd_expansion"] == ["social_tariff"]
+    # Five instruments, one coincident pair, so four distinct feasible maxima.
+    assert out["distinct_feasible_maxima"] == len(pol.POLICIES) - 1
+
+
+def test_feasible_max_identity_is_not_an_artefact_of_the_fixture(world):
+    """It must hold for any means-tested population, not just this one."""
+    base, cost, _ = world
+    for mask in (
+        np.array([1, 0, 1, 0, 1, 0, 1, 0, 1, 0], dtype=bool),
+        np.ones(N, dtype=bool),
+        np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 1], dtype=bool),
+    ):
+        social = pol.POLICIES["social_tariff"].feasible_max_cost_bn(base, cost, mask)
+        whd = pol.POLICIES["whd_expansion"].feasible_max_cost_bn(base, cost, mask)
+        assert social == pytest.approx(whd, rel=1e-12)
+
+
+def test_a_scorecard_consumer_can_see_the_coincidence(world):
+    base, cost, mt = world
+    diagnostics = pol.policy_diagnostics(base, cost, mt)
+    assert diagnostics["feasible_max_identity"]["report_as_one_result"] is True
+
+
+# ==========================================================================
+# Round-4 finding 2: the WHD ceiling is a bill rule, not a loss rule
+# ==========================================================================
+
+
+def test_the_whd_ceiling_is_the_mean_bill_not_the_mean_loss(world):
+    base, cost, mt = world
+    ceilings = pol.flat_payment_ceilings(base, cost, mt)
+    ceiling = pol.POLICIES["whd_expansion"].feasible_max_parameter(base, cost, mt)
+    assert ceiling == pytest.approx(ceilings["mean_eligible_domestic_bill_gbp"])
+    # The rule the paper's prose described gives a different, smaller number.
+    assert (
+        ceilings["mean_eligible_loss_gbp"] < ceilings["mean_eligible_domestic_bill_gbp"]
+    )
+    assert ceilings["bill_over_loss"] > 1.0
+    assert ceilings["rule_used"] == "mean_eligible_domestic_bill"
+
+
+def test_the_loss_rule_spends_exactly_the_eligible_populations_loss(world):
+    base, cost, mt = world
+    loss_rule = pol._mean_eligible_loss(base, cost, mt)
+    w = base.weight
+    assert loss_rule * w[mt].sum() == pytest.approx(wsum(cost.total[mt], w[mt]))
+
+
+def test_the_ceiling_rule_is_written_down_on_every_policy():
+    for policy in pol.POLICIES.values():
+        assert policy.feasible_max_rule, f"{policy.key} has no ceiling rule in words"
+    assert "NOT the payment that exhausts" in (
+        pol.POLICIES["whd_expansion"].feasible_max_rule
+    )
+
+
+# ==========================================================================
+# Round-4 finding 3: widening eligibility needs an observability assumption
+# ==========================================================================
+
+
+def test_every_admission_rule_runs_and_is_documented(world):
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    for rule in pol.ADMISSION_RULES:
+        assert rule in pol.ADMISSION_RULE_REQUIREMENTS
+        mask = pol.widen_eligibility(
+            base, cost, mt, policy, envelope_bn=3.0, admission_rule=rule
+        )
+        # Nobody already eligible is ever removed.
+        assert (mask | mt == mask).all()
+
+
+def test_the_default_admission_rule_is_the_perfect_observability_frontier(world):
+    """Poorest-first is a *frontier* property: nobody left out is poorer than
+    anybody let in. That is exactly the capability the paper argues the state
+    does not have, and it is what makes the default rule the upper bound.
+    """
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    widened = pol.widen_eligibility(
+        base, cost, mt, policy, 3.0, admission_rule="equivalised_ahc_income"
+    )
+    added = widened & ~mt
+    left_out = ~widened
+    if added.any() and left_out.any():
+        assert (
+            base.equiv_income_ahc[added].max() <= base.equiv_income_ahc[left_out].min()
+        )
+
+
+def test_a_weaker_admission_rule_breaks_that_frontier(world):
+    """A rule the state could actually run does not admit the poorest first."""
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    broken = []
+    for rule in ("highest_domestic_bill", "random"):
+        widened = pol.widen_eligibility(
+            base, cost, mt, policy, 3.0, admission_rule=rule
+        )
+        added = widened & ~mt
+        left_out = ~widened
+        if added.any() and left_out.any():
+            broken.append(
+                base.equiv_income_ahc[added].max()
+                > base.equiv_income_ahc[left_out].min()
+            )
+    assert any(broken), "no weaker rule departed from poorest-first"
+
+
+def test_the_admission_range_is_not_degenerate(world):
+    """The whole point of finding 3: the arm's result is a range, not a number."""
+    base, cost, mt = world
+    out = pol.eligibility_admission_range(
+        base, cost, mt, pol.POLICIES["social_tariff"], envelope_bn=3.0
+    )
+    assert set(out["by_rule"]) == set(pol.ADMISSION_RULES)
+    assert out["by_rule"][pol.DEFAULT_ADMISSION_RULE]["is_upper_bound"] is True
+    spread = out["range"]["share_of_aggregate_loss_offset"]
+    assert spread["max"] > spread["min"]
+    # And the "no observability" benchmark is run over several seeds, so the
+    # lower bound is not one lucky draw.
+    assert len(out["by_rule"]["random"]["random_draws"]["seeds"]) >= 3
+
+
+def test_the_upper_bound_claim_is_about_observability_not_every_metric(world):
+    """Recorded, because it is a finding in its own right: most of the modelled
+    loss is motor fuel, so a rule that admits the biggest bills can offset more
+    aggregate loss than one that admits the lowest incomes.
+    """
+    base, cost, mt = world
+    out = pol.eligibility_admission_range(
+        base, cost, mt, pol.POLICIES["social_tariff"], envelope_bn=3.0
+    )
+    assert isinstance(out["default_rule_maximises"], list)
+    assert out["upper_bound_is_on_observability_not_on_every_measure"]
+
+
+def test_a_weaker_admission_rule_is_labelled_as_itself(world):
+    base, cost, mt = world
+    lottery = pol.score_policy_by_eligibility(
+        base,
+        cost,
+        mt,
+        pol.POLICIES["social_tariff"],
+        envelope_bn=3.0,
+        admission_rule="random",
+    )[0]
+    assert lottery.admission_rule == "random"
+    assert lottery.admission_rule_is_upper_bound is False
+    assert "admission: random" in lottery.label_used
+
+
+def test_random_admission_is_reproducible_and_seed_sensitive(world):
+    base, cost, mt = world
+    policy = pol.POLICIES["social_tariff"]
+    a = pol.widen_eligibility(
+        base, cost, mt, policy, 3.0, admission_rule="random", seed=1
+    )
+    b = pol.widen_eligibility(
+        base, cost, mt, policy, 3.0, admission_rule="random", seed=1
+    )
+    assert (a == b).all()
+
+
+def test_an_unknown_admission_rule_raises(world):
+    base, cost, mt = world
+    with pytest.raises(ValueError, match="unknown admission rule"):
+        pol.widen_eligibility(
+            base, cost, mt, pol.POLICIES["social_tariff"], 3.0, admission_rule="vibes"
+        )
+
+
+def test_the_eligibility_row_says_it_is_an_upper_bound(world):
+    base, cost, mt = world
+    diagnostics = pol.policy_diagnostics(base, cost, mt)
+    arms = diagnostics["by_policy"]["social_tariff"]["envelope_arms"]
+    assert arms["eligibility_arm_admission_rule_is_upper_bound"] is True
+    assert "admission_rules" in diagnostics["by_policy"]["social_tariff"]
+
+
+# ==========================================================================
+# Round-4 finding 6: the JRF costing gap
+# ==========================================================================
+
+
+def test_the_jrf_comparison_is_on_the_sponsors_own_basis(world):
+    base, cost, mt = world
+    gap = pol.jrf_costing_gap(base, cost, mt)
+    assert gap["comparable"] is True
+    assert pol.JRF_DEFAULT_REFERENCE_BASIS == "ofgem_typical_consumption"
+
+
+def test_the_block_truncation_term_cannot_explain_the_gap(world):
+    """The modelled bill distribution makes the block CHEAPER, not dearer."""
+    base, cost, mt = world
+    gap = pol.jrf_costing_gap(base, cost, mt)
+    d = gap["decomposition"]
+    assert d["block_truncation_bn"] >= 0.0
+    assert d["modelled_block_bn"] == pytest.approx(
+        d["universal_ceiling_block_bn"] - d["block_truncation_bn"]
+    )
+
+
+def test_the_gap_is_visible_without_any_microdata():
+    """A 50% discount on 50% of a £1,723 bill is £431 a household. JRF's own
+    £5bn over ~29.5m households is about £170. No distribution of bills can
+    reconcile the two, so the gap is arithmetic in the sponsor's own figures.
+    """
+    per_household_modelled = (
+        pol.JRF_BLOCK_DISCOUNT * pol.JRF_BLOCK_SHARE * pol.OFGEM_TYPICAL_ANNUAL_BILL_GBP
+    )
+    per_household_sponsor = pol.JRF_STATED_COST_BN * 1e9 / 29.5e6
+    assert per_household_modelled > 2 * per_household_sponsor
+
+
+def test_the_implied_discount_reproduces_the_sponsors_total(world):
+    base, cost, mt = world
+    gap = pol.jrf_costing_gap(base, cost, mt)
+    implied = gap["single_parameter_reconciliations"]["implied_discount"]
+    rebuilt = (
+        wsum(
+            pol._jrf_block(base, cost, mt, discount=implied),
+            base.weight,
+        )
+        / 1e9
+    )
+    assert rebuilt == pytest.approx(gap["sponsor_cost_bn"], rel=1e-9)
+
+
+def test_the_discount_rate_is_ours_not_the_sponsors():
+    """The one parameter the gap turns on is the one JRF never published."""
+    assert pol.JRF_PARAMETER_PROVENANCE["discount"].startswith("OURS")
+    assert pol.JRF_PARAMETER_PROVENANCE["block_share"].startswith("sponsor")
+
+
+def test_the_implied_block_share_is_only_reported_when_it_exists(world):
+    """On a baseline where the modelled block already costs less than the
+    sponsor's total there is no smaller block that reproduces it, and the
+    bisection must say so rather than return its own lower bound.
+    """
+    base, cost, mt = world
+    gap = pol.jrf_costing_gap(base, cost, mt)
+    recon = gap["single_parameter_reconciliations"]
+    if recon["implied_block_share_is_defined"]:
+        rebuilt = (
+            wsum(
+                pol._jrf_block(
+                    base, cost, mt, block_share=recon["implied_block_share"]
+                ),
+                base.weight,
+            )
+            / 1e9
+        )
+        assert rebuilt == pytest.approx(gap["sponsor_cost_bn"], rel=1e-4)
+    else:
+        assert np.isnan(recon["implied_block_share"])
+
+
+def test_the_gap_is_persisted_with_a_resolution(world):
+    base, cost, mt = world
+    diagnostics = pol.policy_diagnostics(base, cost, mt)
+    assert diagnostics["jrf_costing_gap"]["resolution"].startswith("RESOLVED")

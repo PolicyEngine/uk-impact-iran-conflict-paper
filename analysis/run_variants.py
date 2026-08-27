@@ -723,6 +723,94 @@ def cash_profiles(base: Baseline, scenario) -> dict:
     return out
 
 
+#: Fields that must agree between the ``motor_fuel_margins`` and
+#: ``means_tested_fuel`` blocks of ``results/round3_findings.json``.
+#:
+#: **Round-4 finding 4.** The published file carried bit-identical values —
+#: ``means_tested_mean_fuel_gbp = 223.6003875732422`` for all five calibrations —
+#: in ``motor_fuel_margins``, while ``means_tested_fuel`` in the SAME file gave
+#: 223.60 / 176.26 / 139.65 / 1001.20. The margins sub-block had been written by
+#: an earlier version that computed the margins off the uncalibrated baseline
+#: and was never regenerated. Nothing in the pipeline or the test suite could
+#: see it, because the tests run on synthetic fixtures and never look at
+#: ``results/``. These two blocks are now cross-checked at write time and by
+#: ``tests/test_artefacts.py`` against the file on disk.
+CROSS_BLOCK_FIELDS: tuple[str, ...] = ("means_tested_mean_fuel_gbp",)
+
+#: Relative tolerance for that cross-check. The two blocks are computed by
+#: different call paths off the same calibrated baseline, so they should agree
+#: to floating point; this leaves room for nothing but rounding.
+CROSS_BLOCK_RTOL: float = 1e-9
+
+
+def check_fuel_blocks_agree(findings: dict, rtol: float = CROSS_BLOCK_RTOL) -> dict:
+    """Cross-check ``motor_fuel_margins`` against ``means_tested_fuel``.
+
+    Both blocks report the means-tested mean motor-fuel spend under each
+    calibration, by different routes: ``motor_fuel_margins`` calls
+    :func:`~uk_iran_conflict.incidence.motor_fuel_margins` on the calibrated
+    baseline directly, ``means_tested_fuel`` reads it off the
+    :class:`~uk_iran_conflict.incidence.ScenarioResult`. If they disagree, one
+    of them is stale or one of the two call paths is not applying the
+    calibration — which is exactly what happened (round-4 finding 4).
+
+    Raises rather than returning a flag on divergence: a results tree that
+    contradicts itself must not be written.
+    """
+    margins = findings.get("motor_fuel_margins", {})
+    headline = findings.get("means_tested_fuel", {})
+    checked: dict[str, dict] = {}
+    bad: list[str] = []
+    for calibration in inc.CALIBRATIONS:
+        left = margins.get(calibration, {})
+        right = headline.get(calibration, {})
+        for field_name in CROSS_BLOCK_FIELDS:
+            a = left.get(field_name)
+            b = right.get(field_name)
+            agree = (
+                a is not None
+                and b is not None
+                and abs(float(a) - float(b)) <= rtol * max(abs(float(b)), 1.0)
+            )
+            checked[f"{calibration}.{field_name}"] = {
+                "motor_fuel_margins": a,
+                "means_tested_fuel": b,
+                "agree": bool(agree),
+            }
+            if not agree:
+                bad.append(f"{calibration}.{field_name}: {a!r} vs {b!r}")
+    # A block whose values are identical across every calibration is the stale
+    # signature itself: the calibrations exist precisely to move this number.
+    values = [
+        margins.get(c, {}).get("means_tested_mean_fuel_gbp") for c in inc.CALIBRATIONS
+    ]
+    present = [v for v in values if v is not None]
+    all_identical = len(present) > 1 and len(set(present)) == 1
+    if all_identical:
+        bad.append(
+            "motor_fuel_margins.means_tested_mean_fuel_gbp is identical across "
+            f"every calibration ({present[0]!r}); the calibrations exist to "
+            "move it, so the block was not regenerated"
+        )
+    if bad:
+        raise SystemExit(
+            "round3_findings blocks disagree — the results tree is stale or the "
+            "calibration is not reaching both call paths:\n  " + "\n  ".join(bad)
+        )
+    return {
+        "fields": list(CROSS_BLOCK_FIELDS),
+        "rtol": rtol,
+        "checked": checked,
+        "all_agree": True,
+        "distinct_values_across_calibrations": len(set(present)),
+        "note": (
+            "Round-4 finding 4. `motor_fuel_margins` and `means_tested_fuel` "
+            "report the same quantity by two call paths; if they ever diverge "
+            "this pipeline raises and refuses to write the file."
+        ),
+    }
+
+
 def round3_findings(base: Baseline, scenario) -> dict:
     """Persist the round-3 facts the prose has to be written against.
 
@@ -824,6 +912,7 @@ def round3_findings(base: Baseline, scenario) -> dict:
             "motor_fuel_share_of_loss": result.motor_fuel_share_of_loss,
             "d1_d10_ratio_pct": result.all_channel_d1_d10_ratio_pct,
         }
+    out["fuel_block_consistency"] = check_fuel_blocks_agree(out)
     raw = out["means_tested_fuel"]["raw"]["means_tested_share_of_loss"]
     parity = out["means_tested_fuel"]["mt_fuel_parity"]["means_tested_share_of_loss"]
     out["means_tested_fuel"]["implied_targeting_multiple"] = {

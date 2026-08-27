@@ -174,28 +174,104 @@ def cost_per_pound_decile_one(policy: dict, shock: dict | None = None) -> float:
 # ---------------------------------------------------------------------------
 
 
+#: The motor-fuel calibrations whose full cash profile Table~\ref{tab:decile}
+#: reports, keyed by their ``results/robustness/cash_profiles.json`` key.
+#: ``raw`` is the main specification and is already the table's own £ column,
+#: so it is not repeated.
+CASH_PROFILE_COLUMNS = (
+    ("ons_fuel_shape", ("ONS fuel", "shape")),
+    ("ons_both_levels", ("ONS both", "levels")),
+)
+
+
+def _weighted_mean(values: list[float], weights: list[float]) -> float:
+    """Household-weighted mean of a per-decile series."""
+    total = sum(weights)
+    return sum(v * w for v, w in zip(values, weights, strict=True)) / total
+
+
+def cash_profiles() -> dict:
+    """Full ten-decile cash profile under each motor-fuel calibration."""
+    path = R / "robustness" / "cash_profiles.json"
+    with path.open() as fh:
+        return json.load(fh)["profiles"]
+
+
 def tab_decile(shock: dict) -> None:
+    r"""Loss by income decile, with the cash profile under each calibration.
+
+    ROUND 4, item 7: the prose says "Table~\ref{tab:decile} reports the full
+    profile under each calibration so the reader can see which is which", and
+    the table reported one calibration. The two ONS motor-fuel calibrations are
+    now columns of it, read from ``results/robustness/cash_profiles.json`` --
+    the same file Figure~9 draws -- so the monotonicity claim in the prose can
+    be checked against the table that is cited for it. The main specification's
+    profile is the table's own ``Loss (\pounds)`` column; the JSON's ``raw``
+    profile is that same series and is asserted equal rather than reprinted.
+    """
+    profiles = cash_profiles()
+    # The main specification and the JSON's ``raw`` profile are the same run.
+    # If they ever stop agreeing, one of the two artefacts is stale, and that is
+    # a fact about the tree rather than a formatting choice -- so it fails here.
+    raw = profiles["raw"]["mean_loss_gbp"]
+    main = [row["mean_loss_gbp"] for row in shock["decile"]]
+    if max(abs(a - b) for a, b in zip(raw, main, strict=True)) > 0.5:
+        raise ValueError(
+            "cash_profiles.json 'raw' profile disagrees with the central "
+            "shock.json decile table; one of the two is stale"
+        )
+
+    extra = [(key, head) for key, head in CASH_PROFILE_COLUMNS if key in profiles]
+    cols = "lrrrr" + "r" * len(extra)
+    head_cells = [
+        r"Decile",
+        r"Loss (\pounds)",
+        r"Loss (\%)",
+        mc(r"Share of", r"total loss (\%)"),
+        mc(r"House-", r"holds (m)"),
+    ] + [mc(a, b) for _key, (a, b) in extra]
     body = [
-        r"\begin{tabular}{lrrrr}",
+        rf"\begin{{tabular}}{{{cols}}}",
         r"\toprule",
-        r"Decile & Loss (\pounds) & Loss (\% of income) & Share of total loss (\%) "
-        r"& Households (m) \\",
+        (
+            r"& \multicolumn{4}{c}{Main specification} & "
+            rf"\multicolumn{{{len(extra)}}}{{c}}"
+            r"{Cash loss (\pounds), recalibrated} \\"
+        )
+        if extra
+        else "",
+        rf"\cmidrule(lr){{2-5}} \cmidrule(lr){{6-{5 + len(extra)}}}" if extra else "",
+        " & ".join(head_cells) + r" \\",
         r"\midrule",
     ]
-    for row in shock["decile"]:
-        body.append(
-            f"{int(row['decile'])} & {row['mean_loss_gbp']:,.0f} & "
-            f"{row['mean_loss_pct']:.2f} & {100 * row['share_of_total_loss']:.1f} & "
-            f"{row['households_m']:.2f} \\\\"
-        )
+    body = [line for line in body if line]
+    for index, row in enumerate(shock["decile"]):
+        cells = [
+            f"{int(row['decile'])}",
+            f"{row['mean_loss_gbp']:,.0f}",
+            f"{row['mean_loss_pct']:.2f}",
+            f"{100 * row['share_of_total_loss']:.1f}",
+            f"{row['households_m']:.2f}",
+        ] + [f"{profiles[key]['mean_loss_gbp'][index]:,.0f}" for key, _h in extra]
+        body.append(" & ".join(cells) + r" \\")
+    households = [r["households_m"] for r in shock["decile"]]
+    totals = [
+        "All",
+        f"{shock['mean_loss_gbp']:,.0f}",
+        f"{shock['mean_loss_pct']:.2f}",
+        "100.0",
+        f"{sum(r['households_m'] for r in shock['decile']):.2f}",
+    ] + [
+        f"{_weighted_mean(profiles[key]['mean_loss_gbp'], households):,.0f}"
+        for key, _h in extra
+    ]
     body += [
         r"\midrule",
-        f"All & {shock['mean_loss_gbp']:,.0f} & {shock['mean_loss_pct']:.2f} & "
-        f"100.0 & {sum(r['households_m'] for r in shock['decile']):.2f} \\\\",
+        " & ".join(totals) + r" \\",
         r"\bottomrule",
         r"\end{tabular}",
     ]
-    write("tab_decile.tex", body)
+    write("tab_decile.tex", small(body))
 
 
 def tab_intra_decile(shock: dict) -> None:
@@ -282,6 +358,18 @@ def tab_scenario() -> None:
 
 
 def tab_scorecard(shock: dict) -> None:
+    r"""The five instruments at their sponsors' own stated designs.
+
+    ROUND 4, item 6: the cost-per-pound-of-decile-one-gain column was dropped
+    from this table for width, but the prose, the caption and two macros
+    (``\genBestCostPerPound``, ``\genWorstCostPerPound``) go on citing it as a
+    column of Table~\ref{tab:scorecard}. It is restored here rather than struck
+    from the prose, because it is the conventional targeting metric the paper's
+    argument is built against and a scorecard that omits it invites the reader
+    to take the paper's word for the ranking. It is dimensionless -- exchequer
+    pounds per pound of gain reaching decile one, >= 1 by construction -- and
+    carries no pound sign.
+    """
     body = [
         r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
@@ -290,7 +378,7 @@ def tab_scorecard(shock: dict) -> None:
         + " & "
         + mc(r"Share to", r"deciles 1--3 (\%)")
         + " & "
-        + mc(r"Loss", r"offset (\%)")
+        + mc(r"Cost per \pounds 1 of", r"D1 gain (ratio)")
         + " & "
         + mc(r"Mean res-", r"idual (\pounds)")
         + " & "
@@ -309,7 +397,7 @@ def tab_scorecard(shock: dict) -> None:
         body.append(
             f"{label} & {p['cost_bn']:.2f} & "
             f"{100 * p['share_to_bottom_three']:.1f} & "
-            f"{100 * p['share_of_aggregate_loss_offset']:.1f} & "
+            f"{cost_per_pound_decile_one(p, shock):.2f} & "
             f"{p['mean_residual_loss_gbp']:,.0f} & "
             f"{100 * p['uncompensated_share_overall']:.1f} & "
             f"{100 * p['overcompensated_share_of_recipients']:.1f} \\\\"
@@ -591,8 +679,14 @@ def tab_envelope() -> None:
                             the scheme all the way to universal, at which point
                             it is no longer a targeted instrument at all.
 
-    The withdrawn claim is "VAT zero-rating wins at a common envelope". It won
-    only on the scaled row, by removing more VAT points than the tax has.
+    ROUND 4, item 6: the caption used to end "Any claim that one instrument
+    'wins at a common envelope' ... is withdrawn", which predates the row-type
+    framing above. There is no longer a single claim to withdraw: the table's
+    four row types are four different questions, and the caption now says which
+    comparisons the table supports instead of retracting one it no longer makes.
+    (The claim that used to be withdrawn was "VAT zero-rating wins at a common
+    envelope", which won only on the scaled row, by removing more VAT points
+    than the tax has.)
     """
     with (SENS / "policy_envelope.csv").open(newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -722,8 +816,14 @@ def tab_envelope() -> None:
             "own rate, and is defined only for the two means-tested schemes; "
             f"$\\ddagger$ marks the {NUMBER_WORD[universal]} such rows where "
             "widening reaches every household, at which point the instrument is "
-            "means-tested in name only. Any claim that one instrument ``wins at "
-            "a common envelope'' rests on the scaled rows and is withdrawn.",
+            "means-tested in name only. No row of this table supports a claim "
+            "that one instrument ``wins at a common envelope'': the four row "
+            "types answer four different questions and only the scaled rows "
+            "hold spend equal across instruments, which they do by setting "
+            "parameters that in three cases cannot exist. Comparisons run "
+            "down a single row type, and the comparison the paper draws is "
+            "between the ``own ceiling'' and ``wider eligibility'' rows of the "
+            "same instrument.",
             "tab:envelope",
         ),
         standalone=False,
@@ -918,12 +1018,32 @@ def float_wrap(body: list[str], caption: str, label: str) -> list[str]:
 
 
 #: Display names for the named elasticity specifications, in sweep order.
+#: Row labels for the elasticity sweep.
+#:
+#: ROUND 4, item 4: these rows used to read as though the ``Mean
+#: $\\varepsilon$`` column printed each author's published coefficient. It does
+#: not, and a reader checking the source is misled: Labandeira, Labeaga &
+#: Lopez-Otero's headline figures are $-0.21$ short run and $-0.61$ long run,
+#: while this table prints $-0.22$ and $-0.63$. The difference is that the
+#: column is this paper's own spend-weighted average, across carriers and
+#: households, of its own per-decile interpolation of those coefficients. It is
+#: a derived quantity of this paper carrying a published calibration, so the
+#: labels now say "calibration", the column header says "derived", and the
+#: caption says how it is derived.
+#:
+#: The fifth row is not a published source at all: it replicates the elasticity
+#: configuration of the earlier ``PolicyEngine/energy-price-shock`` repo, which
+#: applied Priesmann's *gas* endpoints to combined electricity and gas. It is
+#: named for what it is rather than left as an unexplained "Prior-repo
+#: replication".
 ELASTICITY_LABELS = {
-    "labandeira_short_run": "Labandeira et al., short run",
-    "labandeira_long_run": "Labandeira et al., long run",
-    "priesmann_short_run": "Priesmann \\& Praktiknjo, short run",
-    "priesmann_long_run": "Priesmann \\& Praktiknjo, long run",
-    "prior_repo_replication": "Prior-repo replication",
+    "labandeira_short_run": "Labandeira et al.\\ calibration, short run",
+    "labandeira_long_run": "Labandeira et al.\\ calibration, long run",
+    "priesmann_short_run": "Priesmann \\& Praktiknjo calibration, short run",
+    "priesmann_long_run": "Priesmann \\& Praktiknjo calibration, long run",
+    "prior_repo_replication": (
+        "Replication of \\texttt{energy-price-shock} configuration"
+    ),
 }
 
 
@@ -948,16 +1068,12 @@ def tab_elasticity() -> None:
     body = [
         r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
-        "Specification & "
-        + mc(r"Mean", r"$\varepsilon$")
-        + " & "
+        "Calibration & "
         + mc(r"Mean loss", r"(\pounds)")
         + " & "
         # No per-cent-of-income column: the data rows carry the aggregate spend
         # change here, and an orphan header made the tabular 8 wide against 7
         # columns of data, which is a hard LaTeX error.
-        + mc(r"Spend", r"(\pounds bn)")
-        + " & "
         + mc(r"CV bounds", r"(\pounds bn)")
         + " & "
         + mc(r"Welfare", r"shaved (\%)")
@@ -970,9 +1086,7 @@ def tab_elasticity() -> None:
         lo = float(row["cv_lower_bn"])
         hi = float(row["cv_upper_bn"])
         cells = [
-            minus(f"{float(row['epsilon_mean']):.2f}"),
             f"{float(row['mean_loss_gbp']):,.0f}",
-            f"{float(row['aggregate_loss_bn']):.2f}",
             f"{lo:.2f}--{hi:.2f}",
             f"{100 * float(row['welfare_share_shaved']):.1f}",
             f"{100 * float(row['share_of_upper_bound_shaved']):.0f}",
@@ -983,7 +1097,22 @@ def tab_elasticity() -> None:
         "tab_elasticity.tex",
         float_wrap(
             small(body),
-            "Demand-response sweep, realised 2026 scenario. ``Spend'' is the "
+            "Demand-response sweep, realised 2026 scenario. The "
+            "``derived mean $\\varepsilon$'' column is \\emph{this paper's own} "
+            "spend-weighted average, across carriers and households, of the "
+            "per-decile elasticities each calibration implies; it is not a "
+            "coefficient any of the cited papers publishes, and it will not "
+            "match their headline figures. Labandeira, Labeaga \\& "
+            "Lopez-Otero report $-0.21$ (short run) and $-0.61$ (long run) for "
+            "energy demand; Priesmann \\& Praktiknjo report endpoints from "
+            "which the interior deciles here are interpolated. The named rows "
+            "are therefore calibrations taken from those papers rather than "
+            "results reported by them. The final row is not a published "
+            "calibration at all: it reproduces the elasticity configuration of "
+            "the earlier \\texttt{PolicyEngine/energy-price-shock} repository, "
+            "which applied the Priesmann gas endpoints to combined electricity "
+            "and gas, and is retained so that repository's published numbers "
+            "can be reproduced. ``Spend'' is the "
             "change in expenditure; the money-metric statement is the pair of "
             "bounds on the compensating variation (Paasche below, Laspeyres "
             "above). Reading the spending column as the loss counts foregone "
@@ -1001,8 +1130,14 @@ def tab_caplag() -> None:
     r"""The wholesale-to-retail lag sweep, on both anchoring rules.
 
     The rebuilt sweep is two-way: each lag appears once ``anchored`` (the
-    sustained fraction re-solved so the Cornwall cap anchor still binds) and
-    once ``unanchored`` (that fraction held at the central value). The two
+    sustained fraction re-solved so Ofgem's two confirmed caps still bind) and
+    once ``unanchored`` (that fraction held at the central value).
+
+    ROUND 4, item 6: the caption said "the Cornwall cap anchor". The calibration
+    stopped anchoring on a Cornwall Insight forecast in the round-3 rebuild and
+    now solves the pre-war counterfactual against Ofgem's two confirmed caps
+    (1 Jul and 1 Oct 2026); the caption said otherwise and pointed a reader at
+    the wrong source. The two
     coincide up to two quarters and separate after, which is worth showing: the
     long-lag rows are the ones where the choice of anchoring rule, not the lag
     itself, is doing the work. ``lag_quarters`` is now a float and the
@@ -1084,7 +1219,7 @@ def tab_caplag() -> None:
             small(body),
             "Wholesale-to-retail lag sweep, realised 2026 scenario, on both "
             "anchoring rules. ``Anchored'' re-solves the sustained fraction at "
-            "each lag so the Cornwall cap anchor still binds; ``unanchored'' "
+            "each lag so Ofgem's two confirmed caps still bind; ``unanchored'' "
             "holds it at the central value and so varies the timing alone. The "
             "cumulative burden is very nearly invariant along the unanchored "
             "series --- the phase-in weights mostly move the burden between "

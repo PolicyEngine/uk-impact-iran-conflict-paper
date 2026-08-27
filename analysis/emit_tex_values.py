@@ -918,9 +918,35 @@ def main(draft: bool = False) -> None:
     def dispersion() -> dict:
         return jload(central)["dispersion"]
 
+    # ROUND 4, item 6: the prose quotes 3.64, which is this macro -- the MEAN
+    # p90-p10 range across the ten deciles, decile one included. It sat next to
+    # \genWithinDecileRangeMaxExDOnePct (3.81, the largest range outside decile
+    # one), which is unused and easy to reach for by mistake because its name is
+    # longer and looks more specific. ``Mean`` is emitted as an explicit alias
+    # so a sentence can name the statistic it means instead of relying on the
+    # unqualified name being the mean.
+    for name in ("genWithinDecileRangePct", "genWithinDecileRangeMeanPct"):
+        emit(
+            name,
+            lambda: dispersion()["mean_within_decile_range_pp"],
+            "{:.2f}",
+            f"{central}:dispersion",
+        )
     emit(
-        "genWithinDecileRangePct",
-        lambda: dispersion()["mean_within_decile_range_pp"],
+        "genWithinDecileRangeMeanExDOnePct",
+        lambda: dispersion()["mean_within_decile_range_excl_d1_pp"],
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileRangeMaxPct",
+        lambda: max(dispersion()["within_decile_range_by_decile_pp"]),
+        "{:.2f}",
+        f"{central}:dispersion",
+    )
+    emit(
+        "genWithinDecileRangeMinPct",
+        lambda: min(dispersion()["within_decile_range_by_decile_pp"]),
         "{:.2f}",
         f"{central}:dispersion",
     )
@@ -1103,24 +1129,25 @@ def main(draft: bool = False) -> None:
     def concept() -> dict:
         return jload(central)["decile_concept"]
 
-    emit(
-        "genDecileRankAgreementPct",
-        lambda: 100 * concept()["agreement"][concept()["best_match"]],
-        "{:.0f}",
-        f"{central}:decile_concept",
-    )
-    emit(
-        "genDecileRankAgreementUnequivPct",
-        lambda: 100 * concept()["agreement"]["unequivalised_bhc"],
-        "{:.0f}",
-        f"{central}:decile_concept",
-    )
-    emit(
-        "genDecileRankAgreementEquivBhcPct",
-        lambda: 100 * concept()["agreement"]["equivalised_bhc"],
-        "{:.0f}",
-        f"{central}:decile_concept",
-    )
+    # ROUND 4, item 6: these rendered at ``{:.0f}``, so the best-matching
+    # concept -- 0.99896 agreement -- printed as "100" beside a 56.1 per cent
+    # comparator, which reads as a typo rather than as a number. One decimal
+    # place is the least that keeps a near-perfect match distinguishable from a
+    # perfect one, and it costs nothing on the other two.
+    for name, key in (
+        ("genDecileRankAgreementPct", None),
+        ("genDecileRankAgreementUnequivPct", "unequivalised_bhc"),
+        ("genDecileRankAgreementEquivBhcPct", "equivalised_bhc"),
+        ("genDecileRankAgreementEquivAhcPct", "equivalised_ahc"),
+    ):
+        emit(
+            name,
+            lambda key=key: (
+                100 * concept()["agreement"][key or concept()["best_match"]]
+            ),
+            "{:.1f}",
+            f"{central}:decile_concept",
+        )
     emit(
         "genDecileRankMeanGap",
         lambda: concept()["mean_absolute_decile_gap"][concept()["best_match"]],
@@ -1874,6 +1901,214 @@ def main(draft: bool = False) -> None:
 
     emit("genCapLagRangeGbp", lambda: _range("anchored"), "{:.0f}", lag)
     emit("genCapLagRangeUnanchoredGbp", lambda: _range("unanchored"), "{:.0f}", lag)
+    #: Anchored range under a name that says which series it is, so a sentence
+    #: cannot pick the anchored spread and the unanchored endpoints. Round-4
+    #: referees, item 2: the prose ran "£384 at l=1 to £221 at l=4 ... the
+    #: spread is £114", which pairs the UNANCHORED endpoints with the ANCHORED
+    #: spread (384 - 221 = 163, not 114). The two series are now emitted as
+    #: closed sets -- endpoints, their lags, and how many lags each contains --
+    #: so a sentence built out of these macros is internally consistent by
+    #: construction.
+    emit("genCapLagRangeAnchoredGbp", lambda: _range("anchored"), "{:.0f}", lag)
+
+    def _endpoint(anchor: str, select) -> dict:
+        return select(lag_rows(anchor), key=lambda r: float(r["mean_loss_gbp"]))
+
+    def _lag_text(row: dict) -> str:
+        return f"{float(row['lag_quarters']):g}"
+
+    for series, anchor in (("Anchored", "anchored"), ("Unanchored", "unanchored")):
+        for bound, select in (("High", max), ("Low", min)):
+            emit(
+                f"genCapLag{series}{bound}Gbp",
+                lambda anchor=anchor, select=select: float(
+                    _endpoint(anchor, select)["mean_loss_gbp"]
+                ),
+                "{:.0f}",
+                lag,
+            )
+            emit(
+                f"genCapLag{series}{bound}Quarters",
+                lambda anchor=anchor, select=select: _lag_text(
+                    _endpoint(anchor, select)
+                ),
+                source=lag,
+            )
+        # How many lags this series actually contains. The unanchored series has
+        # all five; the anchored one has two, and a sentence that quotes an
+        # anchored range has to be able to say so.
+        emit(
+            f"genCapLag{series}LagCount",
+            lambda anchor=anchor: number_word(len(lag_rows(anchor))),
+            source=lag,
+        )
+        emit(
+            f"genCapLag{series}LagCountNumeric",
+            lambda anchor=anchor: len(lag_rows(anchor)),
+            "{:.0f}",
+            lag,
+        )
+        # The identified lags, spelled out, so the prose can name them rather
+        # than assert a count.
+        emit(
+            f"genCapLag{series}LagList",
+            lambda anchor=anchor: ", ".join(
+                _lag_text(r)
+                for r in sorted(
+                    lag_rows(anchor), key=lambda r: float(r["lag_quarters"])
+                )
+            ),
+            source=lag,
+        )
+        emit(
+            f"genCapLag{series}RangeGbp",
+            lambda anchor=anchor: _range(anchor),
+            "{:.0f}",
+            lag,
+        )
+
+    # ------------------------------------------------------------------
+    # ROUND 4, item 2: the lag is a small sensitivity for the LEVEL and a
+    # large one for the COMPOSITION
+    # ------------------------------------------------------------------
+    #
+    # Both identified anchored lags are read off here as a matched pair, so the
+    # paper can make that statement with numbers rather than with an adjective.
+    # Moving the anchor from the paper's 1.5 quarters to 2 leaves the mean loss
+    # in the same order of magnitude but re-solves the pre-war counterfactual
+    # cap, collapses the domestic leg, and hands the motor-fuel channel most of
+    # the loss.
+    COMPOSITION_LAGS = (("Paper", PAPER_CAP_LAG), ("LagTwo", 2.0))
+    COMPOSITION_COLUMNS = (
+        ("SolvedCapGbp", "prewar_counterfactual_cap_gbp", "{:,.0f}", 1),
+        ("DomesticBn", "domestic_loss_bn", "{:.2f}", 1),
+        ("MotorFuelBn", "motor_fuel_loss_bn", "{:.2f}", 1),
+        ("MotorFuelSharePct", "motor_fuel_share_of_loss", "{:.1f}", 100),
+        ("AggregateBn", "aggregate_loss_bn", "{:.2f}", 1),
+        ("MeanGbp", "mean_loss_gbp", "{:.0f}", 1),
+        ("SustainedFractionPct", "sustained_fraction", "{:.1f}", 100),
+    )
+    for tag, quarters in COMPOSITION_LAGS:
+        for name, column, fmt, scale in COMPOSITION_COLUMNS:
+            emit(
+                f"genCapLagAnchored{tag}{name}",
+                lambda quarters=quarters, column=column, scale=scale: (
+                    scale * snum(lag_row(quarters, "anchored"), column)
+                ),
+                fmt,
+                lag,
+            )
+    #: The name the prose reached for before this block existed. Kept as an
+    #: alias of \genCapLagAnchoredLagTwoMotorFuelSharePct so a sentence written
+    #: against either name resolves, and so the \providecommand placeholder the
+    #: prose was carrying is superseded by a real emitted value.
+    emit(
+        "genCapLagMotorFuelShareLagTwoAnchoredPct",
+        lambda: 100 * snum(lag_row(2.0, "anchored"), "motor_fuel_share_of_loss"),
+        "{:.1f}",
+        lag,
+    )
+    emit(
+        "genCapLagMotorFuelSharePaperAnchoredPct",
+        lambda: (
+            100 * snum(lag_row(PAPER_CAP_LAG, "anchored"), "motor_fuel_share_of_loss")
+        ),
+        "{:.1f}",
+        lag,
+    )
+
+    # The moves themselves, so the prose states a delta it did not compute by
+    # hand from two printed figures.
+    def _anchored_move(column: str) -> tuple[float, float]:
+        return (
+            snum(lag_row(PAPER_CAP_LAG, "anchored"), column),
+            snum(lag_row(2.0, "anchored"), column),
+        )
+
+    emit(
+        "genCapLagCompositionMotorFuelShareMovePp",
+        lambda: (
+            100
+            * (
+                _anchored_move("motor_fuel_share_of_loss")[1]
+                - _anchored_move("motor_fuel_share_of_loss")[0]
+            )
+        ),
+        "{:.1f}",
+        lag,
+    )
+    emit(
+        "genCapLagCompositionDomesticFallBn",
+        lambda: (
+            _anchored_move("domestic_loss_bn")[0]
+            - _anchored_move("domestic_loss_bn")[1]
+        ),
+        "{:.2f}",
+        lag,
+    )
+    emit(
+        "genCapLagCompositionDomesticFallPct",
+        lambda: (
+            100
+            * (
+                _anchored_move("domestic_loss_bn")[0]
+                - _anchored_move("domestic_loss_bn")[1]
+            )
+            / _anchored_move("domestic_loss_bn")[0]
+        ),
+        "{:.0f}",
+        lag,
+    )
+    emit(
+        "genCapLagCompositionMeanFallPct",
+        lambda: (
+            100
+            * (_anchored_move("mean_loss_gbp")[0] - _anchored_move("mean_loss_gbp")[1])
+            / _anchored_move("mean_loss_gbp")[0]
+        ),
+        "{:.0f}",
+        lag,
+    )
+    emit(
+        "genCapLagCompositionCapMoveGbp",
+        lambda: (
+            _anchored_move("prewar_counterfactual_cap_gbp")[1]
+            - _anchored_move("prewar_counterfactual_cap_gbp")[0]
+        ),
+        "{:,.0f}",
+        lag,
+    )
+
+    # The one-word verdict, so the prose's "small for the level, large for the
+    # composition" is a claim this emitter checks rather than an adjective. Both
+    # sides are proportional moves of the same anchored pair, so they are
+    # comparable: the domestic leg falls by a much larger fraction of itself
+    # than the mean loss does.
+    def _relative_move(column: str) -> float:
+        before, after = _anchored_move(column)
+        return abs(after - before) / abs(before)
+
+    emit(
+        "genCapLagCompositionMovesMoreThanLevel",
+        lambda: (
+            "does"
+            if _relative_move("domestic_loss_bn") > _relative_move("mean_loss_gbp")
+            else "does not"
+        ),
+        source=lag,
+    )
+    emit(
+        "genCapLagLevelMovePct",
+        lambda: 100 * _relative_move("mean_loss_gbp"),
+        "{:.0f}",
+        lag,
+    )
+    emit(
+        "genCapLagCompositionMovePct",
+        lambda: 100 * _relative_move("domestic_loss_bn"),
+        "{:.0f}",
+        lag,
+    )
     # ... and as a share of the paper's own annualised mean, which is the form
     # the prose needs to say whether the windowing choice is material.
     emit(
@@ -2162,6 +2397,116 @@ def main(draft: bool = False) -> None:
             fmt,
             COMPARISON,
         )
+
+    # ------------------------------------------------------------------
+    # ROUND 4, item 3: computed extrema, not hand-picked endpoints
+    # ------------------------------------------------------------------
+    #
+    # The prose quoted the domestic share as "between 34.6 and 57.7 per cent
+    # across the seven specifications" using \genPeakFuelDomesticShareOfLoss and
+    # \genOnsLevelsDomesticShareOfLoss. The low end happened to be the true
+    # minimum; the high end was not the maximum -- the ONS-levels row is 57.7
+    # and the steady-state row is 60.8. Picking two named rows and calling them
+    # a range is exactly the failure mode a min/max macro exists to prevent, so
+    # the range now has its own computed pair and the named-row macros are left
+    # for sentences that mean that named row.
+    #
+    # ``domestic`` is not a column of comparison.csv; it is the gas and
+    # electricity shares summed, which is the definition every bill instrument
+    # is bounded by.
+    def spec_domestic_shares() -> list[float]:
+        rows = comparison_rows()
+        return [
+            100
+            * (
+                float(rows[variant]["gas_share_of_loss"])
+                + float(rows[variant]["electricity_share_of_loss"])
+            )
+            for _stem, _rel, variant, _label in SPECS
+        ]
+
+    def all_variant_domestic_shares() -> list[float]:
+        return [
+            100
+            * (float(r["gas_share_of_loss"]) + float(r["electricity_share_of_loss"]))
+            for r in cload(COMPARISON)
+            if str(r["gas_share_of_loss"]).strip() != ""
+        ]
+
+    for name, values, select in (
+        ("genDomesticShareMin", spec_domestic_shares, min),
+        ("genDomesticShareMax", spec_domestic_shares, max),
+        ("genAllVariantDomesticShareMin", all_variant_domestic_shares, min),
+        ("genAllVariantDomesticShareMax", all_variant_domestic_shares, max),
+    ):
+        emit(
+            name,
+            lambda values=values, select=select: select(values()),
+            "{:.1f}",
+            COMPARISON,
+        )
+
+    # Which specification sits at each end, so a sentence naming the row cannot
+    # name the wrong one.
+    def _domestic_extreme_label(select) -> str:
+        rows = comparison_rows()
+        pairs = [
+            (
+                100
+                * (
+                    float(rows[variant]["gas_share_of_loss"])
+                    + float(rows[variant]["electricity_share_of_loss"])
+                ),
+                label,
+            )
+            for _stem, _rel, variant, label in SPECS
+        ]
+        return select(pairs, key=lambda pair: pair[0])[1]
+
+    for name, select in (
+        ("genDomesticShareMinSpec", min),
+        ("genDomesticShareMaxSpec", max),
+    ):
+        emit(
+            name,
+            lambda select=select: _domestic_extreme_label(select),
+            source=COMPARISON,
+        )
+
+    # The same computed-extremum treatment for the other quantity the prose can
+    # hand-pick: the within-decile dispersion range across specifications, whose
+    # named rows sit either side of the true extremes in the same way.
+    def spec_column_values(column: str) -> list[float]:
+        rows = comparison_rows()
+        out = []
+        for _stem, _rel, variant, _label in SPECS:
+            raw = str(rows[variant].get(column, "")).strip()
+            if raw:
+                out.append(float(raw))
+        if not out:
+            raise ValueError(f"comparison.csv carries no {column}")
+        return out
+
+    for name, column, fmt, scale in (
+        ("genSpecMeanLossPctMin", "mean_loss_pct", "{:.2f}", 1),
+        ("genSpecMeanLossPctMax", "mean_loss_pct", "{:.2f}", 1),
+        ("genSpecDecileOneLossPctMin", "decile1_loss_pct", "{:.2f}", 1),
+        ("genSpecDecileOneLossPctMax", "decile1_loss_pct", "{:.2f}", 1),
+        ("genSpecWithinDecileRangeMinPp", "mean_within_decile_range_pp", "{:.2f}", 1),
+        ("genSpecWithinDecileRangeMaxPp", "mean_within_decile_range_pp", "{:.2f}", 1),
+        ("genSpecMtShareMinPct", "means_tested_share_of_loss", "{:.2f}", 100),
+        ("genSpecMtShareMaxPct", "means_tested_share_of_loss", "{:.2f}", 100),
+    ):
+        select = min if name.endswith(("Min", "MinPp", "MinPct")) else max
+        emit(
+            name,
+            lambda column=column, select=select, scale=scale: (
+                scale * select(spec_column_values(column))
+            ),
+            fmt,
+            COMPARISON,
+        )
+
     # how far the specification choice moves the aggregate, as a share of the
     # main specification — the number the uncertainty ranking is built on
     emit(
@@ -2602,6 +2947,21 @@ def main(draft: bool = False) -> None:
                         policy, envelope, "share_of_aggregate_loss_offset"
                     ),
                     "{:.1f}",
+                    ENVELOPE,
+                )
+                # ROUND 4, item 6: at one decimal place the social tariff's
+                # stated and envelope-absorption offsets both print 5.2, so the
+                # saturation sentence -- "moves the offset from 5.2 to 5.2 per
+                # cent" -- said nothing. The saturation finding is that the move
+                # is nearly nil, which needs a second decimal place to state:
+                # 5.18 to 5.22. Emitted alongside rather than instead, so
+                # sentences that want the round figure keep it.
+                emit(
+                    f"gen{tag}{alias}OffsetPrecisePct",
+                    lambda policy=policy, envelope=envelope: env_pct(
+                        policy, envelope, "share_of_aggregate_loss_offset"
+                    ),
+                    "{:.2f}",
                     ENVELOPE,
                 )
                 emit(
@@ -3552,17 +3912,85 @@ def main(draft: bool = False) -> None:
         "{:.2f}",
         FINDINGS,
     )
-    # The manuscript's own "roughly seven times better targeted" claim. It is a
-    # claim of the paper, not an output of the model, so it is carried here with
-    # a source string that says so -- and it is carried precisely so that the
-    # correction below can be computed rather than asserted.
-    STATED_TARGETING_MULTIPLE = 7.0
+    # ------------------------------------------------------------------
+    # ROUND 4: the eligibility-over-generosity multiple, computed
+    # ------------------------------------------------------------------
+    #
+    # This block used to open with ``STATED_TARGETING_MULTIPLE = 7.0`` and a
+    # source string reading "the pre-round-3 manuscript's own targeting claim".
+    # Every corrected multiple below was that literal rescaled by the ratio of
+    # means-tested loss shares, so the paper's central policy claim -- and the
+    # range in its abstract -- was anchored on a number no run produced. It also
+    # falsified the appendix's guarantee that every headline is emitted
+    # mechanically from ``results/``. Round-4 referees, item 1.
+    #
+    # The multiple is now read straight off the live envelope table. It is the
+    # ratio the eligibility argument actually rests on:
+    #
+    #     (loss offset when the envelope buys ELIGIBILITY, at the sponsor's own
+    #      generosity)  /  (loss offset when the instrument is run to its own
+    #      feasible ceiling on the population it can already see)
+    #
+    # Both rows are outputs of the same run, so the multiple moves whenever the
+    # run does. It is defined only for the two means-tested schemes, because
+    # only they have an eligibility-widening row at all.
+    TARGETING_POLICIES = (
+        ("SocialTariff", "social_tariff"),
+        ("Whd", "whd_expansion"),
+    )
+
+    def _targeting_multiple(policy: str) -> float:
+        """Eligibility offset over feasible-maximum offset, from the live rows."""
+        widened = snum(
+            envelope_row(policy, ENVELOPE_ELIGIBILITY),
+            "share_of_aggregate_loss_offset",
+        )
+        ceiling = snum(
+            envelope_row(policy, ENVELOPE_FEASIBLE_MAX),
+            "share_of_aggregate_loss_offset",
+        )
+        if ceiling <= 0:
+            raise ValueError(f"{policy}: feasible-maximum offset is not positive")
+        return widened / ceiling
+
+    def _targeting_multiples() -> list[float]:
+        return [_targeting_multiple(policy) for _tag, policy in TARGETING_POLICIES]
+
+    for tag, policy in TARGETING_POLICIES:
+        emit(
+            f"genTargetingMultiple{tag}",
+            lambda policy=policy: _targeting_multiple(policy),
+            "{:.1f}",
+            ENVELOPE,
+        )
+    # The range across the instruments that have the comparison, which is what
+    # a sentence quoting "a factor of" should carry. The old literal 7 sat
+    # outside this range at both ends.
+    for name, select in (
+        ("genTargetingMultipleMin", min),
+        ("genTargetingMultipleMax", max),
+    ):
+        emit(
+            name,
+            lambda select=select: select(_targeting_multiples()),
+            "{:.1f}",
+            ENVELOPE,
+        )
+    #: The name the manuscript already carries for "the multiple before any
+    #: fuel-imputation correction". It is now the *computed* main-specification
+    #: multiple rather than the literal 7, so every sentence built on it moves
+    #: with the run. The social tariff is the instrument the claim is made
+    #: about, so it is the one this name resolves to.
     emit(
         "genTargetingMultipleStated",
-        STATED_TARGETING_MULTIPLE,
-        "{:.0f}",
-        "the pre-round-3 manuscript's own targeting claim",
+        lambda: _targeting_multiple("social_tariff"),
+        "{:.1f}",
+        ENVELOPE,
     )
+    # The two fuel-imputation corrections. The rescaling itself is unchanged and
+    # is the right operation -- the multiple scales inversely with the share of
+    # the aggregate loss the means-tested population is imputed to carry -- but
+    # it is now applied to a computed multiple instead of to a literal.
     for tag, key in (
         ("Parity", "mt_fuel_parity"),
         ("Participation", "nts_participation"),
@@ -3570,13 +3998,39 @@ def main(draft: bool = False) -> None:
         emit(
             f"genTargetingMultipleUnder{tag}",
             lambda key=key: (
-                STATED_TARGETING_MULTIPLE
+                _targeting_multiple("social_tariff")
                 * mt()["raw"]["means_tested_share_of_loss"]
                 / mt()[key]["means_tested_share_of_loss"]
             ),
             "{:.1f}",
-            FINDINGS,
+            f"{ENVELOPE} + {FINDINGS}",
         )
+        # The same correction on each instrument, so a sentence that quotes the
+        # Warm Home Discount's multiple can quote its correction too.
+        for ptag, policy in TARGETING_POLICIES:
+            emit(
+                f"genTargetingMultiple{ptag}Under{tag}",
+                lambda key=key, policy=policy: (
+                    _targeting_multiple(policy)
+                    * mt()["raw"]["means_tested_share_of_loss"]
+                    / mt()[key]["means_tested_share_of_loss"]
+                ),
+                "{:.1f}",
+                f"{ENVELOPE} + {FINDINGS}",
+            )
+        # ... and the range of the corrected multiple across the instruments.
+        for suffix, select in (("Min", min), ("Max", max)):
+            emit(
+                f"genTargetingMultipleUnder{tag}{suffix}",
+                lambda key=key, select=select: select(
+                    m
+                    * mt()["raw"]["means_tested_share_of_loss"]
+                    / mt()[key]["means_tested_share_of_loss"]
+                    for m in _targeting_multiples()
+                ),
+                "{:.1f}",
+                f"{ENVELOPE} + {FINDINGS}",
+            )
 
     # The participation margin: how much of the fuel gap is households that do
     # not drive at all, rather than households that drive less.
@@ -3596,12 +4050,45 @@ def main(draft: bool = False) -> None:
             "{:.1f}",
             FINDINGS,
         )
+        # ROUND 4, item 6: the raw gradient is 0.0157 percentage points and
+        # rendered as "0.0" at one decimal place, which reads as an absent
+        # number rather than a tiny one. It is recomputed here from the
+        # by-decile array rather than read off the stored scalar, so the units
+        # are unambiguous (the array is a share; the difference is scaled to
+        # percentage points here), and printed at a precision that survives the
+        # raw specification as well as the participation one.
         emit(
             f"genZeroFuelShareGradient{tag}Pp",
-            lambda key=key: margins()[key]["zero_share_d1_minus_d10_pp"],
-            "{:.1f}",
+            lambda key=key: (
+                100
+                * (
+                    margins()[key]["zero_fuel_share_by_decile"][0]
+                    - margins()[key]["zero_fuel_share_by_decile"][9]
+                )
+            ),
+            "{:.2f}",
             FINDINGS,
         )
+        # The same gradient as stored, so a discrepancy between the stored
+        # scalar and the array it summarises would surface as two macros that
+        # disagree rather than as silence.
+        emit(
+            f"genZeroFuelShareGradient{tag}StoredPp",
+            lambda key=key: margins()[key]["zero_share_d1_minus_d10_pp"],
+            "{:.2f}",
+            FINDINGS,
+        )
+        # Decile one and decile ten themselves, so a sentence quoting a
+        # near-zero gradient can show the two levels it is the difference of.
+        for dtag, index in (("DecileOne", 0), ("DecileTen", 9)):
+            emit(
+                f"genZeroFuelShare{dtag}{tag}Pct",
+                lambda key=key, index=index: (
+                    100 * margins()[key]["zero_fuel_share_by_decile"][index]
+                ),
+                "{:.1f}",
+                FINDINGS,
+            )
 
     # ==================================================================
     # ROUND 3: the Resolution Foundation comparison, like for like
