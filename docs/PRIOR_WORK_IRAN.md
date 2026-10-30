@@ -6,7 +6,7 @@ did, so this paper does not redo it and does not inherit its weaknesses unexamin
 Source snapshot read: `impact-iran-war-living-standards` (package
 `energy-price-shock-impact` v0.1.0, module `src/iran_impact/`, Next.js dashboard,
 results JSON committed at `dashboard/public/data/iran_impact_results.json`).
-Live dashboard: `https://uk-energy-shock-impact.vercel.app`.
+Live dashboard: `https://policyengine.org/uk/middle-east-war-living-standards`.
 
 ---
 
